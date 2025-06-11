@@ -1,6 +1,19 @@
 # yamlbase
 
-A lightweight SQL server that serves YAML-defined tables over standard SQL protocols, designed for local development and testing.
+<div align="center">
+  <img src="https://raw.githubusercontent.com/rvben/yamlbase/main/assets/logo.png" alt="yamlbase logo" width="400">
+
+  **A lightweight SQL server that serves YAML-defined tables over standard SQL protocols**
+
+  [![Crates.io](https://img.shields.io/crates/v/yamlbase.svg)](https://crates.io/crates/yamlbase)
+  [![Documentation](https://docs.rs/yamlbase/badge.svg)](https://docs.rs/yamlbase)
+  [![License](https://img.shields.io/crates/l/yamlbase.svg)](https://github.com/rvben/yamlbase#license)
+  [![Build Status](https://img.shields.io/github/actions/workflow/status/rvben/yamlbase/ci.yml?branch=main)](https://github.com/rvben/yamlbase/actions)
+</div>
+
+---
+
+Yamlbase is a lightweight SQL server designed for local development and testing. Define your database schema and data in simple YAML files and serve them over standard PostgreSQL or MySQL wire protocols.
 
 ## Features
 
@@ -14,14 +27,21 @@ A lightweight SQL server that serves YAML-defined tables over standard SQL proto
 
 ## Installation
 
+### From Crates.io
+```bash
+cargo install yamlbase
+```
+
 ### From Source
 ```bash
+git clone https://github.com/rvben/yamlbase
+cd yamlbase
 cargo install --path .
 ```
 
-### Using Cargo
+### Using Docker
 ```bash
-cargo build --release
+docker run -p 5432:5432 -v $(pwd)/database.yaml:/data/database.yaml ghcr.io/rvben/yamlbase
 ```
 
 ## Quick Start
@@ -153,8 +173,8 @@ SELECT * FROM users WHERE is_active = true AND age > 25;
 SELECT name, email FROM users ORDER BY created_at DESC LIMIT 10;
 
 -- Join tables
-SELECT u.name, o.total_amount 
-FROM users u, orders o 
+SELECT u.name, o.total_amount
+FROM users u, orders o
 WHERE u.id = o.user_id;
 ```
 
@@ -266,7 +286,7 @@ import (
     _ "github.com/lib/pq"
 )
 
-db, err := sql.Open("postgres", 
+db, err := sql.Open("postgres",
     "host=localhost port=5432 user=admin password=password dbname=test_db sslmode=disable")
 
 rows, err := db.Query("SELECT name, email FROM users")
@@ -311,6 +331,31 @@ rows, err := db.Query("SELECT name, email FROM users")
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+### Development
+
+```bash
+# Run tests
+make test
+
+# Run with hot-reload
+make run
+
+# Run benchmarks
+make bench
+
+# Run all CI checks
+make ci
+```
+
 ## License
 
-This project is dual-licensed under MIT OR Apache-2.0
+Licensed under either of
+
+ * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+## Acknowledgments
+
+Yamlbase is inspired by the need for simple, lightweight database solutions for testing and development. Special thanks to all contributors and the Rust community.
