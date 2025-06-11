@@ -1,0 +1,76 @@
+[package]
+name = "yamlbase"
+version = "0.0.1"
+edition = "2021"
+authors = ["Ruben J. Jongejan <ruben.jongejan@gmail.com>"]
+description = "A lightweight SQL server that serves YAML-defined tables over standard SQL protocols"
+license = "MIT"
+repository = "https://github.com/rvben/yamlbase"
+keywords = ["sql", "yaml", "database", "testing", "development"]
+categories = ["database", "development-tools"]
+
+[dependencies]
+# Async runtime and networking
+tokio = { version = "1.41", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1.8"
+futures = "0.3"
+
+# PostgreSQL protocol
+postgres-protocol = "0.6"
+postgres-types = "0.2"
+
+# SQL and data processing
+sqlparser = "0.52"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+
+# CLI and configuration
+clap = { version = "4.5", features = ["derive", "env"] }
+config = "0.14"
+
+# Error handling and logging
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# File watching
+notify = "6.1"
+notify-debouncer-mini = "0.4"
+
+# Performance and utilities
+dashmap = "6.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+rust_decimal = "1.36"
+rust_decimal_macros = "1.36"
+indexmap = { version = "2.6", features = ["serde"] }
+
+# Authentication
+md5 = "0.7"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.14"
+pretty_assertions = "1.4"
+postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+
+[[bench]]
+name = "sql_performance"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.dev]
+opt-level = 0
+
+[profile.test]
+opt-level = 0

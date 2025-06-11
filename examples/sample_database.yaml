@@ -1,0 +1,121 @@
+database:
+  name: "test_db"
+
+tables:
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      username: "VARCHAR(50) NOT NULL UNIQUE"
+      email: "VARCHAR(100) NOT NULL"
+      full_name: "VARCHAR(200)"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      is_active: "BOOLEAN DEFAULT true"
+      age: "INTEGER"
+    data:
+      - id: 1
+        username: "jdoe"
+        email: "john.doe@example.com"
+        full_name: "John Doe"
+        created_at: "2024-01-15 10:30:00"
+        is_active: true
+        age: 30
+      - id: 2
+        username: "jsmith"
+        email: "jane.smith@example.com"
+        full_name: "Jane Smith"
+        created_at: "2024-01-16 14:22:00"
+        is_active: true
+        age: 28
+      - id: 3
+        username: "bwilson"
+        email: "bob.wilson@example.com"
+        full_name: "Bob Wilson"
+        created_at: "2024-01-17 09:15:00"
+        is_active: false
+        age: 45
+
+  products:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100) NOT NULL"
+      description: "TEXT"
+      price: "DECIMAL(10,2) NOT NULL"
+      stock_quantity: "INTEGER DEFAULT 0"
+      category: "VARCHAR(50)"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    data:
+      - id: 1
+        name: "Laptop Pro"
+        description: "High-performance laptop with 16GB RAM"
+        price: 1299.99
+        stock_quantity: 25
+        category: "Electronics"
+      - id: 2
+        name: "Wireless Mouse"
+        description: "Ergonomic wireless mouse with long battery life"
+        price: 29.99
+        stock_quantity: 150
+        category: "Electronics"
+      - id: 3
+        name: "Office Chair"
+        description: "Comfortable ergonomic office chair with lumbar support"
+        price: 249.99
+        stock_quantity: 10
+        category: "Furniture"
+
+  orders:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      user_id: "INTEGER REFERENCES users(id)"
+      order_date: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      total_amount: "DECIMAL(10,2)"
+      status: "VARCHAR(20) DEFAULT 'pending'"
+      shipping_address: "TEXT"
+    data:
+      - id: 101
+        user_id: 1
+        order_date: "2024-02-01 11:20:00"
+        total_amount: 1329.98
+        status: "completed"
+        shipping_address: "123 Main St, Anytown, USA"
+      - id: 102
+        user_id: 2
+        order_date: "2024-02-02 15:45:00"
+        total_amount: 29.99
+        status: "shipped"
+        shipping_address: "456 Oak Ave, Another City, USA"
+      - id: 103
+        user_id: 1
+        order_date: "2024-02-03 09:30:00"
+        total_amount: 249.99
+        status: "pending"
+        shipping_address: "123 Main St, Anytown, USA"
+
+  order_items:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      order_id: "INTEGER REFERENCES orders(id)"
+      product_id: "INTEGER REFERENCES products(id)"
+      quantity: "INTEGER NOT NULL"
+      unit_price: "DECIMAL(10,2) NOT NULL"
+    data:
+      - id: 1
+        order_id: 101
+        product_id: 1
+        quantity: 1
+        unit_price: 1299.99
+      - id: 2
+        order_id: 101
+        product_id: 2
+        quantity: 1
+        unit_price: 29.99
+      - id: 3
+        order_id: 102
+        product_id: 2
+        quantity: 1
+        unit_price: 29.99
+      - id: 4
+        order_id: 103
+        product_id: 3
+        quantity: 1
+        unit_price: 249.99
