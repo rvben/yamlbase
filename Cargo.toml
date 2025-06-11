@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 authors = ["Ruben J. Jongejan <ruben.jongejan@gmail.com>"]
 description = "A lightweight SQL server that serves YAML-defined tables over standard SQL protocols"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/rvben/yamlbase"
 keywords = ["sql", "yaml", "database", "testing", "development"]
 categories = ["database", "development-tools"]
@@ -51,7 +51,12 @@ indexmap = { version = "2.6", features = ["serde"] }
 # Authentication
 md5 = "0.7"
 sha2 = "0.10"
+sha1 = "0.10"
 hex = "0.4"
+rand = "0.8"
+
+# MySQL protocol support
+flate2 = { version = "1.0", features = ["zlib"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -59,6 +64,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.14"
 pretty_assertions = "1.4"
 postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+mysql = "25.0"
 
 [[bench]]
 name = "sql_performance"

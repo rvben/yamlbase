@@ -4,7 +4,7 @@ use tracing::error;
 
 use crate::config::{Config, Protocol};
 use crate::database::Database;
-use crate::protocol::PostgresProtocol;
+use crate::protocol::{MySqlProtocol, PostgresProtocol};
 
 pub struct Connection {
     config: Arc<Config>,
@@ -23,10 +23,8 @@ impl Connection {
                 protocol.handle_connection(stream).await
             }
             Protocol::Mysql => {
-                error!("MySQL protocol not yet implemented");
-                Err(crate::YamlBaseError::NotImplemented(
-                    "MySQL protocol not yet implemented".to_string()
-                ))
+                let protocol = MySqlProtocol::new(self.config.clone(), self.database.clone());
+                protocol.handle_connection(stream).await
             }
             Protocol::Sqlserver => {
                 error!("SQL Server protocol not yet implemented");

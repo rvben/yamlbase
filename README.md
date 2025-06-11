@@ -6,6 +6,7 @@ A lightweight SQL server that serves YAML-defined tables over standard SQL proto
 
 - 🚀 **Quick Setup** - Define your database schema and data in simple YAML files
 - 🐘 **PostgreSQL Protocol** - Compatible with standard PostgreSQL clients and drivers
+- 🐬 **MySQL Protocol** - Full MySQL wire protocol support for MySQL clients
 - 📊 **SQL Support** - SELECT queries with WHERE, ORDER BY, LIMIT, and basic JOINs
 - 🔄 **Hot Reload** - Automatically reload data when YAML files change
 - 🛠️ **Development Friendly** - Perfect for testing database integrations locally
@@ -53,15 +54,26 @@ tables:
 
 2. Start the server:
 ```bash
+# PostgreSQL protocol (default)
 yamlbase -f database.yaml
+
+# MySQL protocol
+yamlbase -f database.yaml --protocol mysql
 ```
 
-3. Connect with any PostgreSQL client:
+3. Connect with your preferred SQL client:
+
+**PostgreSQL:**
 ```bash
 # Using psql
 psql -h localhost -p 5432 -U admin -d test_db
-
 # Password: password (default)
+```
+
+**MySQL:**
+```bash
+# Using mysql client
+mysql -h 127.0.0.1 -P 3306 -u admin -ppassword test_db
 ```
 
 4. Run SQL queries:
@@ -77,7 +89,7 @@ yamlbase [OPTIONS]
 
 Options:
   -f, --file <FILE>          Path to YAML database file
-  -p, --port <PORT>          Port to listen on [default: 5432]
+  -p, --port <PORT>          Port to listen on (default: 5432 for postgres, 3306 for mysql)
       --bind-address <ADDR>  Address to bind to [default: 0.0.0.0]
       --protocol <PROTOCOL>  SQL protocol: postgres, mysql, sqlserver [default: postgres]
   -u, --username <USER>      Authentication username [default: admin]
@@ -175,6 +187,8 @@ cargo run -- -f examples/sample_database.yaml --hot-reload -v
 ## Integration Examples
 
 ### Python
+
+**PostgreSQL:**
 ```python
 import psycopg2
 
@@ -191,7 +205,26 @@ cur.execute("SELECT * FROM users WHERE is_active = true")
 users = cur.fetchall()
 ```
 
+**MySQL:**
+```python
+import mysql.connector
+
+conn = mysql.connector.connect(
+    host="127.0.0.1",
+    port=3306,
+    database="test_db",
+    user="admin",
+    password="password"
+)
+
+cur = conn.cursor()
+cur.execute("SELECT * FROM users WHERE is_active = true")
+users = cur.fetchall()
+```
+
 ### Node.js
+
+**PostgreSQL:**
 ```javascript
 const { Client } = require('pg');
 
@@ -207,7 +240,26 @@ await client.connect();
 const res = await client.query('SELECT * FROM users');
 ```
 
+**MySQL:**
+```javascript
+const mysql = require('mysql2');
+
+const connection = mysql.createConnection({
+  host: '127.0.0.1',
+  port: 3306,
+  user: 'admin',
+  password: 'password',
+  database: 'test_db'
+});
+
+connection.query('SELECT * FROM users', (err, results) => {
+  console.log(results);
+});
+```
+
 ### Go
+
+**PostgreSQL:**
 ```go
 import (
     "database/sql"
@@ -216,6 +268,18 @@ import (
 
 db, err := sql.Open("postgres", 
     "host=localhost port=5432 user=admin password=password dbname=test_db sslmode=disable")
+
+rows, err := db.Query("SELECT name, email FROM users")
+```
+
+**MySQL:**
+```go
+import (
+    "database/sql"
+    _ "github.com/go-sql-driver/mysql"
+)
+
+db, err := sql.Open("mysql", "admin:password@tcp(127.0.0.1:3306)/test_db")
 
 rows, err := db.Query("SELECT name, email FROM users")
 ```
@@ -241,7 +305,7 @@ rows, err := db.Query("SELECT name, email FROM users")
 - Basic SQL feature set
 - No transaction support
 - No indexes beyond primary keys
-- PostgreSQL protocol only (MySQL and SQL Server planned)
+- SQL Server protocol not yet implemented
 
 ## Contributing
 

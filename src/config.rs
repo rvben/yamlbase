@@ -9,8 +9,8 @@ pub struct Config {
     #[arg(short, long, value_name = "FILE", help = "Path to YAML database file")]
     pub file: PathBuf,
 
-    #[arg(short, long, default_value = "5432", help = "Port to listen on")]
-    pub port: u16,
+    #[arg(short, long, help = "Port to listen on (default: 5432 for postgres, 3306 for mysql)")]
+    pub port: Option<u16>,
 
     #[arg(
         long,
@@ -58,6 +58,14 @@ pub enum Protocol {
 }
 
 impl Config {
+    pub fn effective_port(&self) -> u16 {
+        self.port.unwrap_or_else(|| match self.protocol {
+            Protocol::Postgres => 5432,
+            Protocol::Mysql => 3306,
+            Protocol::Sqlserver => 1433,
+        })
+    }
+
     pub fn init_logging(&self) -> anyhow::Result<()> {
         let log_level = if self.verbose {
             "debug"

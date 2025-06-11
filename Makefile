@@ -80,14 +80,27 @@ check:
 ci: fmt-check check lint test
 
 # Test with PostgreSQL client
-test-client:
-	@echo "Starting server in background..."
-	@cargo run -- -f examples/sample_database.yaml &
+test-postgres:
+	@echo "Starting PostgreSQL server in background..."
+	@cargo run -- -f examples/sample_database.yaml --protocol postgres &
 	@sleep 3
-	@echo "Running test queries..."
+	@echo "Running PostgreSQL test queries..."
 	@./test_queries.sh
 	@echo "Stopping server..."
 	@pkill -f "cargo run.*yamlbase" || true
+
+# Test with MySQL client
+test-mysql:
+	@echo "Starting MySQL server in background..."
+	@cargo run -- -f examples/sample_database.yaml --protocol mysql &
+	@sleep 3
+	@echo "Running MySQL test queries..."
+	@./test_mysql_queries.sh
+	@echo "Stopping server..."
+	@pkill -f "cargo run.*yamlbase" || true
+
+# Test both protocols
+test-client: test-postgres test-mysql
 
 # Generate documentation
 docs:

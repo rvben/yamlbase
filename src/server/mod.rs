@@ -24,7 +24,7 @@ impl Server {
     }
 
     pub async fn run(self) -> crate::Result<()> {
-        let addr = format!("{}:{}", self.config.bind_address, self.config.port);
+        let addr = format!("{}:{}", self.config.bind_address, self.config.effective_port());
         info!("Starting YamlBase server on {}", addr);
         
         // Set up hot reload if enabled
