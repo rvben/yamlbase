@@ -15,34 +15,38 @@ pub struct Server {
 impl Server {
     pub async fn new(config: Config) -> crate::Result<Self> {
         let config = Arc::new(config);
-        
+
         // Parse initial database
         let database = parse_yaml_database(&config.file).await?;
         let storage = Storage::new(database);
-        
+
         Ok(Self { config, storage })
     }
 
     pub async fn run(self) -> crate::Result<()> {
-        let addr = format!("{}:{}", self.config.bind_address, self.config.effective_port());
+        let addr = format!(
+            "{}:{}",
+            self.config.bind_address,
+            self.config.effective_port()
+        );
         info!("Starting YamlBase server on {}", addr);
-        
+
         // Set up hot reload if enabled
         if self.config.hot_reload {
             self.setup_hot_reload()?;
         }
-        
+
         // Start listening
         let listener = TcpListener::bind(&addr).await?;
         info!("Server listening on {}", addr);
-        
+
         // Accept connections
         loop {
             let (stream, addr) = listener.accept().await?;
             info!("New connection from {}", addr);
-            
+
             let connection = Connection::new(self.config.clone(), self.storage.database());
-            
+
             tokio::spawn(async move {
                 if let Err(e) = connection.handle(stream).await {
                     error!("Connection error: {}", e);
@@ -53,11 +57,13 @@ impl Server {
 
     fn setup_hot_reload(&self) -> crate::Result<()> {
         let (watcher, mut rx) = FileWatcher::new(self.config.file.clone());
-        watcher.start().map_err(|e| crate::YamlBaseError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-        
+        watcher.start().map_err(|e| {
+            crate::YamlBaseError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+        })?;
+
         let storage = self.storage.clone();
         let config = self.config.clone();
-        
+
         tokio::spawn(async move {
             while let Some(()) = rx.recv().await {
                 info!("Reloading database from file");
@@ -76,7 +82,7 @@ impl Server {
                 }
             }
         });
-        
+
         Ok(())
     }
 }

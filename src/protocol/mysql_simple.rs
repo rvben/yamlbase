@@ -83,18 +83,21 @@ impl MySqlProtocol {
 
         // Read handshake response
         let response_packet = self.read_packet(&mut stream, &mut state).await?;
-        let (username, auth_response, _database) = self.parse_handshake_response(&response_packet)?;
+        let (username, auth_response, _database) =
+            self.parse_handshake_response(&response_packet)?;
 
         // Simple authentication check
         if username != self.config.username {
-            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied").await?;
+            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
+                .await?;
             return Ok(());
         }
 
         // Verify password
         let expected = compute_auth_response(&self.config.password, &state.auth_data);
         if auth_response != expected {
-            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied").await?;
+            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
+                .await?;
             return Ok(());
         }
 
@@ -115,8 +118,9 @@ impl MySqlProtocol {
             let command = packet[0];
             match command {
                 COM_QUERY => {
-                    let query = std::str::from_utf8(&packet[1..])
-                        .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in query".to_string()))?;
+                    let query = std::str::from_utf8(&packet[1..]).map_err(|_| {
+                        YamlBaseError::Protocol("Invalid UTF-8 in query".to_string())
+                    })?;
                     self.handle_query(&mut stream, &mut state, query).await?;
                 }
                 COM_QUIT => {
@@ -127,13 +131,15 @@ impl MySqlProtocol {
                     self.send_ok(&mut stream, &mut state, 0, 0).await?;
                 }
                 COM_INIT_DB => {
-                    let _db_name = std::str::from_utf8(&packet[1..])
-                        .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in database name".to_string()))?;
+                    let _db_name = std::str::from_utf8(&packet[1..]).map_err(|_| {
+                        YamlBaseError::Protocol("Invalid UTF-8 in database name".to_string())
+                    })?;
                     self.send_ok(&mut stream, &mut state, 0, 0).await?;
                 }
                 _ => {
                     debug!("Unhandled command: 0x{:02x}", command);
-                    self.send_error(&mut stream, &mut state, 1047, "08S01", "Unknown command").await?;
+                    self.send_error(&mut stream, &mut state, 1047, "08S01", "Unknown command")
+                        .await?;
                 }
             }
         }
@@ -141,50 +147,59 @@ impl MySqlProtocol {
         Ok(())
     }
 
-    async fn send_handshake(&self, stream: &mut TcpStream, state: &mut ConnectionState) -> crate::Result<()> {
+    async fn send_handshake(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+    ) -> crate::Result<()> {
         let mut packet = BytesMut::new();
 
         // Protocol version
         packet.put_u8(PROTOCOL_VERSION);
-        
+
         // Server version
         packet.put_slice(SERVER_VERSION.as_bytes());
         packet.put_u8(0);
-        
+
         // Connection ID
         packet.put_u32_le(1);
-        
+
         // Auth data part 1 (8 bytes)
         packet.put_slice(&state.auth_data[..8]);
-        
+
         // Filler
         packet.put_u8(0);
-        
+
         // Capability flags (lower 2 bytes)
-        let capabilities = CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | 
-                          CLIENT_CONNECT_WITH_DB | CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION |
-                          CLIENT_PLUGIN_AUTH | CLIENT_DEPRECATE_EOF;
+        let capabilities = CLIENT_LONG_PASSWORD
+            | CLIENT_FOUND_ROWS
+            | CLIENT_LONG_FLAG
+            | CLIENT_CONNECT_WITH_DB
+            | CLIENT_PROTOCOL_41
+            | CLIENT_SECURE_CONNECTION
+            | CLIENT_PLUGIN_AUTH
+            | CLIENT_DEPRECATE_EOF;
         packet.put_u16_le((capabilities & 0xFFFF) as u16);
-        
+
         // Character set (utf8mb4)
         packet.put_u8(255);
-        
+
         // Status flags
         packet.put_u16_le(SERVER_STATUS_AUTOCOMMIT);
-        
+
         // Capability flags (upper 2 bytes)
         packet.put_u16_le(((capabilities >> 16) & 0xFFFF) as u16);
-        
+
         // Length of auth plugin data
         packet.put_u8(21);
-        
+
         // Reserved
         packet.put_slice(&[0; 10]);
-        
+
         // Auth data part 2 (12 bytes)
         packet.put_slice(&state.auth_data[8..20]);
         packet.put_u8(0);
-        
+
         // Auth plugin name
         packet.put_slice(AUTH_PLUGIN_NAME.as_bytes());
         packet.put_u8(0);
@@ -193,55 +208,72 @@ impl MySqlProtocol {
         Ok(())
     }
 
-    fn parse_handshake_response(&self, packet: &[u8]) -> crate::Result<(String, Vec<u8>, Option<String>)> {
+    fn parse_handshake_response(
+        &self,
+        packet: &[u8],
+    ) -> crate::Result<(String, Vec<u8>, Option<String>)> {
         let mut pos = 0;
-        
+
         // Skip client capabilities (4 bytes)
         pos += 4;
-        
+
         // Skip max packet size (4 bytes)
         pos += 4;
-        
+
         // Skip character set (1 byte)
         pos += 1;
-        
+
         // Skip reserved (23 bytes)
         pos += 23;
-        
+
         // Username (null-terminated)
-        let username_end = packet[pos..].iter().position(|&b| b == 0)
+        let username_end = packet[pos..]
+            .iter()
+            .position(|&b| b == 0)
             .ok_or_else(|| YamlBaseError::Protocol("Invalid handshake response".to_string()))?;
         let username = std::str::from_utf8(&packet[pos..pos + username_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in username".to_string()))?
             .to_string();
         pos += username_end + 1;
-        
+
         // Auth response length
         let auth_len = packet[pos] as usize;
         pos += 1;
-        
+
         // Auth response
         let auth_response = packet[pos..pos + auth_len].to_vec();
         pos += auth_len;
-        
+
         // Database (optional, null-terminated)
         let database = if pos < packet.len() {
-            let db_end = packet[pos..].iter().position(|&b| b == 0).unwrap_or(packet.len() - pos);
+            let db_end = packet[pos..]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(packet.len() - pos);
             if db_end > 0 {
-                Some(std::str::from_utf8(&packet[pos..pos + db_end])
-                    .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in database".to_string()))?
-                    .to_string())
+                Some(
+                    std::str::from_utf8(&packet[pos..pos + db_end])
+                        .map_err(|_| {
+                            YamlBaseError::Protocol("Invalid UTF-8 in database".to_string())
+                        })?
+                        .to_string(),
+                )
             } else {
                 None
             }
         } else {
             None
         };
-        
+
         Ok((username, auth_response, database))
     }
 
-    async fn handle_query(&self, stream: &mut TcpStream, state: &mut ConnectionState, query: &str) -> crate::Result<()> {
+    async fn handle_query(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        query: &str,
+    ) -> crate::Result<()> {
         debug!("Executing query: {}", query);
 
         // Handle special MySQL queries
@@ -253,7 +285,14 @@ impl MySqlProtocol {
         let statements = match parse_sql(query) {
             Ok(stmts) => stmts,
             Err(e) => {
-                self.send_error(stream, state, 1064, "42000", &format!("Syntax error: {}", e)).await?;
+                self.send_error(
+                    stream,
+                    state,
+                    1064,
+                    "42000",
+                    &format!("Syntax error: {}", e),
+                )
+                .await?;
                 return Ok(());
             }
         };
@@ -264,7 +303,8 @@ impl MySqlProtocol {
                     self.send_query_result(stream, state, &result).await?;
                 }
                 Err(e) => {
-                    self.send_error(stream, state, 1146, "42S02", &e.to_string()).await?;
+                    self.send_error(stream, state, 1146, "42S02", &e.to_string())
+                        .await?;
                 }
             }
         }
@@ -272,7 +312,12 @@ impl MySqlProtocol {
         Ok(())
     }
 
-    async fn handle_system_var_query(&self, stream: &mut TcpStream, state: &mut ConnectionState, query: &str) -> crate::Result<()> {
+    async fn handle_system_var_query(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        query: &str,
+    ) -> crate::Result<()> {
         let value = if query.contains("version") {
             SERVER_VERSION
         } else {
@@ -282,25 +327,41 @@ impl MySqlProtocol {
         // Send simple result set with one column and one row
         let columns = vec!["@@version"];
         let rows = vec![vec![value]];
-        
-        self.send_simple_result_set(stream, state, &columns, &rows).await
+
+        self.send_simple_result_set(stream, state, &columns, &rows)
+            .await
     }
 
-    async fn send_query_result(&self, stream: &mut TcpStream, state: &mut ConnectionState, result: &crate::sql::executor::QueryResult) -> crate::Result<()> {
+    async fn send_query_result(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        result: &crate::sql::executor::QueryResult,
+    ) -> crate::Result<()> {
         // Convert to string representation
         let columns: Vec<&str> = result.columns.iter().map(|s| s.as_str()).collect();
-        let rows: Vec<Vec<String>> = result.rows.iter()
+        let rows: Vec<Vec<String>> = result
+            .rows
+            .iter()
             .map(|row| row.iter().map(|val| val.to_string()).collect())
             .collect();
-        
-        let string_rows: Vec<Vec<&str>> = rows.iter()
+
+        let string_rows: Vec<Vec<&str>> = rows
+            .iter()
             .map(|row| row.iter().map(|s| s.as_str()).collect())
             .collect();
-        
-        self.send_simple_result_set(stream, state, &columns, &string_rows).await
+
+        self.send_simple_result_set(stream, state, &columns, &string_rows)
+            .await
     }
 
-    async fn send_simple_result_set(&self, stream: &mut TcpStream, state: &mut ConnectionState, columns: &[&str], rows: &[Vec<&str>]) -> crate::Result<()> {
+    async fn send_simple_result_set(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        columns: &[&str],
+        rows: &[Vec<&str>],
+    ) -> crate::Result<()> {
         // Column count
         let mut packet = BytesMut::new();
         packet.put_u8(columns.len() as u8);
@@ -309,49 +370,49 @@ impl MySqlProtocol {
         // Column definitions
         for column in columns {
             let mut col_packet = BytesMut::new();
-            
+
             // Catalog (def)
             col_packet.put_u8(3);
             col_packet.put_slice(b"def");
-            
+
             // Schema
             col_packet.put_u8(0);
-            
+
             // Table
             col_packet.put_u8(0);
-            
+
             // Original table
             col_packet.put_u8(0);
-            
+
             // Column name
             col_packet.put_u8(column.len() as u8);
             col_packet.put_slice(column.as_bytes());
-            
+
             // Original column name
             col_packet.put_u8(column.len() as u8);
             col_packet.put_slice(column.as_bytes());
-            
+
             // Length of fixed fields (0x0c)
             col_packet.put_u8(0x0c);
-            
+
             // Character set (utf8mb4)
             col_packet.put_u16_le(255);
-            
+
             // Column length
             col_packet.put_u32_le(255);
-            
+
             // Column type (VAR_STRING)
             col_packet.put_u8(MYSQL_TYPE_VAR_STRING);
-            
+
             // Flags
             col_packet.put_u16_le(0);
-            
+
             // Decimals
             col_packet.put_u8(0);
-            
+
             // Filler
             col_packet.put_u16_le(0);
-            
+
             self.write_packet(stream, state, &col_packet).await?;
         }
 
@@ -379,56 +440,74 @@ impl MySqlProtocol {
         self.send_ok(stream, state, 0, rows.len() as u64).await
     }
 
-    async fn send_ok(&self, stream: &mut TcpStream, state: &mut ConnectionState, affected_rows: u64, _info: u64) -> crate::Result<()> {
+    async fn send_ok(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        affected_rows: u64,
+        _info: u64,
+    ) -> crate::Result<()> {
         let mut packet = BytesMut::new();
-        
+
         // OK packet header
         packet.put_u8(0x00);
-        
+
         // Affected rows
         put_lenenc_int(&mut packet, affected_rows);
-        
+
         // Last insert ID
         put_lenenc_int(&mut packet, 0);
-        
+
         // Status flags
         packet.put_u16_le(SERVER_STATUS_AUTOCOMMIT);
-        
+
         // Warnings
         packet.put_u16_le(0);
 
         self.write_packet(stream, state, &packet).await
     }
 
-    async fn send_error(&self, stream: &mut TcpStream, state: &mut ConnectionState, error_code: u16, sql_state: &str, message: &str) -> crate::Result<()> {
+    async fn send_error(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        error_code: u16,
+        sql_state: &str,
+        message: &str,
+    ) -> crate::Result<()> {
         let mut packet = BytesMut::new();
-        
+
         // Error packet header
         packet.put_u8(0xff);
-        
+
         // Error code
         packet.put_u16_le(error_code);
-        
+
         // SQL state marker
         packet.put_u8(b'#');
-        
+
         // SQL state
         packet.put_slice(sql_state.as_bytes());
-        
+
         // Error message
         packet.put_slice(message.as_bytes());
 
         self.write_packet(stream, state, &packet).await
     }
 
-    async fn write_packet(&self, stream: &mut TcpStream, state: &mut ConnectionState, payload: &[u8]) -> crate::Result<()> {
+    async fn write_packet(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+        payload: &[u8],
+    ) -> crate::Result<()> {
         let mut packet = BytesMut::with_capacity(4 + payload.len());
-        
+
         // Length (3 bytes)
         packet.put_u8((payload.len() & 0xff) as u8);
         packet.put_u8(((payload.len() >> 8) & 0xff) as u8);
         packet.put_u8(((payload.len() >> 16) & 0xff) as u8);
-        
+
         // Sequence ID
         packet.put_u8(state.sequence_id);
         state.sequence_id = state.sequence_id.wrapping_add(1);
@@ -442,7 +521,11 @@ impl MySqlProtocol {
         Ok(())
     }
 
-    async fn read_packet(&self, stream: &mut TcpStream, state: &mut ConnectionState) -> crate::Result<Vec<u8>> {
+    async fn read_packet(
+        &self,
+        stream: &mut TcpStream,
+        state: &mut ConnectionState,
+    ) -> crate::Result<Vec<u8>> {
         let mut header = [0u8; 4];
         stream.read_exact(&mut header).await?;
 
@@ -486,7 +569,8 @@ fn compute_auth_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
     let result = hasher.finalize();
 
     // XOR with SHA1(password)
-    stage1.iter()
+    stage1
+        .iter()
         .zip(result.iter())
         .map(|(a, b)| a ^ b)
         .collect()

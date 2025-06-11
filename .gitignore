@@ -22,3 +22,6 @@ Thumbs.db
 *.tmp
 *.log
 EOF < /dev/null
+
+# Assets
+assets/*.png

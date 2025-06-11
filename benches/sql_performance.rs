@@ -9,7 +9,7 @@ use yamlbase::yaml::schema::SqlType;
 
 fn create_test_database() -> Database {
     let mut db = Database::new("bench_db".to_string());
-    
+
     // Create users table
     let columns = vec![
         Column {
@@ -49,9 +49,9 @@ fn create_test_database() -> Database {
             references: None,
         },
     ];
-    
+
     let mut table = Table::new("users".to_string(), columns);
-    
+
     // Insert test data
     for i in 1..=1000 {
         let row = vec![
@@ -62,7 +62,7 @@ fn create_test_database() -> Database {
         ];
         table.insert_row(row).unwrap();
     }
-    
+
     db.add_table(table).unwrap();
     db
 }
@@ -71,7 +71,7 @@ fn benchmark_simple_select(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = Arc::new(RwLock::new(create_test_database()));
     let executor = QueryExecutor::new(db);
-    
+
     c.bench_function("simple_select", |b| {
         b.iter(|| {
             rt.block_on(async {
@@ -88,7 +88,7 @@ fn benchmark_where_clause(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = Arc::new(RwLock::new(create_test_database()));
     let executor = QueryExecutor::new(db);
-    
+
     c.bench_function("where_clause", |b| {
         b.iter(|| {
             rt.block_on(async {
@@ -105,7 +105,7 @@ fn benchmark_order_by(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = Arc::new(RwLock::new(create_test_database()));
     let executor = QueryExecutor::new(db);
-    
+
     c.bench_function("order_by", |b| {
         b.iter(|| {
             rt.block_on(async {
@@ -122,7 +122,7 @@ fn benchmark_limit(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = Arc::new(RwLock::new(create_test_database()));
     let executor = QueryExecutor::new(db);
-    
+
     c.bench_function("limit", |b| {
         b.iter(|| {
             rt.block_on(async {

@@ -1,6 +1,6 @@
+use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use dashmap::DashMap;
 
 use crate::database::{Database, Value};
 
@@ -15,7 +15,7 @@ impl Storage {
             database: Arc::new(RwLock::new(database)),
             primary_key_index: Arc::new(DashMap::new()),
         };
-        
+
         // Build initial indexes
         tokio::spawn({
             let storage = storage.clone();
@@ -23,7 +23,7 @@ impl Storage {
                 storage.rebuild_indexes().await;
             }
         });
-        
+
         storage
     }
 
@@ -33,15 +33,16 @@ impl Storage {
 
     pub async fn rebuild_indexes(&self) {
         let db = self.database.read().await;
-        
+
         for (table_name, table) in &db.tables {
             if let Some(pk_idx) = table.primary_key_index {
-                let table_index = self.primary_key_index
+                let table_index = self
+                    .primary_key_index
                     .entry(table_name.clone())
                     .or_insert_with(DashMap::new);
-                
+
                 table_index.clear();
-                
+
                 for (row_idx, row) in table.rows.iter().enumerate() {
                     let pk_value = row[pk_idx].clone();
                     table_index.insert(pk_value, row_idx);
@@ -50,7 +51,11 @@ impl Storage {
         }
     }
 
-    pub async fn find_by_primary_key(&self, table_name: &str, pk_value: &Value) -> Option<Vec<Value>> {
+    pub async fn find_by_primary_key(
+        &self,
+        table_name: &str,
+        pk_value: &Value,
+    ) -> Option<Vec<Value>> {
         if let Some(table_index) = self.primary_key_index.get(table_name) {
             if let Some(row_idx) = table_index.get(pk_value) {
                 let db = self.database.read().await;

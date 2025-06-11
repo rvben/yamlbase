@@ -9,14 +9,14 @@ pub struct Config {
     #[arg(short, long, value_name = "FILE", help = "Path to YAML database file")]
     pub file: PathBuf,
 
-    #[arg(short, long, help = "Port to listen on (default: 5432 for postgres, 3306 for mysql)")]
+    #[arg(
+        short,
+        long,
+        help = "Port to listen on (default: 5432 for postgres, 3306 for mysql)"
+    )]
     pub port: Option<u16>,
 
-    #[arg(
-        long,
-        default_value = "0.0.0.0",
-        help = "Address to bind to"
-    )]
+    #[arg(long, default_value = "0.0.0.0", help = "Address to bind to")]
     pub bind_address: String,
 
     #[arg(
@@ -27,10 +27,20 @@ pub struct Config {
     )]
     pub protocol: Protocol,
 
-    #[arg(short = 'u', long, default_value = "admin", help = "Authentication username")]
+    #[arg(
+        short = 'u',
+        long,
+        default_value = "admin",
+        help = "Authentication username"
+    )]
     pub username: String,
 
-    #[arg(short = 'P', long, default_value = "password", help = "Authentication password")]
+    #[arg(
+        short = 'P',
+        long,
+        default_value = "password",
+        help = "Authentication password"
+    )]
     pub password: String,
 
     #[arg(long, help = "Enable hot-reloading of YAML file changes")]

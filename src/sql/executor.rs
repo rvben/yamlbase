@@ -1,6 +1,6 @@
+use sqlparser::ast::*;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use sqlparser::ast::*;
 use tracing::debug;
 
 use crate::database::{Database, Table, Value};
@@ -25,99 +25,111 @@ impl QueryExecutor {
         match statement {
             Statement::Query(query) => self.execute_query(query).await,
             _ => Err(YamlBaseError::NotImplemented(
-                "Only SELECT queries are supported".to_string()
+                "Only SELECT queries are supported".to_string(),
             )),
         }
     }
 
     async fn execute_query(&self, query: &Box<Query>) -> crate::Result<QueryResult> {
         let db = self.database.read().await;
-        
+
         match &query.body.as_ref() {
             SetExpr::Select(select) => self.execute_select(&db, select, query).await,
             _ => Err(YamlBaseError::NotImplemented(
-                "Only simple SELECT queries are supported".to_string()
+                "Only simple SELECT queries are supported".to_string(),
             )),
         }
     }
 
-    async fn execute_select(&self, db: &Database, select: &Select, query: &Query) -> crate::Result<QueryResult> {
+    async fn execute_select(
+        &self,
+        db: &Database,
+        select: &Select,
+        query: &Query,
+    ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT query");
-        
+
         // Get the table
         let table_name = self.extract_table_name(&select.from)?;
-        let table = db.get_table(&table_name)
+        let table = db
+            .get_table(&table_name)
             .ok_or_else(|| YamlBaseError::Database {
                 message: format!("Table '{}' not found", table_name),
             })?;
-        
+
         // Get column names for projection
         let columns = self.extract_columns(select, table)?;
-        
+
         // Filter rows based on WHERE clause
         let filtered_rows = self.filter_rows(table, &select.selection)?;
-        
+
         // Project columns
         let projected_rows = self.project_columns(&filtered_rows, &columns, table)?;
-        
+
         // Apply ORDER BY
         let sorted_rows = if let Some(order_by) = &query.order_by {
             self.sort_rows(projected_rows, &order_by.exprs, &columns)?
         } else {
             projected_rows
         };
-        
+
         // Apply LIMIT and OFFSET
         let final_rows = if let Some(limit_expr) = &query.limit {
             self.apply_limit(sorted_rows, limit_expr)?
         } else {
             sorted_rows
         };
-        
+
         Ok(QueryResult {
             columns: columns.iter().map(|c| c.0.clone()).collect(),
             rows: final_rows,
         })
     }
 
-    fn extract_table_name(&self, from: &Vec<TableWithJoins>) -> crate::Result<String> {
+    fn extract_table_name(&self, from: &[TableWithJoins]) -> crate::Result<String> {
         if from.is_empty() {
             return Err(YamlBaseError::Database {
                 message: "No FROM clause specified".to_string(),
             });
         }
-        
+
         if from.len() > 1 || !from[0].joins.is_empty() {
             return Err(YamlBaseError::NotImplemented(
-                "Joins are not yet supported".to_string()
+                "Joins are not yet supported".to_string(),
             ));
         }
-        
+
         match &from[0].relation {
-            TableFactor::Table { name, .. } => {
-                Ok(name.0.first()
-                    .ok_or_else(|| YamlBaseError::Database {
-                        message: "Invalid table name".to_string(),
-                    })?
-                    .value.clone())
-            }
+            TableFactor::Table { name, .. } => Ok(name
+                .0
+                .first()
+                .ok_or_else(|| YamlBaseError::Database {
+                    message: "Invalid table name".to_string(),
+                })?
+                .value
+                .clone()),
             _ => Err(YamlBaseError::NotImplemented(
-                "Only simple table references are supported".to_string()
+                "Only simple table references are supported".to_string(),
             )),
         }
     }
 
-    fn extract_columns(&self, select: &Select, table: &Table) -> crate::Result<Vec<(String, usize)>> {
+    fn extract_columns(
+        &self,
+        select: &Select,
+        table: &Table,
+    ) -> crate::Result<Vec<(String, usize)>> {
         let mut columns = Vec::new();
-        
+
         for item in &select.projection {
             match item {
                 SelectItem::UnnamedExpr(Expr::Identifier(ident)) => {
                     let col_name = &ident.value;
-                    let col_idx = table.get_column_index(col_name)
-                        .ok_or_else(|| YamlBaseError::Database {
+                    let col_idx = table.get_column_index(col_name).ok_or_else(|| {
+                        YamlBaseError::Database {
                             message: format!("Column '{}' not found", col_name),
-                        })?;
+                        }
+                    })?;
                     columns.push((col_name.clone(), col_idx));
                 }
                 SelectItem::Wildcard(_) => {
@@ -125,18 +137,24 @@ impl QueryExecutor {
                         columns.push((col.name.clone(), idx));
                     }
                 }
-                _ => return Err(YamlBaseError::NotImplemented(
-                    "Complex projections are not yet supported".to_string()
-                )),
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Complex projections are not yet supported".to_string(),
+                    ))
+                }
             }
         }
-        
+
         Ok(columns)
     }
 
-    fn filter_rows<'a>(&self, table: &'a Table, selection: &Option<Expr>) -> crate::Result<Vec<&'a Vec<Value>>> {
+    fn filter_rows<'a>(
+        &self,
+        table: &'a Table,
+        selection: &Option<Expr>,
+    ) -> crate::Result<Vec<&'a Vec<Value>>> {
         let mut result = Vec::new();
-        
+
         for row in &table.rows {
             if let Some(where_expr) = selection {
                 if self.evaluate_expr(where_expr, row, table)? {
@@ -146,7 +164,7 @@ impl QueryExecutor {
                 result.push(row);
             }
         }
-        
+
         Ok(result)
     }
 
@@ -156,9 +174,10 @@ impl QueryExecutor {
                 self.evaluate_binary_op(left, op, right, row, table)
             }
             Expr::Value(sqlparser::ast::Value::Boolean(b)) => Ok(*b),
-            _ => Err(YamlBaseError::NotImplemented(
-                format!("Expression type not supported: {:?}", expr)
-            )),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Expression type not supported: {:?}",
+                expr
+            ))),
         }
     }
 
@@ -172,7 +191,7 @@ impl QueryExecutor {
     ) -> crate::Result<bool> {
         let left_val = self.get_expr_value(left, row, table)?;
         let right_val = self.get_expr_value(right, row, table)?;
-        
+
         match op {
             BinaryOperator::Eq => Ok(left_val == right_val),
             BinaryOperator::NotEq => Ok(left_val != right_val),
@@ -214,25 +233,28 @@ impl QueryExecutor {
                 let right_bool = self.evaluate_expr(right, row, table)?;
                 Ok(left_bool || right_bool)
             }
-            _ => Err(YamlBaseError::NotImplemented(
-                format!("Binary operator not supported: {:?}", op)
-            )),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Binary operator not supported: {:?}",
+                op
+            ))),
         }
     }
 
     fn get_expr_value(&self, expr: &Expr, row: &[Value], table: &Table) -> crate::Result<Value> {
         match expr {
             Expr::Identifier(ident) => {
-                let col_idx = table.get_column_index(&ident.value)
-                    .ok_or_else(|| YamlBaseError::Database {
+                let col_idx = table.get_column_index(&ident.value).ok_or_else(|| {
+                    YamlBaseError::Database {
                         message: format!("Column '{}' not found", ident.value),
-                    })?;
+                    }
+                })?;
                 Ok(row[col_idx].clone())
             }
             Expr::Value(val) => self.sql_value_to_db_value(val),
-            _ => Err(YamlBaseError::NotImplemented(
-                format!("Expression type not supported: {:?}", expr)
-            )),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Expression type not supported: {:?}",
+                expr
+            ))),
         }
     }
 
@@ -252,9 +274,10 @@ impl QueryExecutor {
             sqlparser::ast::Value::SingleQuotedString(s) => Ok(Value::Text(s.clone())),
             sqlparser::ast::Value::Boolean(b) => Ok(Value::Boolean(*b)),
             sqlparser::ast::Value::Null => Ok(Value::Null),
-            _ => Err(YamlBaseError::NotImplemented(
-                format!("Value type not supported: {:?}", val)
-            )),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Value type not supported: {:?}",
+                val
+            ))),
         }
     }
 
@@ -265,7 +288,7 @@ impl QueryExecutor {
         _table: &Table,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut result = Vec::new();
-        
+
         for row in rows {
             let mut projected_row = Vec::new();
             for (_, idx) in columns {
@@ -273,7 +296,7 @@ impl QueryExecutor {
             }
             result.push(projected_row);
         }
-        
+
         Ok(result)
     }
 
@@ -289,7 +312,7 @@ impl QueryExecutor {
             .enumerate()
             .map(|(idx, (name, _))| (name.as_str(), idx))
             .collect();
-        
+
         rows.sort_by(|a, b| {
             for order_expr in order_by {
                 if let Expr::Identifier(ident) = &order_expr.expr {
@@ -309,21 +332,19 @@ impl QueryExecutor {
             }
             std::cmp::Ordering::Equal
         });
-        
+
         Ok(rows)
     }
 
     fn apply_limit(&self, rows: Vec<Vec<Value>>, limit: &Expr) -> crate::Result<Vec<Vec<Value>>> {
         if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = limit {
-            let limit_val: usize = n.parse().map_err(|_| {
-                YamlBaseError::Database {
-                    message: format!("Invalid LIMIT value: {}", n),
-                }
+            let limit_val: usize = n.parse().map_err(|_| YamlBaseError::Database {
+                message: format!("Invalid LIMIT value: {}", n),
             })?;
             Ok(rows.into_iter().take(limit_val).collect())
         } else {
             Err(YamlBaseError::NotImplemented(
-                "Only numeric LIMIT values are supported".to_string()
+                "Only numeric LIMIT values are supported".to_string(),
             ))
         }
     }

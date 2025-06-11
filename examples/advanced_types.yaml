@@ -1,0 +1,216 @@
+database:
+  name: "advanced_db"
+
+tables:
+  employees:
+    columns:
+      id: "UUID PRIMARY KEY"
+      employee_number: "VARCHAR(10) NOT NULL UNIQUE"
+      first_name: "VARCHAR(50) NOT NULL"
+      last_name: "VARCHAR(50) NOT NULL"
+      email: "VARCHAR(100) NOT NULL UNIQUE"
+      phone: "VARCHAR(20)"
+      hire_date: "DATE NOT NULL"
+      birth_date: "DATE"
+      salary: "DECIMAL(10,2) NOT NULL"
+      bonus_percentage: "FLOAT"
+      is_active: "BOOLEAN DEFAULT true"
+      department: "VARCHAR(50)"
+      metadata: "JSON"
+      notes: "TEXT"
+      last_login: "TIMESTAMP"
+      work_hours: "TIME"
+    data:
+      - id: "550e8400-e29b-41d4-a716-446655440001"
+        employee_number: "EMP001"
+        first_name: "Alice"
+        last_name: "Johnson"
+        email: "alice.johnson@company.com"
+        phone: "+1-555-0101"
+        hire_date: "2020-03-15"
+        birth_date: "1985-07-22"
+        salary: 85000.00
+        bonus_percentage: 15.5
+        is_active: true
+        department: "Engineering"
+        metadata: '{"skills": ["Python", "Java", "SQL"], "certifications": ["AWS Solutions Architect"], "emergency_contact": {"name": "Bob Johnson", "phone": "+1-555-0102"}}'
+        notes: "Senior developer with expertise in cloud architecture. Leading the microservices migration project."
+        last_login: "2024-02-06 09:15:00"
+        work_hours: "09:00:00"
+      - id: "550e8400-e29b-41d4-a716-446655440002"
+        employee_number: "EMP002"
+        first_name: "Bob"
+        last_name: "Smith"
+        email: "bob.smith@company.com"
+        phone: "+1-555-0201"
+        hire_date: "2019-01-10"
+        birth_date: "1990-11-30"
+        salary: 95000.00
+        bonus_percentage: 18.0
+        is_active: true
+        department: "Engineering"
+        metadata: '{"skills": ["JavaScript", "React", "Node.js"], "certifications": ["AWS Developer"], "projects": ["CustomerPortal", "MobileApp"]}'
+        notes: "Team lead for frontend development. Excellent mentoring skills."
+        last_login: "2024-02-06 08:45:00"
+        work_hours: "08:30:00"
+      - id: "550e8400-e29b-41d4-a716-446655440003"
+        employee_number: "EMP003"
+        first_name: "Carol"
+        last_name: "Davis"
+        email: "carol.davis@company.com"
+        hire_date: "2021-06-01"
+        birth_date: "1988-04-15"
+        salary: 72000.00
+        bonus_percentage: 12.0
+        is_active: true
+        department: "Marketing"
+        metadata: '{"skills": ["SEO", "Content Marketing", "Analytics"], "tools": ["Google Analytics", "HubSpot"]}'
+        last_login: "2024-02-05 16:30:00"
+        work_hours: "09:00:00"
+      - id: "550e8400-e29b-41d4-a716-446655440004"
+        employee_number: "EMP004"
+        first_name: "David"
+        last_name: "Wilson"
+        email: "david.wilson@company.com"
+        phone: "+1-555-0401"
+        hire_date: "2018-09-12"
+        birth_date: "1982-12-08"
+        salary: 105000.00
+        bonus_percentage: 20.0
+        is_active: false
+        department: "Sales"
+        metadata: '{"skills": ["Negotiation", "CRM", "Business Development"], "territories": ["West Coast", "Pacific Northwest"], "last_performance_review": "2023-12-15"}'
+        notes: "Top performer in Q4 2023. On sabbatical leave."
+        last_login: "2023-12-20 17:00:00"
+        work_hours: "08:00:00"
+
+  projects:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      code: "VARCHAR(20) NOT NULL UNIQUE"
+      name: "VARCHAR(100) NOT NULL"
+      description: "TEXT"
+      start_date: "DATE NOT NULL"
+      end_date: "DATE"
+      budget: "DECIMAL(12,2)"
+      actual_cost: "DECIMAL(12,2)"
+      progress_percentage: "FLOAT DEFAULT 0.0"
+      status: "VARCHAR(20) DEFAULT 'planning'"
+      priority: "INTEGER DEFAULT 3"
+      is_confidential: "BOOLEAN DEFAULT false"
+      team_size: "INTEGER"
+      technologies: "JSON"
+      deliverables: "JSON"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    data:
+      - id: 1
+        code: "PROJ-2024-001"
+        name: "Customer Portal Redesign"
+        description: "Complete overhaul of the customer-facing portal with modern UI/UX"
+        start_date: "2024-01-15"
+        end_date: "2024-06-30"
+        budget: 250000.00
+        actual_cost: 45000.00
+        progress_percentage: 25.5
+        status: "in_progress"
+        priority: 1
+        is_confidential: false
+        team_size: 5
+        technologies: '["React", "TypeScript", "Node.js", "PostgreSQL"]'
+        deliverables: '["UI Design Mockups", "Frontend Application", "API Documentation", "User Manual"]'
+        created_at: "2024-01-10 10:00:00"
+        updated_at: "2024-02-05 14:30:00"
+      - id: 2
+        code: "PROJ-2024-002"
+        name: "Data Analytics Platform"
+        description: "Build internal analytics platform for business intelligence"
+        start_date: "2024-02-01"
+        end_date: "2024-09-30"
+        budget: 500000.00
+        actual_cost: 15000.00
+        progress_percentage: 10.0
+        status: "in_progress"
+        priority: 2
+        is_confidential: true
+        team_size: 8
+        technologies: '["Python", "Apache Spark", "Tableau", "AWS"]'
+        deliverables: '["Data Pipeline", "Dashboard Templates", "Training Materials"]'
+        created_at: "2024-01-20 11:30:00"
+        updated_at: "2024-02-06 09:00:00"
+      - id: 3
+        code: "PROJ-2023-015"
+        name: "Mobile App Development"
+        description: "Native mobile applications for iOS and Android"
+        start_date: "2023-06-01"
+        end_date: "2023-12-31"
+        budget: 180000.00
+        actual_cost: 175000.00
+        progress_percentage: 100.0
+        status: "completed"
+        priority: 1
+        is_confidential: false
+        team_size: 4
+        technologies: '["Swift", "Kotlin", "Firebase", "GraphQL"]'
+        deliverables: '["iOS App", "Android App", "Backend API", "App Store Deployment"]'
+        created_at: "2023-05-15 13:00:00"
+        updated_at: "2024-01-05 10:00:00"
+
+  time_entries:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      employee_id: "UUID REFERENCES employees(id)"
+      project_id: "INTEGER REFERENCES projects(id)"
+      work_date: "DATE NOT NULL"
+      start_time: "TIME NOT NULL"
+      end_time: "TIME NOT NULL"
+      hours_worked: "DECIMAL(4,2)"
+      description: "TEXT"
+      is_billable: "BOOLEAN DEFAULT true"
+      hourly_rate: "DECIMAL(6,2)"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    data:
+      - id: 1
+        employee_id: "550e8400-e29b-41d4-a716-446655440001"
+        project_id: 1
+        work_date: "2024-02-05"
+        start_time: "09:00:00"
+        end_time: "12:30:00"
+        hours_worked: 3.5
+        description: "Implemented user authentication module"
+        is_billable: true
+        hourly_rate: 150.00
+        created_at: "2024-02-05 17:00:00"
+      - id: 2
+        employee_id: "550e8400-e29b-41d4-a716-446655440001"
+        project_id: 1
+        work_date: "2024-02-05"
+        start_time: "13:30:00"
+        end_time: "17:00:00"
+        hours_worked: 3.5
+        description: "Code review and testing"
+        is_billable: true
+        hourly_rate: 150.00
+        created_at: "2024-02-05 17:00:00"
+      - id: 3
+        employee_id: "550e8400-e29b-41d4-a716-446655440002"
+        project_id: 1
+        work_date: "2024-02-06"
+        start_time: "08:30:00"
+        end_time: "12:00:00"
+        hours_worked: 3.5
+        description: "Frontend development - dashboard components"
+        is_billable: true
+        hourly_rate: 175.00
+        created_at: "2024-02-06 12:00:00"
+      - id: 4
+        employee_id: "550e8400-e29b-41d4-a716-446655440002"
+        project_id: 2
+        work_date: "2024-02-06"
+        start_time: "13:00:00"
+        end_time: "15:30:00"
+        hours_worked: 2.5
+        description: "Initial setup of data pipeline infrastructure"
+        is_billable: true
+        hourly_rate: 175.00
+        created_at: "2024-02-06 15:30:00"

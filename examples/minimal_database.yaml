@@ -1,0 +1,19 @@
+database:
+  name: "minimal_db"
+
+tables:
+  items:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100) NOT NULL"
+      value: "INTEGER"
+    data:
+      - id: 1
+        name: "First Item"
+        value: 100
+      - id: 2
+        name: "Second Item"
+        value: 200
+      - id: 3
+        name: "Third Item"
+        value: 300

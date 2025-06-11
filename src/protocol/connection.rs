@@ -29,7 +29,7 @@ impl Connection {
             Protocol::Sqlserver => {
                 error!("SQL Server protocol not yet implemented");
                 Err(crate::YamlBaseError::NotImplemented(
-                    "SQL Server protocol not yet implemented".to_string()
+                    "SQL Server protocol not yet implemented".to_string(),
                 ))
             }
         }

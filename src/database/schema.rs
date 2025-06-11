@@ -104,6 +104,25 @@ impl std::hash::Hash for Value {
     }
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Null => write!(f, "NULL"),
+            Value::Integer(i) => write!(f, "{}", i),
+            Value::Float(fl) => write!(f, "{}", fl),
+            Value::Double(d) => write!(f, "{}", d),
+            Value::Decimal(d) => write!(f, "{}", d),
+            Value::Text(s) => write!(f, "{}", s),
+            Value::Boolean(b) => write!(f, "{}", b),
+            Value::Timestamp(ts) => write!(f, "{}", ts.format("%Y-%m-%d %H:%M:%S")),
+            Value::Date(d) => write!(f, "{}", d.format("%Y-%m-%d")),
+            Value::Time(t) => write!(f, "{}", t.format("%H:%M:%S")),
+            Value::Uuid(u) => write!(f, "{}", u),
+            Value::Json(j) => write!(f, "{}", j),
+        }
+    }
+}
+
 impl Database {
     pub fn new(name: String) -> Self {
         Self {
@@ -135,14 +154,14 @@ impl Table {
     pub fn new(name: String, columns: Vec<Column>) -> Self {
         let mut column_index = IndexMap::new();
         let mut primary_key_index = None;
-        
+
         for (idx, col) in columns.iter().enumerate() {
             column_index.insert(col.name.clone(), idx);
             if col.primary_key {
                 primary_key_index = Some(idx);
             }
         }
-        
+
         Self {
             name,
             columns,
@@ -162,7 +181,7 @@ impl Table {
                 ),
             });
         }
-        
+
         // Validate data types
         for (value, column) in row.iter().zip(self.columns.iter()) {
             if !value.is_compatible_with(&column.sql_type) {
@@ -171,14 +190,14 @@ impl Table {
                     value, column.name, column.sql_type
                 )));
             }
-            
+
             if !column.nullable && matches!(value, Value::Null) {
                 return Err(crate::YamlBaseError::Database {
                     message: format!("Column '{}' cannot be NULL", column.name),
                 });
             }
         }
-        
+
         self.rows.push(row);
         Ok(())
     }
@@ -207,31 +226,14 @@ impl Value {
         }
     }
 
-    pub fn to_string(&self) -> String {
-        match self {
-            Value::Null => "NULL".to_string(),
-            Value::Integer(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::Double(d) => d.to_string(),
-            Value::Decimal(d) => d.to_string(),
-            Value::Text(s) => s.clone(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Timestamp(ts) => ts.format("%Y-%m-%d %H:%M:%S").to_string(),
-            Value::Date(d) => d.format("%Y-%m-%d").to_string(),
-            Value::Time(t) => t.format("%H:%M:%S").to_string(),
-            Value::Uuid(u) => u.to_string(),
-            Value::Json(j) => j.to_string(),
-        }
-    }
-
     pub fn compare(&self, other: &Value) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering;
-        
+
         match (self, other) {
             (Value::Null, Value::Null) => Some(Ordering::Equal),
             (Value::Null, _) => Some(Ordering::Less),
             (_, Value::Null) => Some(Ordering::Greater),
-            
+
             (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b)),
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
             (Value::Double(a), Value::Double(b)) => a.partial_cmp(b),
@@ -242,7 +244,7 @@ impl Value {
             (Value::Date(a), Value::Date(b)) => Some(a.cmp(b)),
             (Value::Time(a), Value::Time(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
-            
+
             _ => None,
         }
     }

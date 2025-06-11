@@ -1,0 +1,251 @@
+database:
+  name: "blog_db"
+
+tables:
+  authors:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      username: "VARCHAR(50) NOT NULL UNIQUE"
+      email: "VARCHAR(100) NOT NULL UNIQUE"
+      display_name: "VARCHAR(100) NOT NULL"
+      bio: "TEXT"
+      avatar_url: "VARCHAR(255)"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      is_verified: "BOOLEAN DEFAULT false"
+    data:
+      - id: 1
+        username: "tech_writer"
+        email: "sarah@techblog.com"
+        display_name: "Sarah Johnson"
+        bio: "Full-stack developer and technical writer specializing in web technologies"
+        avatar_url: "https://example.com/avatars/sarah.jpg"
+        created_at: "2023-01-15 10:00:00"
+        is_verified: true
+      - id: 2
+        username: "code_guru"
+        email: "mike@devblog.com"
+        display_name: "Mike Chen"
+        bio: "Software architect with 15 years of experience in distributed systems"
+        avatar_url: "https://example.com/avatars/mike.jpg"
+        created_at: "2023-02-20 14:30:00"
+        is_verified: true
+      - id: 3
+        username: "data_scientist"
+        email: "emma@datablog.com"
+        display_name: "Emma Williams"
+        bio: "Data scientist passionate about machine learning and visualization"
+        created_at: "2023-03-10 09:15:00"
+        is_verified: false
+
+  posts:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      author_id: "INTEGER REFERENCES authors(id)"
+      title: "VARCHAR(200) NOT NULL"
+      slug: "VARCHAR(200) NOT NULL UNIQUE"
+      content: "TEXT NOT NULL"
+      excerpt: "VARCHAR(500)"
+      status: "VARCHAR(20) DEFAULT 'draft'"
+      published_at: "TIMESTAMP"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      view_count: "INTEGER DEFAULT 0"
+      featured: "BOOLEAN DEFAULT false"
+    data:
+      - id: 1
+        author_id: 1
+        title: "Getting Started with Rust Web Development"
+        slug: "getting-started-rust-web-development"
+        content: "Rust has become increasingly popular for web development..."
+        excerpt: "Learn how to build fast and reliable web applications with Rust"
+        status: "published"
+        published_at: "2024-01-20 10:00:00"
+        created_at: "2024-01-19 15:30:00"
+        updated_at: "2024-01-20 09:45:00"
+        view_count: 1542
+        featured: true
+      - id: 2
+        author_id: 2
+        title: "Microservices Architecture Best Practices"
+        slug: "microservices-architecture-best-practices"
+        content: "When building microservices, it's important to consider..."
+        excerpt: "Essential patterns and practices for successful microservices"
+        status: "published"
+        published_at: "2024-01-25 14:00:00"
+        created_at: "2024-01-24 11:20:00"
+        view_count: 892
+        featured: false
+      - id: 3
+        author_id: 3
+        title: "Introduction to Time Series Analysis"
+        slug: "introduction-time-series-analysis"
+        content: "Time series data is everywhere in modern applications..."
+        excerpt: "Master the fundamentals of analyzing time-based data"
+        status: "published"
+        published_at: "2024-02-01 09:00:00"
+        created_at: "2024-01-31 16:45:00"
+        view_count: 623
+        featured: true
+      - id: 4
+        author_id: 1
+        title: "Building a REST API with Async Rust"
+        slug: "building-rest-api-async-rust"
+        content: "In this tutorial, we'll explore how to build a REST API..."
+        excerpt: "Step-by-step guide to creating async REST APIs in Rust"
+        status: "draft"
+        created_at: "2024-02-05 13:00:00"
+        view_count: 0
+        featured: false
+
+  categories:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(50) NOT NULL UNIQUE"
+      slug: "VARCHAR(50) NOT NULL UNIQUE"
+      description: "TEXT"
+      parent_id: "INTEGER"
+    data:
+      - id: 1
+        name: "Programming"
+        slug: "programming"
+        description: "Articles about programming languages and techniques"
+      - id: 2
+        name: "Web Development"
+        slug: "web-development"
+        description: "Frontend and backend web development topics"
+        parent_id: 1
+      - id: 3
+        name: "Data Science"
+        slug: "data-science"
+        description: "Machine learning, statistics, and data analysis"
+      - id: 4
+        name: "Architecture"
+        slug: "architecture"
+        description: "Software architecture and system design"
+
+  post_categories:
+    columns:
+      post_id: "INTEGER REFERENCES posts(id)"
+      category_id: "INTEGER REFERENCES categories(id)"
+    data:
+      - post_id: 1
+        category_id: 1
+      - post_id: 1
+        category_id: 2
+      - post_id: 2
+        category_id: 4
+      - post_id: 3
+        category_id: 3
+      - post_id: 4
+        category_id: 1
+      - post_id: 4
+        category_id: 2
+
+  comments:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      post_id: "INTEGER REFERENCES posts(id)"
+      author_name: "VARCHAR(100) NOT NULL"
+      author_email: "VARCHAR(100) NOT NULL"
+      content: "TEXT NOT NULL"
+      status: "VARCHAR(20) DEFAULT 'pending'"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      parent_id: "INTEGER"
+    data:
+      - id: 1
+        post_id: 1
+        author_name: "Alex Developer"
+        author_email: "alex@example.com"
+        content: "Great article! This really helped me understand Rust web development."
+        status: "approved"
+        created_at: "2024-01-21 11:30:00"
+      - id: 2
+        post_id: 1
+        author_name: "Sam Coder"
+        author_email: "sam@example.com"
+        content: "I have a question about the async runtime choice..."
+        status: "approved"
+        created_at: "2024-01-21 14:15:00"
+      - id: 3
+        post_id: 1
+        author_name: "Sarah Johnson"
+        author_email: "sarah@techblog.com"
+        content: "Good question! I recommend Tokio for most web applications."
+        status: "approved"
+        created_at: "2024-01-21 15:00:00"
+        parent_id: 2
+      - id: 4
+        post_id: 2
+        author_name: "Chris Engineer"
+        author_email: "chris@example.com"
+        content: "The section on service discovery was particularly helpful."
+        status: "approved"
+        created_at: "2024-01-26 09:45:00"
+      - id: 5
+        post_id: 3
+        author_name: "Pat Analyst"
+        author_email: "pat@example.com"
+        content: "Could you recommend some Python libraries for time series?"
+        status: "approved"
+        created_at: "2024-02-02 10:20:00"
+
+  tags:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(30) NOT NULL UNIQUE"
+      slug: "VARCHAR(30) NOT NULL UNIQUE"
+    data:
+      - id: 1
+        name: "Rust"
+        slug: "rust"
+      - id: 2
+        name: "Web Development"
+        slug: "web-dev"
+      - id: 3
+        name: "Async"
+        slug: "async"
+      - id: 4
+        name: "Microservices"
+        slug: "microservices"
+      - id: 5
+        name: "Architecture"
+        slug: "architecture"
+      - id: 6
+        name: "Data Science"
+        slug: "data-science"
+      - id: 7
+        name: "Time Series"
+        slug: "time-series"
+      - id: 8
+        name: "Tutorial"
+        slug: "tutorial"
+
+  post_tags:
+    columns:
+      post_id: "INTEGER REFERENCES posts(id)"
+      tag_id: "INTEGER REFERENCES tags(id)"
+    data:
+      - post_id: 1
+        tag_id: 1
+      - post_id: 1
+        tag_id: 2
+      - post_id: 1
+        tag_id: 8
+      - post_id: 2
+        tag_id: 4
+      - post_id: 2
+        tag_id: 5
+      - post_id: 3
+        tag_id: 6
+      - post_id: 3
+        tag_id: 7
+      - post_id: 3
+        tag_id: 8
+      - post_id: 4
+        tag_id: 1
+      - post_id: 4
+        tag_id: 2
+      - post_id: 4
+        tag_id: 3
+      - post_id: 4
+        tag_id: 8

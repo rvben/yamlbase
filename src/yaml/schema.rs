@@ -41,7 +41,7 @@ impl YamlColumn {
     pub fn parse(name: String, type_def: &str) -> crate::Result<Self> {
         let type_def_upper = type_def.to_uppercase();
         let parts: Vec<&str> = type_def_upper.split_whitespace().collect();
-        
+
         let mut column = YamlColumn {
             name,
             type_def: type_def.to_string(),
@@ -102,7 +102,7 @@ impl YamlColumn {
     pub fn get_base_type(&self) -> crate::Result<SqlType> {
         let type_upper = self.type_def.to_uppercase();
         let base_type = type_upper.split_whitespace().next().unwrap_or("");
-        
+
         Ok(match base_type {
             "INTEGER" | "INT" | "BIGINT" | "SMALLINT" => SqlType::Integer,
             s if s.starts_with("VARCHAR") => {
@@ -122,9 +122,12 @@ impl YamlColumn {
             "DOUBLE" => SqlType::Double,
             "UUID" => SqlType::Uuid,
             "JSON" | "JSONB" => SqlType::Json,
-            _ => return Err(crate::YamlBaseError::TypeConversion(
-                format!("Unknown SQL type: {}", base_type)
-            )),
+            _ => {
+                return Err(crate::YamlBaseError::TypeConversion(format!(
+                    "Unknown SQL type: {}",
+                    base_type
+                )))
+            }
         })
     }
 }
@@ -145,6 +148,17 @@ pub enum SqlType {
     Json,
 }
 
+#[cfg(test)]
+pub(super) fn extract_size(type_str: &str) -> Option<usize> {
+    if let Some(start) = type_str.find('(') {
+        if let Some(end) = type_str.find(')') {
+            return type_str[start + 1..end].parse().ok();
+        }
+    }
+    None
+}
+
+#[cfg(not(test))]
 fn extract_size(type_str: &str) -> Option<usize> {
     if let Some(start) = type_str.find('(') {
         if let Some(end) = type_str.find(')') {
