@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2025-06-12
+
+### Added
+- Comprehensive test coverage for authentication features
+  - Integration tests for PostgreSQL YAML authentication
+  - Integration tests for MySQL YAML authentication
+  - Unit tests for YAML auth config parsing
+  - Unit tests for server auth override behavior
+  - Tests for PostgreSQL SSL negotiation handling
+  - Async safety tests to prevent blocking operations
+- Example YAML file demonstrating authentication configuration (`examples/database_with_auth.yaml`)
+- GitHub Actions CI workflow for automated testing
+- CONTRIBUTING.md guidelines for contributors
+
+### Improved
+- Test infrastructure with better organization and coverage
+- Documentation for authentication features in README
+
+### Developer Experience
+- Added test utilities for easier testing of new features
+- Improved error messages for authentication failures
+
 ## [0.0.3] - 2025-06-12
 
 ### Added
@@ -60,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.0.4]: https://github.com/rvben/yamlbase/releases/tag/v0.0.4
 [0.0.3]: https://github.com/rvben/yamlbase/releases/tag/v0.0.3
 [0.0.2]: https://github.com/rvben/yamlbase/releases/tag/v0.0.2
 [0.0.1]: https://github.com/rvben/yamlbase/releases/tag/v0.0.1

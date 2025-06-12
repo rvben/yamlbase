@@ -1,0 +1,39 @@
+database:
+  name: "secure_db"
+  auth:
+    username: "dbadmin"
+    password: "securepass123"
+
+tables:
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      username: "VARCHAR(50) NOT NULL UNIQUE"
+      email: "VARCHAR(100) NOT NULL"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    data:
+      - id: 1
+        username: "alice"
+        email: "alice@example.com"
+        created_at: "2024-01-15 10:30:00"
+      - id: 2
+        username: "bob"
+        email: "bob@example.com"
+        created_at: "2024-01-16 14:22:00"
+  
+  sensitive_data:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      user_id: "INTEGER REFERENCES users(id)"
+      data_type: "VARCHAR(50)"
+      encrypted_value: "TEXT"
+      created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    data:
+      - id: 1
+        user_id: 1
+        data_type: "api_key"
+        encrypted_value: "encrypted_key_here"
+      - id: 2
+        user_id: 2
+        data_type: "token"
+        encrypted_value: "encrypted_token_here"
