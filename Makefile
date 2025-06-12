@@ -1,4 +1,4 @@
-.PHONY: all build test bench clean run docker-build docker-run help
+.PHONY: all build test bench clean run docker-build docker-buildx docker-push docker-push-multiplatform docker-login docker-setup docker-run docker-stop help
 
 # Default target
 all: build
@@ -48,9 +48,39 @@ run:
 run-prod:
 	cargo run --release -- -f examples/sample_database.yaml
 
-# Build Docker image
+# Build Docker image (local, current platform only)
 docker-build:
 	docker build -t yamlbase:latest .
+
+# Build Docker image for multiple platforms (requires buildx)
+docker-buildx:
+	docker buildx build --platform linux/amd64,linux/arm64 -t yamlbase:latest .
+
+# Build and push to GitHub Container Registry
+docker-push: docker-login
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push VERSION=0.0.1"; exit 1; fi
+	docker buildx build --platform linux/amd64 \
+		-t ghcr.io/rvben/yamlbase:$(VERSION) \
+		-t ghcr.io/rvben/yamlbase:latest \
+		--push .
+
+# Build and push multi-platform to GitHub Container Registry
+docker-push-multiplatform: docker-login
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push-multiplatform VERSION=0.0.1"; exit 1; fi
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-t ghcr.io/rvben/yamlbase:$(VERSION) \
+		-t ghcr.io/rvben/yamlbase:latest \
+		--push .
+
+# Login to GitHub Container Registry
+docker-login:
+	@echo "Logging into GitHub Container Registry..."
+	@echo "$$GITHUB_TOKEN" | docker login ghcr.io -u rvben --password-stdin
+
+# Setup Docker buildx for multi-platform builds
+docker-setup:
+	docker buildx create --name yamlbase-builder --use || true
+	docker buildx inspect --bootstrap
 
 # Run with Docker
 docker-run:
@@ -120,7 +150,11 @@ help:
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make run            - Run the server locally with sample data"
 	@echo "  make run-prod       - Run in production mode (release build)"
-	@echo "  make docker-build   - Build Docker image"
+	@echo "  make docker-build   - Build Docker image (local, current platform)"
+	@echo "  make docker-buildx  - Build Docker image for multiple platforms"
+	@echo "  make docker-push VERSION=x.x.x - Build and push to ghcr.io (AMD64)"
+	@echo "  make docker-push-multiplatform VERSION=x.x.x - Push multi-arch to ghcr.io"
+	@echo "  make docker-setup   - Setup Docker buildx for multi-platform builds"
 	@echo "  make docker-run     - Run with Docker"
 	@echo "  make docker-stop    - Stop Docker container"
 	@echo "  make lint           - Run linting with clippy"

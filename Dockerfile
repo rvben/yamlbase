@@ -13,28 +13,22 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY benches ./benches
 
-# Set the target based on the build platform
+# Detect target platform and build accordingly
 ARG TARGETPLATFORM
 RUN case "$TARGETPLATFORM" in \
-        "linux/amd64") echo "x86_64-unknown-linux-musl" > /tmp/target.txt ;; \
-        "linux/arm64") echo "aarch64-unknown-linux-musl" > /tmp/target.txt ;; \
+        "linux/amd64") RUST_TARGET="x86_64-unknown-linux-musl" ;; \
+        "linux/arm64") RUST_TARGET="aarch64-unknown-linux-musl" ;; \
         *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
-    esac
-
-# Add the rust target
-RUN rustup target add $(cat /tmp/target.txt)
-
-# Build release binary
-RUN cargo build --release --target $(cat /tmp/target.txt)
-
-# Move the binary to a consistent location
-RUN cp /app/target/$(cat /tmp/target.txt)/release/yamlbase /app/yamlbase
+    esac && \
+    rustup target add $RUST_TARGET && \
+    cargo build --release --target $RUST_TARGET && \
+    cp target/$RUST_TARGET/release/yamlbase /yamlbase
 
 # Runtime stage
 FROM scratch
 
 # Copy the binary
-COPY --from=builder /app/yamlbase /yamlbase
+COPY --from=builder /yamlbase /yamlbase
 
 # Set the entrypoint
 ENTRYPOINT ["/yamlbase"]
