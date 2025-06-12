@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.2] - 2025-06-12
+
+### Fixed
+- Fixed panic when connections were made to the server due to `blocking_read()` in async context
+- Removed blocking calls in PostgreSQL and MySQL protocol handlers
+
+### Added
+- Docker build targets in Makefile for easier local builds and releases
+- Support for building and pushing Docker images to GitHub Container Registry
+
 ## [0.0.1] - 2025-06-11
 
 ### Added
@@ -36,4 +46,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.0.2]: https://github.com/rvben/yamlbase/releases/tag/v0.0.2
 [0.0.1]: https://github.com/rvben/yamlbase/releases/tag/v0.0.1
