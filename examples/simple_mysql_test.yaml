@@ -1,0 +1,11 @@
+database:
+  name: "test_db"
+
+tables:
+  test:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100)"
+    data:
+      - id: 1
+        name: "Test"

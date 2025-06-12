@@ -49,6 +49,11 @@ impl QueryExecutor {
     ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT query");
 
+        // Handle SELECT without FROM (e.g., SELECT 1, SELECT @@version)
+        if select.from.is_empty() {
+            return self.execute_select_without_from(select).await;
+        }
+
         // Get the table
         let table_name = self.extract_table_name(&select.from)?;
         let table = db
@@ -84,6 +89,122 @@ impl QueryExecutor {
             columns: columns.iter().map(|c| c.0.clone()).collect(),
             rows: final_rows,
         })
+    }
+
+    async fn execute_select_without_from(&self, select: &Select) -> crate::Result<QueryResult> {
+        let mut columns = Vec::new();
+        let mut row_values = Vec::new();
+        
+        for (idx, item) in select.projection.iter().enumerate() {
+            match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    let value = self.evaluate_constant_expr(expr)?;
+                    let col_name = format!("column_{}", idx + 1);
+                    columns.push(col_name);
+                    row_values.push(value);
+                }
+                SelectItem::ExprWithAlias { expr, alias } => {
+                    let value = self.evaluate_constant_expr(expr)?;
+                    columns.push(alias.value.clone());
+                    row_values.push(value);
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Complex projections in SELECT without FROM are not supported".to_string(),
+                    ))
+                }
+            }
+        }
+        
+        Ok(QueryResult {
+            columns,
+            rows: vec![row_values],
+        })
+    }
+    
+    fn evaluate_constant_expr(&self, expr: &Expr) -> crate::Result<Value> {
+        match expr {
+            Expr::Value(val) => self.sql_value_to_db_value(val),
+            Expr::UnaryOp { op, expr } => {
+                match op {
+                    UnaryOperator::Minus => {
+                        let val = self.evaluate_constant_expr(expr)?;
+                        match val {
+                            Value::Integer(i) => Ok(Value::Integer(-i)),
+                            Value::Double(d) => Ok(Value::Double(-d)),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Cannot negate non-numeric value".to_string(),
+                            }),
+                        }
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(
+                        "Unsupported unary operator".to_string(),
+                    )),
+                }
+            }
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_constant_expr(left)?;
+                let right_val = self.evaluate_constant_expr(right)?;
+                self.evaluate_binary_op_constant(&left_val, op, &right_val)
+            }
+            _ => Err(YamlBaseError::NotImplemented(
+                "Only constant expressions are supported in SELECT without FROM".to_string(),
+            )),
+        }
+    }
+    
+    fn evaluate_binary_op_constant(&self, left: &Value, op: &BinaryOperator, right: &Value) -> crate::Result<Value> {
+        match op {
+            BinaryOperator::Plus => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
+                (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a + b)),
+                (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 + b)),
+                (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a + *b as f64)),
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot add non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Minus => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
+                (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a - b)),
+                (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 - b)),
+                (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a - *b as f64)),
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot subtract non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Multiply => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
+                (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a * b)),
+                (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 * b)),
+                (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a * *b as f64)),
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot multiply non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Divide => match (left, right) {
+                (_, Value::Integer(0)) => {
+                    Err(YamlBaseError::Database {
+                        message: "Division by zero".to_string(),
+                    })
+                }
+                (_, Value::Double(d)) if *d == 0.0 => {
+                    Err(YamlBaseError::Database {
+                        message: "Division by zero".to_string(),
+                    })
+                }
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Double(*a as f64 / *b as f64)),
+                (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a / b)),
+                (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 / b)),
+                (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a / *b as f64)),
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot divide non-numeric values".to_string(),
+                }),
+            },
+            _ => Err(YamlBaseError::NotImplemented(
+                "Binary operator not supported in constant expressions".to_string(),
+            )),
+        }
     }
 
     fn extract_table_name(&self, from: &[TableWithJoins]) -> crate::Result<String> {
@@ -347,5 +468,191 @@ impl QueryExecutor {
                 "Only numeric LIMIT values are supported".to_string(),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::{Column, Database, Table, Value};
+    use sqlparser::ast::Statement;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    async fn create_test_database() -> Arc<RwLock<Database>> {
+        let mut db = Database::new("test_db".to_string());
+        
+        // Add a test table
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+        
+        let mut table = Table::new("users".to_string(), columns);
+        
+        table.insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Alice".to_string()),
+        ]).unwrap();
+        table.insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Bob".to_string()),
+        ]).unwrap();
+        
+        db.add_table(table).unwrap();
+        Arc::new(RwLock::new(db))
+    }
+
+    fn parse_statement(sql: &str) -> Statement {
+        crate::sql::parse_sql(sql).unwrap().into_iter().next().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_simple() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT 1");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns.len(), 1);
+        assert_eq!(result.columns[0], "column_1");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_multiple_values() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT 1, 2, 3");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns.len(), 3);
+        assert_eq!(result.columns[0], "column_1");
+        assert_eq!(result.columns[1], "column_2");
+        assert_eq!(result.columns[2], "column_3");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Integer(2));
+        assert_eq!(result.rows[0][2], Value::Integer(3));
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_with_alias() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT 1 AS num, 'hello' AS greeting");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.columns[0], "num");
+        assert_eq!(result.columns[1], "greeting");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Text("hello".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_arithmetic() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        // Test addition
+        let stmt = parse_statement("SELECT 1 + 1");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+        
+        // Test subtraction
+        let stmt = parse_statement("SELECT 5 - 3");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+        
+        // Test multiplication
+        let stmt = parse_statement("SELECT 3 * 4");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(12));
+        
+        // Test division
+        let stmt = parse_statement("SELECT 10 / 2");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(5.0));
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_mixed_types() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT 42, 'test', true, null");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns.len(), 4);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(42));
+        assert_eq!(result.rows[0][1], Value::Text("test".to_string()));
+        assert_eq!(result.rows[0][2], Value::Boolean(true));
+        assert_eq!(result.rows[0][3], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_negative_numbers() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT -5");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(-5));
+        
+        let stmt = parse_statement("SELECT -3.14");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(-3.14));
+    }
+
+    #[tokio::test]
+    async fn test_select_without_from_division_by_zero() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT 1 / 0");
+        let result = executor.execute(&stmt).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Division by zero"));
+    }
+
+    #[tokio::test]
+    async fn test_select_with_from_still_works() {
+        let db = create_test_database().await;
+        let executor = QueryExecutor::new(db);
+        
+        let stmt = parse_statement("SELECT * FROM users");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.columns[0], "id");
+        assert_eq!(result.columns[1], "name");
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Integer(2));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
     }
 }

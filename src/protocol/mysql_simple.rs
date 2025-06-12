@@ -98,6 +98,7 @@ impl MySqlProtocol {
 
         // Send OK packet
         self.send_ok(&mut stream, &mut state, 0, 0).await?;
+        info!("MySQL authentication successful, entering command loop");
 
         // Main command loop
         loop {
@@ -269,7 +270,6 @@ impl MySqlProtocol {
         state: &mut ConnectionState,
         query: &str,
     ) -> crate::Result<()> {
-        debug!("Executing query: {}", query);
 
         // Handle special MySQL queries
         if query.trim().to_uppercase().starts_with("SELECT @@") {
