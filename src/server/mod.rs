@@ -13,11 +13,20 @@ pub struct Server {
 }
 
 impl Server {
-    pub async fn new(config: Config) -> crate::Result<Self> {
-        let config = Arc::new(config);
-
+    pub async fn new(mut config: Config) -> crate::Result<Self> {
         // Parse initial database
-        let database = parse_yaml_database(&config.file).await?;
+        let (database, auth_config) = parse_yaml_database(&config.file).await?;
+        
+        // If auth is specified in YAML, override command line args
+        if let Some(auth) = auth_config {
+            info!("Using authentication from YAML file: username={}", auth.username);
+            config.username = auth.username;
+            config.password = auth.password;
+        } else {
+            info!("Using default authentication: username={}", config.username);
+        }
+        
+        let config = Arc::new(config);
         let storage = Storage::new(database);
 
         Ok(Self { config, storage })
@@ -68,7 +77,9 @@ impl Server {
             while let Some(()) = rx.recv().await {
                 info!("Reloading database from file");
                 match parse_yaml_database(&config.file).await {
-                    Ok(new_db) => {
+                    Ok((new_db, _auth)) => {
+                        // Note: We don't update auth on hot reload for security reasons
+                        // Auth changes require a server restart
                         let db_arc = storage.database();
                         let mut db = db_arc.write().await;
                         *db = new_db;

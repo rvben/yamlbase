@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2025-06-12
+
+### Added
+- YAML-based authentication configuration allowing per-database credentials
+- Support for specifying username and password directly in YAML files
+- Authentication settings in YAML override command-line arguments
+
+### Fixed
+- Fixed PostgreSQL authentication to use clear text password instead of MD5
+- Fixed username parsing issue after SSL negotiation in PostgreSQL protocol
+
+### Changed
+- Authentication changes require server restart (not hot-reloadable for security)
+
 ## [0.0.2] - 2025-06-12
 
 ### Fixed
@@ -46,5 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.0.3]: https://github.com/rvben/yamlbase/releases/tag/v0.0.3
 [0.0.2]: https://github.com/rvben/yamlbase/releases/tag/v0.0.2
 [0.0.1]: https://github.com/rvben/yamlbase/releases/tag/v0.0.1

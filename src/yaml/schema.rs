@@ -11,6 +11,14 @@ pub struct YamlDatabase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseInfo {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

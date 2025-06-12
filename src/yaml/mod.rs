@@ -6,5 +6,5 @@ pub mod watcher;
 mod tests;
 
 pub use parser::parse_yaml_database;
-pub use schema::{YamlColumn, YamlDatabase, YamlTable};
+pub use schema::{AuthConfig, YamlColumn, YamlDatabase, YamlTable};
 pub use watcher::FileWatcher;

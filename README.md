@@ -122,6 +122,27 @@ Options:
 
 ## YAML Database Format
 
+### Authentication
+
+You can specify authentication credentials directly in the YAML file:
+
+```yaml
+database:
+  name: "my_db"
+  auth:
+    username: "dbuser"
+    password: "dbpassword"
+
+tables:
+  # ... your tables
+```
+
+When auth is specified in the YAML file, it overrides command-line arguments. This is useful for:
+- Different credentials per database file
+- Keeping credentials with the test data
+- Simplifying connection strings
+
+
 ### Supported Data Types
 
 - `INTEGER` / `INT` / `BIGINT` / `SMALLINT`

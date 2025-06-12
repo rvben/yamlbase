@@ -106,7 +106,7 @@ impl PostgresProtocol {
             ));
         }
 
-        let length = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+        let mut length = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
         let version = u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
 
         // Check for SSL request
@@ -117,7 +117,7 @@ impl PostgresProtocol {
             stream.read_buf(buffer).await?;
 
             // Re-read the actual startup message
-            let _length = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+            length = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
         }
 
         // Parse startup parameters
@@ -161,6 +161,12 @@ impl PostgresProtocol {
             let password = self.parse_password_message(&buffer[5..])?;
 
             // Verify credentials
+            debug!(
+                "Auth check - Expected: {}:{}, Got: {:?}:{}",
+                self.config.username, self.config.password,
+                state.username, password
+            );
+            
             if state.username.as_deref() == Some(&self.config.username)
                 && password == self.config.password
             {
@@ -181,12 +187,11 @@ impl PostgresProtocol {
     }
 
     async fn send_auth_request(&self, stream: &mut TcpStream) -> crate::Result<()> {
-        // Request MD5 password authentication
+        // Request clear text password authentication
         let mut buf = BytesMut::new();
         buf.put_u8(b'R');
-        buf.put_u32(12); // Length
-        buf.put_u32(5); // MD5 password
-        buf.put_slice(&[0; 4]); // Salt (we're not using it for simplicity)
+        buf.put_u32(8); // Length
+        buf.put_u32(3); // Clear text password
 
         stream.write_all(&buf).await?;
         Ok(())

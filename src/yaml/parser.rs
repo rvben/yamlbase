@@ -3,14 +3,15 @@ use std::path::Path;
 use tracing::{debug, info};
 
 use crate::database::{Column, Database, Table, Value as DbValue};
-use crate::yaml::schema::{SqlType, YamlColumn, YamlDatabase};
+use crate::yaml::schema::{AuthConfig, SqlType, YamlColumn, YamlDatabase};
 
-pub async fn parse_yaml_database(path: &Path) -> crate::Result<Database> {
+pub async fn parse_yaml_database(path: &Path) -> crate::Result<(Database, Option<AuthConfig>)> {
     info!("Parsing YAML database from: {}", path.display());
 
     let content = tokio::fs::read_to_string(path).await?;
     let yaml_db: YamlDatabase = serde_yaml::from_str(&content)?;
 
+    let auth_config = yaml_db.database.auth.clone();
     let mut database = Database::new(yaml_db.database.name.clone());
 
     for (table_name, yaml_table) in yaml_db.tables {
@@ -71,7 +72,7 @@ pub async fn parse_yaml_database(path: &Path) -> crate::Result<Database> {
         "Successfully parsed database with {} tables",
         database.tables.len()
     );
-    Ok(database)
+    Ok((database, auth_config))
 }
 
 fn parse_value(yaml_value: &serde_yaml::Value, sql_type: &SqlType) -> crate::Result<DbValue> {
