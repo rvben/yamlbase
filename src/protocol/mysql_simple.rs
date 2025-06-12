@@ -61,15 +61,10 @@ impl Default for ConnectionState {
 
 impl MySqlProtocol {
     pub fn new(config: Arc<Config>, database: Arc<tokio::sync::RwLock<Database>>) -> Self {
-        let database_name = {
-            let db = database.blocking_read();
-            db.name.clone()
-        };
-
         Self {
             config,
             executor: QueryExecutor::new(database),
-            _database_name: database_name,
+            _database_name: String::new(), // Will be set later if needed
         }
     }
 
