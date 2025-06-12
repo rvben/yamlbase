@@ -234,3 +234,87 @@ tables:
     assert_eq!(result[1].0, 2);
     assert_eq!(result[2].0, 3);
 }
+
+#[test]
+fn test_mysql_yaml_authentication() {
+    let yaml = r#"
+database:
+  name: "auth_test_db"
+  auth:
+    username: "dbuser"
+    password: "dbpass123"
+
+tables:
+  test_table:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100)"
+    data:
+      - id: 1
+        name: "MySQL Auth Test"
+"#;
+
+    let server = TestServer::start_mysql(yaml);
+    
+    // Test successful authentication with YAML credentials
+    let opts = OptsBuilder::new()
+        .ip_or_hostname(Some("127.0.0.1"))
+        .tcp_port(server.port)
+        .user(Some("dbuser"))
+        .pass(Some("dbpass123"))
+        .db_name(Some("auth_test_db"))
+        .prefer_socket(false);
+    
+    let pool = mysql::Pool::new(Opts::from(opts)).expect("Should connect with YAML credentials");
+    let mut conn = pool.get_conn().unwrap();
+    
+    let result: Vec<(i32, String)> = conn
+        .query("SELECT * FROM test_table")
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0], (1, "MySQL Auth Test".to_string()));
+}
+
+#[test]
+fn test_mysql_yaml_authentication_failure() {
+    let yaml = r#"
+database:
+  name: "auth_test_db"
+  auth:
+    username: "mysqluser"
+    password: "mysqlpass"
+
+tables:
+  test_table:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+"#;
+
+    let server = TestServer::start_mysql(yaml);
+    
+    // Test failed authentication with wrong password
+    let opts = OptsBuilder::new()
+        .ip_or_hostname(Some("127.0.0.1"))
+        .tcp_port(server.port)
+        .user(Some("mysqluser"))
+        .pass(Some("wrongpass"))
+        .db_name(Some("auth_test_db"))
+        .prefer_socket(false);
+    
+    let pool_result = mysql::Pool::new(Opts::from(opts));
+    assert!(pool_result.is_err() || pool_result.unwrap().get_conn().is_err(), 
+            "Should fail with wrong password");
+    
+    // Test failed authentication with wrong username
+    let opts = OptsBuilder::new()
+        .ip_or_hostname(Some("127.0.0.1"))
+        .tcp_port(server.port)
+        .user(Some("wronguser"))
+        .pass(Some("mysqlpass"))
+        .db_name(Some("auth_test_db"))
+        .prefer_socket(false);
+    
+    let pool_result = mysql::Pool::new(Opts::from(opts));
+    assert!(pool_result.is_err() || pool_result.unwrap().get_conn().is_err(), 
+            "Should fail with wrong username");
+}

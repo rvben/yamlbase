@@ -7,6 +7,9 @@ use crate::database::Storage;
 use crate::protocol::Connection;
 use crate::yaml::{parse_yaml_database, FileWatcher};
 
+#[cfg(test)]
+mod tests;
+
 pub struct Server {
     config: Arc<Config>,
     storage: Storage,

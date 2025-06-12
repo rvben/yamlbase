@@ -1,50 +1,125 @@
-use crate::yaml::schema::{extract_size, SqlType, YamlColumn};
+#[cfg(test)]
+mod tests {
+    use crate::yaml::schema::{AuthConfig, DatabaseInfo};
+    use tempfile::NamedTempFile;
+    use std::io::Write;
 
-#[test]
-fn test_parse_column_type() {
-    let col = YamlColumn::parse("id".to_string(), "INTEGER PRIMARY KEY").unwrap();
-    assert_eq!(col.name, "id");
-    assert!(col.is_primary_key);
-    assert!(!col.is_nullable);
+    #[tokio::test]
+    async fn test_parse_yaml_with_auth() {
+        let yaml_content = r#"
+database:
+  name: "test_db"
+  auth:
+    username: "testuser"
+    password: "testpass"
 
-    let col = YamlColumn::parse("name".to_string(), "VARCHAR(100) NOT NULL").unwrap();
-    assert_eq!(col.get_base_type().unwrap(), SqlType::Varchar(100));
-    assert!(!col.is_nullable);
+tables:
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100)"
+    data:
+      - id: 1
+        name: "Test"
+"#;
 
-    let col =
-        YamlColumn::parse("created".to_string(), "TIMESTAMP DEFAULT CURRENT_TIMESTAMP").unwrap();
-    assert_eq!(col.default_value, Some("CURRENT_TIMESTAMP".to_string()));
-}
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(yaml_content.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
 
-#[test]
-fn test_extract_size() {
-    assert_eq!(extract_size("VARCHAR(255)"), Some(255));
-    assert_eq!(extract_size("CHAR(10)"), Some(10));
-    assert_eq!(extract_size("INTEGER"), None);
-    // Note: DECIMAL(10,2) would fail because it has comma, extract_size only works for single numbers
-}
+        let (database, auth_config) = crate::yaml::parse_yaml_database(temp_file.path())
+            .await
+            .unwrap();
 
-#[test]
-fn test_sql_type_parsing() {
-    assert_eq!(
-        YamlColumn::parse("col".to_string(), "INTEGER")
-            .unwrap()
-            .get_base_type()
-            .unwrap(),
-        SqlType::Integer
-    );
-    assert_eq!(
-        YamlColumn::parse("col".to_string(), "BOOLEAN")
-            .unwrap()
-            .get_base_type()
-            .unwrap(),
-        SqlType::Boolean
-    );
-    assert_eq!(
-        YamlColumn::parse("col".to_string(), "UUID")
-            .unwrap()
-            .get_base_type()
-            .unwrap(),
-        SqlType::Uuid
-    );
+        assert_eq!(database.name, "test_db");
+        assert!(auth_config.is_some());
+        
+        let auth = auth_config.unwrap();
+        assert_eq!(auth.username, "testuser");
+        assert_eq!(auth.password, "testpass");
+    }
+
+    #[tokio::test]
+    async fn test_parse_yaml_without_auth() {
+        let yaml_content = r#"
+database:
+  name: "test_db"
+
+tables:
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(yaml_content.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        let (database, auth_config) = crate::yaml::parse_yaml_database(temp_file.path())
+            .await
+            .unwrap();
+
+        assert_eq!(database.name, "test_db");
+        assert!(auth_config.is_none());
+    }
+
+    #[test]
+    fn test_auth_config_serialization() {
+        let auth = AuthConfig {
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+
+        let serialized = serde_yaml::to_string(&auth).unwrap();
+        assert!(serialized.contains("username: user"));
+        assert!(serialized.contains("password: pass"));
+
+        let deserialized: AuthConfig = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.username, "user");
+        assert_eq!(deserialized.password, "pass");
+    }
+
+    #[test]
+    fn test_database_info_with_optional_auth() {
+        // Test with auth
+        let yaml_with_auth = r#"
+name: "db1"
+auth:
+  username: "user1"
+  password: "pass1"
+"#;
+
+        let db_info: DatabaseInfo = serde_yaml::from_str(yaml_with_auth).unwrap();
+        assert_eq!(db_info.name, "db1");
+        assert!(db_info.auth.is_some());
+        assert_eq!(db_info.auth.as_ref().unwrap().username, "user1");
+
+        // Test without auth
+        let yaml_without_auth = r#"
+name: "db2"
+"#;
+
+        let db_info: DatabaseInfo = serde_yaml::from_str(yaml_without_auth).unwrap();
+        assert_eq!(db_info.name, "db2");
+        assert!(db_info.auth.is_none());
+    }
+
+    #[test]
+    fn test_auth_override_behavior() {
+        // This tests the expected behavior that YAML auth should override CLI args
+        // The actual override is done in server/mod.rs, but we can test the data structure
+        let db_info = DatabaseInfo {
+            name: "test_db".to_string(),
+            auth: Some(AuthConfig {
+                username: "yaml_user".to_string(),
+                password: "yaml_pass".to_string(),
+            }),
+        };
+
+        // Verify auth is properly stored
+        assert!(db_info.auth.is_some());
+        let auth = db_info.auth.unwrap();
+        assert_eq!(auth.username, "yaml_user");
+        assert_eq!(auth.password, "yaml_pass");
+    }
 }

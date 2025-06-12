@@ -174,3 +174,105 @@ tables:
     // Second row should have value
     assert_eq!(rows[1].get::<_, Option<String>>(1), Some("optional".to_string()));
 }
+
+#[test]
+fn test_yaml_authentication() {
+    let yaml = r#"
+database:
+  name: "auth_test_db"
+  auth:
+    username: "testuser"
+    password: "testpass123"
+
+tables:
+  test_table:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100)"
+    data:
+      - id: 1
+        name: "Test"
+"#;
+
+    let server = TestServer::start(yaml);
+    
+    // Test successful authentication with YAML credentials
+    let conn_str = format!(
+        "host=localhost port={} user=testuser password=testpass123 dbname=auth_test_db",
+        server.port
+    );
+    
+    let client_result = Client::connect(&conn_str, NoTls);
+    assert!(client_result.is_ok(), "Should connect with YAML credentials");
+    
+    let mut client = client_result.unwrap();
+    let rows = client.query("SELECT * FROM test_table", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, String>(1), "Test");
+}
+
+#[test]
+fn test_yaml_authentication_failure() {
+    let yaml = r#"
+database:
+  name: "auth_test_db"
+  auth:
+    username: "secureuser"
+    password: "securepass"
+
+tables:
+  test_table:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+"#;
+
+    let server = TestServer::start(yaml);
+    
+    // Test failed authentication with wrong password
+    let conn_str = format!(
+        "host=localhost port={} user=secureuser password=wrongpass dbname=auth_test_db",
+        server.port
+    );
+    
+    let client_result = Client::connect(&conn_str, NoTls);
+    assert!(client_result.is_err(), "Should fail with wrong password");
+    
+    // Test failed authentication with wrong username
+    let conn_str = format!(
+        "host=localhost port={} user=wronguser password=securepass dbname=auth_test_db",
+        server.port
+    );
+    
+    let client_result = Client::connect(&conn_str, NoTls);
+    assert!(client_result.is_err(), "Should fail with wrong username");
+}
+
+#[test]
+fn test_postgresql_ssl_negotiation() {
+    // This test verifies that SSL negotiation is handled correctly
+    // even though we don't support SSL
+    let yaml = r#"
+database:
+  name: "test_db"
+
+tables:
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100)"
+    data:
+      - id: 1
+        name: "Test User"
+"#;
+
+    let server = TestServer::start(yaml);
+    
+    // PostgreSQL clients typically try SSL first, then fall back
+    // Our server should handle this gracefully
+    let mut client = server.connect();
+    
+    // If we get here, SSL negotiation was handled correctly
+    let rows = client.query("SELECT * FROM users", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, String>(1), "Test User");
+}
