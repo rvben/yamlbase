@@ -163,10 +163,9 @@ impl PostgresProtocol {
             // Verify credentials
             debug!(
                 "Auth check - Expected: {}:{}, Got: {:?}:{}",
-                self.config.username, self.config.password,
-                state.username, password
+                self.config.username, self.config.password, state.username, password
             );
-            
+
             if state.username.as_deref() == Some(&self.config.username)
                 && password == self.config.password
             {

@@ -39,7 +39,7 @@ impl Storage {
                 let table_index = self
                     .primary_key_index
                     .entry(table_name.clone())
-                    .or_insert_with(DashMap::new);
+                    .or_default();
 
                 table_index.clear();
 

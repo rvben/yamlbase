@@ -69,7 +69,7 @@ pub enum Protocol {
 
 impl Config {
     pub fn effective_port(&self) -> u16 {
-        self.port.unwrap_or_else(|| match self.protocol {
+        self.port.unwrap_or(match self.protocol {
             Protocol::Postgres => 5432,
             Protocol::Mysql => 3306,
             Protocol::Sqlserver => 1433,

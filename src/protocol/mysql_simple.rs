@@ -567,13 +567,13 @@ fn compute_auth_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
 
     // SHA1(SHA1(password))
     let mut hasher = Sha1::new();
-    hasher.update(&stage1);
+    hasher.update(stage1);
     let stage2 = hasher.finalize();
 
     // SHA1(auth_data + SHA1(SHA1(password)))
     let mut hasher = Sha1::new();
     hasher.update(auth_data);
-    hasher.update(&stage2);
+    hasher.update(stage2);
     let result = hasher.finalize();
 
     // XOR with SHA1(password)

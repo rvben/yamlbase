@@ -209,21 +209,21 @@ impl Table {
 
 impl Value {
     pub fn is_compatible_with(&self, sql_type: &SqlType) -> bool {
-        match (self, sql_type) {
-            (Value::Null, _) => true,
-            (Value::Integer(_), SqlType::Integer) => true,
-            (Value::Float(_), SqlType::Float) => true,
-            (Value::Double(_), SqlType::Double) => true,
-            (Value::Decimal(_), SqlType::Decimal(_, _)) => true,
-            (Value::Text(_), SqlType::Varchar(_) | SqlType::Text) => true,
-            (Value::Boolean(_), SqlType::Boolean) => true,
-            (Value::Timestamp(_), SqlType::Timestamp) => true,
-            (Value::Date(_), SqlType::Date) => true,
-            (Value::Time(_), SqlType::Time) => true,
-            (Value::Uuid(_), SqlType::Uuid) => true,
-            (Value::Json(_), SqlType::Json) => true,
-            _ => false,
-        }
+        matches!(
+            (self, sql_type),
+            (Value::Null, _)
+                | (Value::Integer(_), SqlType::Integer)
+                | (Value::Float(_), SqlType::Float)
+                | (Value::Double(_), SqlType::Double)
+                | (Value::Decimal(_), SqlType::Decimal(_, _))
+                | (Value::Text(_), SqlType::Varchar(_) | SqlType::Text)
+                | (Value::Boolean(_), SqlType::Boolean)
+                | (Value::Timestamp(_), SqlType::Timestamp)
+                | (Value::Date(_), SqlType::Date)
+                | (Value::Time(_), SqlType::Time)
+                | (Value::Uuid(_), SqlType::Uuid)
+                | (Value::Json(_), SqlType::Json)
+        )
     }
 
     pub fn compare(&self, other: &Value) -> Option<std::cmp::Ordering> {

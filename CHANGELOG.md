@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2025-06-13
+
+### Fixed
+- Fixed MySQL protocol to support `SET NAMES` command sent by mysql-connector-python and other MySQL clients during connection initialization
+- Server now properly handles various SET commands (SET NAMES, SET CHARACTER SET, SET SESSION variables) by acknowledging them with OK response
+
+### Added
+- Comprehensive test coverage for MySQL protocol edge cases:
+  - SET NAMES command variations and character sets
+  - SET SESSION variables commonly used by MySQL clients
+  - MySQL protocol command handling (COM_INIT_DB, COM_PING, unknown commands)
+  - Query edge cases (comments, special characters, case sensitivity)
+  - MySQL system variables (@@version, @@sql_mode, etc.)
+
+### Improved
+- MySQL protocol compatibility with standard MySQL client libraries
+- Error handling for unsupported MySQL protocol commands
+
 ## [0.0.4] - 2025-06-12
 
 ### Added
@@ -82,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.0.5]: https://github.com/rvben/yamlbase/releases/tag/v0.0.5
 [0.0.4]: https://github.com/rvben/yamlbase/releases/tag/v0.0.4
 [0.0.3]: https://github.com/rvben/yamlbase/releases/tag/v0.0.3
 [0.0.2]: https://github.com/rvben/yamlbase/releases/tag/v0.0.2

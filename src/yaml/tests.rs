@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::yaml::schema::{AuthConfig, DatabaseInfo};
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_parse_yaml_with_auth() {
@@ -33,7 +33,7 @@ tables:
 
         assert_eq!(database.name, "test_db");
         assert!(auth_config.is_some());
-        
+
         let auth = auth_config.unwrap();
         assert_eq!(auth.username, "testuser");
         assert_eq!(auth.password, "testpass");

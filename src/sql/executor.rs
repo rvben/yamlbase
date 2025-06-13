@@ -30,7 +30,7 @@ impl QueryExecutor {
         }
     }
 
-    async fn execute_query(&self, query: &Box<Query>) -> crate::Result<QueryResult> {
+    async fn execute_query(&self, query: &Query) -> crate::Result<QueryResult> {
         let db = self.database.read().await;
 
         match &query.body.as_ref() {
@@ -94,7 +94,7 @@ impl QueryExecutor {
     async fn execute_select_without_from(&self, select: &Select) -> crate::Result<QueryResult> {
         let mut columns = Vec::new();
         let mut row_values = Vec::new();
-        
+
         for (idx, item) in select.projection.iter().enumerate() {
             match item {
                 SelectItem::UnnamedExpr(expr) => {
@@ -115,33 +115,31 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         Ok(QueryResult {
             columns,
             rows: vec![row_values],
         })
     }
-    
+
     fn evaluate_constant_expr(&self, expr: &Expr) -> crate::Result<Value> {
         match expr {
             Expr::Value(val) => self.sql_value_to_db_value(val),
-            Expr::UnaryOp { op, expr } => {
-                match op {
-                    UnaryOperator::Minus => {
-                        let val = self.evaluate_constant_expr(expr)?;
-                        match val {
-                            Value::Integer(i) => Ok(Value::Integer(-i)),
-                            Value::Double(d) => Ok(Value::Double(-d)),
-                            _ => Err(YamlBaseError::Database {
-                                message: "Cannot negate non-numeric value".to_string(),
-                            }),
-                        }
+            Expr::UnaryOp { op, expr } => match op {
+                UnaryOperator::Minus => {
+                    let val = self.evaluate_constant_expr(expr)?;
+                    match val {
+                        Value::Integer(i) => Ok(Value::Integer(-i)),
+                        Value::Double(d) => Ok(Value::Double(-d)),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot negate non-numeric value".to_string(),
+                        }),
                     }
-                    _ => Err(YamlBaseError::NotImplemented(
-                        "Unsupported unary operator".to_string(),
-                    )),
                 }
-            }
+                _ => Err(YamlBaseError::NotImplemented(
+                    "Unsupported unary operator".to_string(),
+                )),
+            },
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_constant_expr(left)?;
                 let right_val = self.evaluate_constant_expr(right)?;
@@ -152,8 +150,13 @@ impl QueryExecutor {
             )),
         }
     }
-    
-    fn evaluate_binary_op_constant(&self, left: &Value, op: &BinaryOperator, right: &Value) -> crate::Result<Value> {
+
+    fn evaluate_binary_op_constant(
+        &self,
+        left: &Value,
+        op: &BinaryOperator,
+        right: &Value,
+    ) -> crate::Result<Value> {
         match op {
             BinaryOperator::Plus => match (left, right) {
                 (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
@@ -183,16 +186,12 @@ impl QueryExecutor {
                 }),
             },
             BinaryOperator::Divide => match (left, right) {
-                (_, Value::Integer(0)) => {
-                    Err(YamlBaseError::Database {
-                        message: "Division by zero".to_string(),
-                    })
-                }
-                (_, Value::Double(d)) if *d == 0.0 => {
-                    Err(YamlBaseError::Database {
-                        message: "Division by zero".to_string(),
-                    })
-                }
+                (_, Value::Integer(0)) => Err(YamlBaseError::Database {
+                    message: "Division by zero".to_string(),
+                }),
+                (_, Value::Double(d)) if *d == 0.0 => Err(YamlBaseError::Database {
+                    message: "Division by zero".to_string(),
+                }),
                 (Value::Integer(a), Value::Integer(b)) => Ok(Value::Double(*a as f64 / *b as f64)),
                 (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a / b)),
                 (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 / b)),
@@ -481,7 +480,7 @@ mod tests {
 
     async fn create_test_database() -> Arc<RwLock<Database>> {
         let mut db = Database::new("test_db".to_string());
-        
+
         // Add a test table
         let columns = vec![
             Column {
@@ -503,34 +502,36 @@ mod tests {
                 references: None,
             },
         ];
-        
+
         let mut table = Table::new("users".to_string(), columns);
-        
-        table.insert_row(vec![
-            Value::Integer(1),
-            Value::Text("Alice".to_string()),
-        ]).unwrap();
-        table.insert_row(vec![
-            Value::Integer(2),
-            Value::Text("Bob".to_string()),
-        ]).unwrap();
-        
+
+        table
+            .insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+            .unwrap();
+        table
+            .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+            .unwrap();
+
         db.add_table(table).unwrap();
         Arc::new(RwLock::new(db))
     }
 
     fn parse_statement(sql: &str) -> Statement {
-        crate::sql::parse_sql(sql).unwrap().into_iter().next().unwrap()
+        crate::sql::parse_sql(sql)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
     }
 
     #[tokio::test]
     async fn test_select_without_from_simple() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT 1");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.columns[0], "column_1");
         assert_eq!(result.rows.len(), 1);
@@ -541,10 +542,10 @@ mod tests {
     async fn test_select_without_from_multiple_values() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT 1, 2, 3");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 3);
         assert_eq!(result.columns[0], "column_1");
         assert_eq!(result.columns[1], "column_2");
@@ -559,10 +560,10 @@ mod tests {
     async fn test_select_without_from_with_alias() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT 1 AS num, 'hello' AS greeting");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.columns[0], "num");
         assert_eq!(result.columns[1], "greeting");
@@ -575,22 +576,22 @@ mod tests {
     async fn test_select_without_from_arithmetic() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         // Test addition
         let stmt = parse_statement("SELECT 1 + 1");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(2));
-        
+
         // Test subtraction
         let stmt = parse_statement("SELECT 5 - 3");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(2));
-        
+
         // Test multiplication
         let stmt = parse_statement("SELECT 3 * 4");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(12));
-        
+
         // Test division
         let stmt = parse_statement("SELECT 10 / 2");
         let result = executor.execute(&stmt).await.unwrap();
@@ -601,10 +602,10 @@ mod tests {
     async fn test_select_without_from_mixed_types() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT 42, 'test', true, null");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 4);
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(42));
@@ -617,11 +618,11 @@ mod tests {
     async fn test_select_without_from_negative_numbers() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT -5");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(-5));
-        
+
         let stmt = parse_statement("SELECT -3.14");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Double(-3.14));
@@ -631,7 +632,7 @@ mod tests {
     async fn test_select_without_from_division_by_zero() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT 1 / 0");
         let result = executor.execute(&stmt).await;
         assert!(result.is_err());
@@ -642,10 +643,10 @@ mod tests {
     async fn test_select_with_from_still_works() {
         let db = create_test_database().await;
         let executor = QueryExecutor::new(db);
-        
+
         let stmt = parse_statement("SELECT * FROM users");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.columns[0], "id");
         assert_eq!(result.columns[1], "name");

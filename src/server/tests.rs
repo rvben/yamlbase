@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::server::Server;
     use crate::config::{Config, Protocol};
-    use tempfile::NamedTempFile;
+    use crate::server::Server;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_server_uses_yaml_auth() {
@@ -29,8 +29,8 @@ tables:
             port: None,
             bind_address: "127.0.0.1".to_string(),
             protocol: Protocol::Postgres,
-            username: "cli_user".to_string(),  // These should be overridden
-            password: "cli_pass".to_string(),  // by YAML auth
+            username: "cli_user".to_string(), // These should be overridden
+            password: "cli_pass".to_string(), // by YAML auth
             hot_reload: false,
             verbose: false,
             log_level: "error".to_string(),
@@ -38,7 +38,7 @@ tables:
         };
 
         let server = Server::new(config).await.unwrap();
-        
+
         // Verify that the server's config has been updated with YAML auth
         assert_eq!(server.config.username, "yaml_user");
         assert_eq!(server.config.password, "yaml_pass");
@@ -74,7 +74,7 @@ tables:
         };
 
         let server = Server::new(config).await.unwrap();
-        
+
         // Verify that the server's config keeps CLI auth when YAML has none
         assert_eq!(server.config.username, "cli_user");
         assert_eq!(server.config.password, "cli_pass");

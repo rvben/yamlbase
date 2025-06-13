@@ -12,7 +12,7 @@ pub fn parse_sql(sql: &str) -> crate::Result<Vec<Statement>> {
     Ok(statements)
 }
 
-pub fn is_select_query(statement: &Statement) -> Option<&Box<Query>> {
+pub fn is_select_query(statement: &Statement) -> Option<&Query> {
     match statement {
         Statement::Query(query) => Some(query),
         _ => None,

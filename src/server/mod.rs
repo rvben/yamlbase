@@ -19,16 +19,19 @@ impl Server {
     pub async fn new(mut config: Config) -> crate::Result<Self> {
         // Parse initial database
         let (database, auth_config) = parse_yaml_database(&config.file).await?;
-        
+
         // If auth is specified in YAML, override command line args
         if let Some(auth) = auth_config {
-            info!("Using authentication from YAML file: username={}", auth.username);
+            info!(
+                "Using authentication from YAML file: username={}",
+                auth.username
+            );
             config.username = auth.username;
             config.password = auth.password;
         } else {
             info!("Using default authentication: username={}", config.username);
         }
-        
+
         let config = Arc::new(config);
         let storage = Storage::new(database);
 
@@ -69,9 +72,9 @@ impl Server {
 
     fn setup_hot_reload(&self) -> crate::Result<()> {
         let (watcher, mut rx) = FileWatcher::new(self.config.file.clone());
-        watcher.start().map_err(|e| {
-            crate::YamlBaseError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-        })?;
+        watcher
+            .start()
+            .map_err(|e| crate::YamlBaseError::Io(std::io::Error::other(e)))?;
 
         let storage = self.storage.clone();
         let config = self.config.clone();
