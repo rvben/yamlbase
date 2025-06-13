@@ -270,10 +270,23 @@ impl MySqlProtocol {
         state: &mut ConnectionState,
         query: &str,
     ) -> crate::Result<()> {
+        let query_upper = query.trim().to_uppercase();
 
         // Handle special MySQL queries
-        if query.trim().to_uppercase().starts_with("SELECT @@") {
+        if query_upper.starts_with("SELECT @@") {
             return self.handle_system_var_query(stream, state, query).await;
+        }
+
+        // Handle SET NAMES command (ignore it - we always use UTF-8)
+        if query_upper.starts_with("SET NAMES") || query_upper.starts_with("SET CHARACTER SET") {
+            debug!("Ignoring SET NAMES/CHARACTER SET command: {}", query);
+            return self.send_ok(stream, state, 0, 0).await;
+        }
+
+        // Handle other SET commands that MySQL clients might send
+        if query_upper.starts_with("SET ") {
+            debug!("Ignoring SET command: {}", query);
+            return self.send_ok(stream, state, 0, 0).await;
         }
 
         // Parse SQL

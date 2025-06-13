@@ -41,6 +41,39 @@ fn test_mysql_various_queries() {
 }
 
 #[test]
+fn test_mysql_set_commands() {
+    let mut server = start_test_server();
+    std::thread::sleep(Duration::from_secs(2));
+    
+    let result = std::panic::catch_unwind(|| {
+        let mut stream = connect_and_auth();
+        
+        // Test SET NAMES command (should succeed)
+        test_ok_response(&mut stream, "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_0900_ai_ci'");
+        test_ok_response(&mut stream, "SET NAMES utf8mb4");
+        test_ok_response(&mut stream, "SET NAMES 'utf8'");
+        
+        // Test SET CHARACTER SET command
+        test_ok_response(&mut stream, "SET CHARACTER SET utf8mb4");
+        test_ok_response(&mut stream, "SET CHARACTER SET 'utf8'");
+        
+        // Test other SET commands
+        test_ok_response(&mut stream, "SET SESSION sql_mode='TRADITIONAL'");
+        test_ok_response(&mut stream, "SET autocommit=1");
+        
+        // Verify that queries still work after SET commands
+        test_query(&mut stream, "SELECT 1", vec!["1"]);
+        test_query(&mut stream, "SELECT username FROM users WHERE id = 1", vec!["alice"]);
+    });
+    
+    server.kill().expect("Failed to kill server");
+    
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
+
+#[test]
 fn test_mysql_error_handling() {
     let mut server = start_test_server();
     std::thread::sleep(Duration::from_secs(2));
@@ -240,6 +273,32 @@ fn test_ping(stream: &mut TcpStream) {
     stream.read_exact(&mut response).expect("Failed to read ping response");
     
     assert_eq!(response[0], 0x00, "PING should return OK packet");
+}
+
+fn test_ok_response(stream: &mut TcpStream, query: &str) {
+    // Send query
+    let query_packet = format!("\x03{}", query);
+    let mut packet = Vec::new();
+    packet.extend(&(query_packet.len() as u32).to_le_bytes()[..3]);
+    packet.push(0); // sequence
+    packet.extend(query_packet.as_bytes());
+    stream.write_all(&packet).expect("Failed to send query");
+    
+    // Read response
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).expect("Failed to read response header");
+    let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
+    let mut response = vec![0u8; length as usize];
+    stream.read_exact(&mut response).expect("Failed to read response");
+    
+    if response[0] == 0xff {
+        // Error packet
+        let error_code = u16::from_le_bytes([response[1], response[2]]);
+        let error_msg = String::from_utf8_lossy(&response[9..]);
+        panic!("Query '{}' failed with error {}: {}", query, error_code, error_msg);
+    }
+    
+    assert_eq!(response[0], 0x00, "Query '{}' should return OK packet", query);
 }
 
 fn compute_auth_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
