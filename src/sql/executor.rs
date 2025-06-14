@@ -2,6 +2,8 @@ use sqlparser::ast::*;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
+use regex::Regex;
+use chrono;
 
 use crate::database::{Database, Table, Value};
 use crate::YamlBaseError;
@@ -92,14 +94,17 @@ impl QueryExecutor {
     }
 
     async fn execute_select_without_from(&self, select: &Select) -> crate::Result<QueryResult> {
+        debug!("Executing SELECT without FROM");
         let mut columns = Vec::new();
         let mut row_values = Vec::new();
 
         for (idx, item) in select.projection.iter().enumerate() {
+            debug!("Processing projection item {}: {:?}", idx, item);
             match item {
                 SelectItem::UnnamedExpr(expr) => {
                     let value = self.evaluate_constant_expr(expr)?;
                     let col_name = format!("column_{}", idx + 1);
+                    debug!("Adding column: {} with value: {:?}", col_name, value);
                     columns.push(col_name);
                     row_values.push(value);
                 }
@@ -116,15 +121,21 @@ impl QueryExecutor {
             }
         }
 
-        Ok(QueryResult {
-            columns,
+        let result = QueryResult {
+            columns: columns.clone(),
             rows: vec![row_values],
-        })
+        };
+        debug!("SELECT without FROM complete. Columns: {:?}, Rows: {:?}", result.columns, result.rows);
+        Ok(result)
     }
 
     fn evaluate_constant_expr(&self, expr: &Expr) -> crate::Result<Value> {
+        debug!("Evaluating constant expression: {:?}", expr);
         match expr {
-            Expr::Value(val) => self.sql_value_to_db_value(val),
+            Expr::Value(val) => {
+                debug!("Converting SQL value to DB value: {:?}", val);
+                self.sql_value_to_db_value(val)
+            }
             Expr::UnaryOp { op, expr } => match op {
                 UnaryOperator::Minus => {
                     let val = self.evaluate_constant_expr(expr)?;
@@ -289,16 +300,87 @@ impl QueryExecutor {
     }
 
     fn evaluate_expr(&self, expr: &Expr, row: &[Value], table: &Table) -> crate::Result<bool> {
+        debug!("Evaluating expression: {:?}", expr);
         match expr {
             Expr::BinaryOp { left, op, right } => {
                 self.evaluate_binary_op(left, op, right, row, table)
             }
             Expr::Value(sqlparser::ast::Value::Boolean(b)) => Ok(*b),
+            Expr::InList { expr, list, negated } => {
+                debug!("Found InList expression: expr={:?}, negated={}", expr, negated);
+                self.evaluate_in_list(expr, list, *negated, row, table)
+            }
+            Expr::Like { expr, pattern, negated, .. } => {
+                debug!("Found Like expression: expr={:?}, pattern={:?}, negated={}", expr, pattern, negated);
+                self.evaluate_like(expr, pattern, *negated, row, table)
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported: {:?}",
                 expr
             ))),
         }
+    }
+
+    fn evaluate_in_list(
+        &self,
+        expr: &Expr,
+        list: &[Expr],
+        negated: bool,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<bool> {
+        let value = self.get_expr_value(expr, row, table)?;
+        
+        for list_expr in list {
+            let list_value = self.get_expr_value(list_expr, row, table)?;
+            if value == list_value {
+                return Ok(!negated);
+            }
+        }
+        
+        Ok(negated)
+    }
+
+    fn evaluate_like(
+        &self,
+        expr: &Expr,
+        pattern: &Expr,
+        negated: bool,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<bool> {
+        let value = self.get_expr_value(expr, row, table)?;
+        let pattern_value = self.get_expr_value(pattern, row, table)?;
+        
+        // Convert values to strings for LIKE comparison
+        let value_str = match &value {
+            Value::Text(s) => s.clone(),
+            _ => return Ok(negated), // Non-text values don't match LIKE patterns
+        };
+        
+        let pattern_str = match &pattern_value {
+            Value::Text(s) => s.clone(),
+            _ => return Err(YamlBaseError::Database {
+                message: "LIKE pattern must be a string".to_string(),
+            }),
+        };
+        
+        // Convert SQL LIKE pattern to regex
+        // Escape regex special characters first, then convert SQL wildcards
+        let mut regex_pattern = regex::escape(&pattern_str);
+        
+        // Replace escaped SQL wildcards with regex equivalents
+        regex_pattern = regex_pattern.replace("\\%", ".*");
+        regex_pattern = regex_pattern.replace("\\_", ".");
+        
+        let matches = match Regex::new(&format!("^{}$", regex_pattern)) {
+            Ok(re) => re.is_match(&value_str),
+            Err(_) => return Err(YamlBaseError::Database {
+                message: format!("Invalid LIKE pattern: {}", pattern_str),
+            }),
+        };
+        
+        Ok(if negated { !matches } else { matches })
     }
 
     fn evaluate_binary_op(
@@ -309,10 +391,24 @@ impl QueryExecutor {
         row: &[Value],
         table: &Table,
     ) -> crate::Result<bool> {
-        let left_val = self.get_expr_value(left, row, table)?;
-        let right_val = self.get_expr_value(right, row, table)?;
-
+        // Handle AND/OR operations specially to support nested expressions
         match op {
+            BinaryOperator::And => {
+                let left_bool = self.evaluate_expr(left, row, table)?;
+                let right_bool = self.evaluate_expr(right, row, table)?;
+                Ok(left_bool && right_bool)
+            }
+            BinaryOperator::Or => {
+                let left_bool = self.evaluate_expr(left, row, table)?;
+                let right_bool = self.evaluate_expr(right, row, table)?;
+                Ok(left_bool || right_bool)
+            }
+            _ => {
+                // For other operators, evaluate the values first
+                let left_val = self.get_expr_value(left, row, table)?;
+                let right_val = self.get_expr_value(right, row, table)?;
+                
+                match op {
             BinaryOperator::Eq => Ok(left_val == right_val),
             BinaryOperator::NotEq => Ok(left_val != right_val),
             BinaryOperator::Lt => {
@@ -343,20 +439,12 @@ impl QueryExecutor {
                     Ok(false)
                 }
             }
-            BinaryOperator::And => {
-                let left_bool = self.evaluate_expr(left, row, table)?;
-                let right_bool = self.evaluate_expr(right, row, table)?;
-                Ok(left_bool && right_bool)
-            }
-            BinaryOperator::Or => {
-                let left_bool = self.evaluate_expr(left, row, table)?;
-                let right_bool = self.evaluate_expr(right, row, table)?;
-                Ok(left_bool || right_bool)
-            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Binary operator not supported: {:?}",
                 op
             ))),
+                }
+            }
         }
     }
 
@@ -371,8 +459,23 @@ impl QueryExecutor {
                 Ok(row[col_idx].clone())
             }
             Expr::Value(val) => self.sql_value_to_db_value(val),
+            Expr::TypedString { data_type, value } => {
+                // Handle DATE '2025-01-01' and similar typed strings
+                match data_type {
+                    DataType::Date => {
+                        // Parse the date string into NaiveDate
+                        match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                            Ok(date) => Ok(Value::Date(date)),
+                            Err(_) => Err(YamlBaseError::TypeConversion(
+                                format!("Invalid date format: {}", value)
+                            ))
+                        }
+                    }
+                    _ => Ok(Value::Text(value.clone())),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
-                "Expression type not supported: {:?}",
+                "Expression type not supported in get_expr_value: {:?}",
                 expr
             ))),
         }

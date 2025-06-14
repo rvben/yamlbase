@@ -82,7 +82,9 @@ impl MySqlProtocol {
             self.parse_handshake_response(&response_packet)?;
 
         // Simple authentication check
+        debug!("Authentication check - username: {}, expected: {}", username, self.config.username);
         if username != self.config.username {
+            debug!("Username mismatch");
             self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
                 .await?;
             return Ok(());
@@ -90,7 +92,9 @@ impl MySqlProtocol {
 
         // Verify password
         let expected = compute_auth_response(&self.config.password, &state.auth_data);
+        debug!("Password check - auth_response len: {}, expected len: {}", auth_response.len(), expected.len());
         if auth_response != expected {
+            debug!("Password mismatch");
             self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
                 .await?;
             return Ok(());
@@ -208,6 +212,7 @@ impl MySqlProtocol {
         &self,
         packet: &[u8],
     ) -> crate::Result<(String, Vec<u8>, Option<String>)> {
+        debug!("Parsing handshake response, packet len: {}", packet.len());
         let mut pos = 0;
 
         // Skip client capabilities (4 bytes)
@@ -230,14 +235,21 @@ impl MySqlProtocol {
         let username = std::str::from_utf8(&packet[pos..pos + username_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in username".to_string()))?
             .to_string();
+        debug!("Username: {}", username);
         pos += username_end + 1;
 
         // Auth response length
         let auth_len = packet[pos] as usize;
+        debug!("Auth response length byte: {}, interpreted as: {}", packet[pos], auth_len);
         pos += 1;
 
         // Auth response
-        let auth_response = packet[pos..pos + auth_len].to_vec();
+        let auth_response = if auth_len > 0 && pos + auth_len <= packet.len() {
+            packet[pos..pos + auth_len].to_vec()
+        } else {
+            debug!("Auth response empty or invalid length");
+            Vec::new()
+        };
         pos += auth_len;
 
         // Database (optional, null-terminated)
@@ -306,11 +318,15 @@ impl MySqlProtocol {
         };
 
         for statement in statements {
+            debug!("Executing statement: {:?}", statement);
             match self.executor.execute(&statement).await {
                 Ok(result) => {
+                    debug!("Query executed successfully. Result: {} columns, {} rows", 
+                           result.columns.len(), result.rows.len());
                     self.send_query_result(stream, state, &result).await?;
                 }
                 Err(e) => {
+                    debug!("Query execution error: {}", e);
                     self.send_error(stream, state, 1146, "42S02", &e.to_string())
                         .await?;
                 }
@@ -346,19 +362,26 @@ impl MySqlProtocol {
         state: &mut ConnectionState,
         result: &crate::sql::executor::QueryResult,
     ) -> crate::Result<()> {
+        debug!("Sending query result with {} columns and {} rows", 
+               result.columns.len(), result.rows.len());
+        
         // Convert to string representation
         let columns: Vec<&str> = result.columns.iter().map(|s| s.as_str()).collect();
+        debug!("Columns: {:?}", columns);
+        
         let rows: Vec<Vec<String>> = result
             .rows
             .iter()
             .map(|row| row.iter().map(|val| val.to_string()).collect())
             .collect();
+        debug!("Converted {} rows to strings", rows.len());
 
         let string_rows: Vec<Vec<&str>> = rows
             .iter()
             .map(|row| row.iter().map(|s| s.as_str()).collect())
             .collect();
 
+        debug!("Calling send_simple_result_set");
         self.send_simple_result_set(stream, state, &columns, &string_rows)
             .await
     }
@@ -370,13 +393,18 @@ impl MySqlProtocol {
         columns: &[&str],
         rows: &[Vec<&str>],
     ) -> crate::Result<()> {
+        debug!("send_simple_result_set: {} columns, {} rows", columns.len(), rows.len());
+        
         // Column count
         let mut packet = BytesMut::new();
         packet.put_u8(columns.len() as u8);
+        debug!("Writing column count packet");
         self.write_packet(stream, state, &packet).await?;
 
         // Column definitions
-        for column in columns {
+        debug!("Writing {} column definitions", columns.len());
+        for (idx, column) in columns.iter().enumerate() {
+            debug!("Writing column definition {}: {}", idx, column);
             let mut col_packet = BytesMut::new();
 
             // Catalog (def)
@@ -424,8 +452,18 @@ impl MySqlProtocol {
             self.write_packet(stream, state, &col_packet).await?;
         }
 
+        // Send EOF packet after column definitions (for clients that don't support CLIENT_DEPRECATE_EOF)
+        debug!("Sending EOF packet after column definitions");
+        let mut eof_packet = BytesMut::new();
+        eof_packet.put_u8(0xfe); // EOF marker
+        eof_packet.put_u16_le(0); // warnings
+        eof_packet.put_u16_le(SERVER_STATUS_AUTOCOMMIT); // status flags
+        self.write_packet(stream, state, &eof_packet).await?;
+
         // Send rows
-        for row in rows {
+        debug!("Sending {} rows", rows.len());
+        for (idx, row) in rows.iter().enumerate() {
+            debug!("Sending row {}", idx);
             let mut row_packet = BytesMut::new();
             for value in row {
                 if *value == "NULL" {
@@ -444,8 +482,13 @@ impl MySqlProtocol {
             self.write_packet(stream, state, &row_packet).await?;
         }
 
-        // Send OK packet (EOF replacement in CLIENT_DEPRECATE_EOF mode)
-        self.send_ok(stream, state, 0, rows.len() as u64).await
+        // Send EOF packet after rows
+        debug!("Sending final EOF packet");
+        let mut eof_packet = BytesMut::new();
+        eof_packet.put_u8(0xfe); // EOF marker
+        eof_packet.put_u16_le(0); // warnings
+        eof_packet.put_u16_le(SERVER_STATUS_AUTOCOMMIT); // status flags
+        self.write_packet(stream, state, &eof_packet).await
     }
 
     async fn send_ok(
