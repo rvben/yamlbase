@@ -29,7 +29,7 @@ const CLIENT_CONNECT_WITH_DB: u32 = 0x00000008;
 const CLIENT_PROTOCOL_41: u32 = 0x00000200;
 const CLIENT_SECURE_CONNECTION: u32 = 0x00008000;
 const CLIENT_PLUGIN_AUTH: u32 = 0x00080000;
-const CLIENT_DEPRECATE_EOF: u32 = 0x01000000;
+const _CLIENT_DEPRECATE_EOF: u32 = 0x01000000;
 
 // Column types
 const MYSQL_TYPE_VAR_STRING: u8 = 253;
@@ -82,7 +82,10 @@ impl MySqlProtocol {
             self.parse_handshake_response(&response_packet)?;
 
         // Simple authentication check
-        debug!("Authentication check - username: {}, expected: {}", username, self.config.username);
+        debug!(
+            "Authentication check - username: {}, expected: {}",
+            username, self.config.username
+        );
         if username != self.config.username {
             debug!("Username mismatch");
             self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
@@ -92,7 +95,11 @@ impl MySqlProtocol {
 
         // Verify password
         let expected = compute_auth_response(&self.config.password, &state.auth_data);
-        debug!("Password check - auth_response len: {}, expected len: {}", auth_response.len(), expected.len());
+        debug!(
+            "Password check - auth_response len: {}, expected len: {}",
+            auth_response.len(),
+            expected.len()
+        );
         if auth_response != expected {
             debug!("Password mismatch");
             self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
@@ -177,8 +184,7 @@ impl MySqlProtocol {
             | CLIENT_CONNECT_WITH_DB
             | CLIENT_PROTOCOL_41
             | CLIENT_SECURE_CONNECTION
-            | CLIENT_PLUGIN_AUTH
-            | CLIENT_DEPRECATE_EOF;
+            | CLIENT_PLUGIN_AUTH;
         packet.put_u16_le((capabilities & 0xFFFF) as u16);
 
         // Character set (utf8mb4)
@@ -215,7 +221,14 @@ impl MySqlProtocol {
         debug!("Parsing handshake response, packet len: {}", packet.len());
         let mut pos = 0;
 
-        // Skip client capabilities (4 bytes)
+        // Parse client capabilities (4 bytes)
+        let client_flags = u32::from_le_bytes([
+            packet[pos],
+            packet[pos + 1],
+            packet[pos + 2],
+            packet[pos + 3],
+        ]);
+        debug!("Client capabilities: 0x{:08x}", client_flags);
         pos += 4;
 
         // Skip max packet size (4 bytes)
@@ -240,7 +253,10 @@ impl MySqlProtocol {
 
         // Auth response length
         let auth_len = packet[pos] as usize;
-        debug!("Auth response length byte: {}, interpreted as: {}", packet[pos], auth_len);
+        debug!(
+            "Auth response length byte: {}, interpreted as: {}",
+            packet[pos], auth_len
+        );
         pos += 1;
 
         // Auth response
@@ -321,8 +337,11 @@ impl MySqlProtocol {
             debug!("Executing statement: {:?}", statement);
             match self.executor.execute(&statement).await {
                 Ok(result) => {
-                    debug!("Query executed successfully. Result: {} columns, {} rows", 
-                           result.columns.len(), result.rows.len());
+                    debug!(
+                        "Query executed successfully. Result: {} columns, {} rows",
+                        result.columns.len(),
+                        result.rows.len()
+                    );
                     self.send_query_result(stream, state, &result).await?;
                 }
                 Err(e) => {
@@ -362,13 +381,16 @@ impl MySqlProtocol {
         state: &mut ConnectionState,
         result: &crate::sql::executor::QueryResult,
     ) -> crate::Result<()> {
-        debug!("Sending query result with {} columns and {} rows", 
-               result.columns.len(), result.rows.len());
-        
+        debug!(
+            "Sending query result with {} columns and {} rows",
+            result.columns.len(),
+            result.rows.len()
+        );
+
         // Convert to string representation
         let columns: Vec<&str> = result.columns.iter().map(|s| s.as_str()).collect();
         debug!("Columns: {:?}", columns);
-        
+
         let rows: Vec<Vec<String>> = result
             .rows
             .iter()
@@ -393,8 +415,12 @@ impl MySqlProtocol {
         columns: &[&str],
         rows: &[Vec<&str>],
     ) -> crate::Result<()> {
-        debug!("send_simple_result_set: {} columns, {} rows", columns.len(), rows.len());
-        
+        debug!(
+            "send_simple_result_set: {} columns, {} rows",
+            columns.len(),
+            rows.len()
+        );
+
         // Column count
         let mut packet = BytesMut::new();
         packet.put_u8(columns.len() as u8);
@@ -463,22 +489,34 @@ impl MySqlProtocol {
         // Send rows
         debug!("Sending {} rows", rows.len());
         for (idx, row) in rows.iter().enumerate() {
-            debug!("Sending row {}", idx);
+            debug!("Sending row {} with {} values", idx, row.len());
             let mut row_packet = BytesMut::new();
-            for value in row {
+            for (col_idx, value) in row.iter().enumerate() {
                 if *value == "NULL" {
+                    debug!("  Column {}: NULL", col_idx);
                     row_packet.put_u8(0xfb); // NULL value
                 } else {
                     let bytes = value.as_bytes();
+                    debug!("  Column {}: '{}' ({} bytes)", col_idx, value, bytes.len());
+                    // MySQL uses length-encoded strings for result rows
                     if bytes.len() < 251 {
                         row_packet.put_u8(bytes.len() as u8);
-                    } else {
+                    } else if bytes.len() < 65536 {
                         row_packet.put_u8(0xfc);
                         row_packet.put_u16_le(bytes.len() as u16);
+                    } else if bytes.len() < 16777216 {
+                        row_packet.put_u8(0xfd);
+                        row_packet.put_u8((bytes.len() & 0xff) as u8);
+                        row_packet.put_u8(((bytes.len() >> 8) & 0xff) as u8);
+                        row_packet.put_u8(((bytes.len() >> 16) & 0xff) as u8);
+                    } else {
+                        row_packet.put_u8(0xfe);
+                        row_packet.put_u64_le(bytes.len() as u64);
                     }
                     row_packet.put_slice(bytes);
                 }
             }
+            debug!("Row packet size: {} bytes", row_packet.len());
             self.write_packet(stream, state, &row_packet).await?;
         }
 
@@ -561,6 +599,14 @@ impl MySqlProtocol {
 
         // Sequence ID
         packet.put_u8(state.sequence_id);
+
+        debug!(
+            "Writing packet: len={}, seq={}, first_bytes={:?}",
+            payload.len(),
+            state.sequence_id,
+            &payload[..std::cmp::min(20, payload.len())]
+        );
+
         state.sequence_id = state.sequence_id.wrapping_add(1);
 
         // Payload

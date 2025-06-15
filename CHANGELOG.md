@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] - 2025-06-15
+
+### Added
+- Enhanced SQL support for standard SQL functionality:
+  - IN and NOT IN operators for list comparisons
+  - LIKE and NOT LIKE operators with % and _ wildcards
+  - Support for regex special character escaping in LIKE patterns
+  - Proper handling of nested expressions with parentheses
+  - SELECT without FROM clause for constant expressions (e.g., `SELECT 1`, `SELECT 'hello' AS greeting`)
+  - Arithmetic operations in SELECT expressions
+- Comprehensive fuzz testing infrastructure using cargo-fuzz
+- CI/CD improvements:
+  - Unified Makefile-based approach for all CI/CD operations
+  - Multi-platform Docker builds using buildx
+  - Simplified Docker build process with in-container compilation
+- Improved MySQL protocol compatibility:
+  - Added EOF packets after column definitions for better client compatibility
+  - Enhanced debug logging for protocol troubleshooting
+
+### Fixed
+- Critical UTF-8 boundary crash in filter parser discovered through fuzz testing
+- MySQL protocol test updated to handle EOF packets correctly
+
+### Changed
+- CI/CD workflows now use make targets exclusively, following the principle that all CI actions must be runnable locally
+- Docker images now build from source inside containers for better multi-platform support
+- Removed obsolete Dockerfile.release files and related make targets
+
+### Developer Experience
+- Added comprehensive CI/CD documentation guide
+- Improved test infrastructure with better MySQL protocol handling
+- Enhanced debugging with more detailed protocol logging
+
 ## [0.0.5] - 2025-06-13
 
 ### Fixed
@@ -100,6 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.0.6]: https://github.com/rvben/yamlbase/releases/tag/v0.0.6
 [0.0.5]: https://github.com/rvben/yamlbase/releases/tag/v0.0.5
 [0.0.4]: https://github.com/rvben/yamlbase/releases/tag/v0.0.4
 [0.0.3]: https://github.com/rvben/yamlbase/releases/tag/v0.0.3

@@ -522,6 +522,17 @@ fn test_query(stream: &mut TcpStream, query: &str, expected_values: Vec<&str>) {
             .expect("Failed to read column def");
     }
 
+    // Read EOF packet after column definitions
+    stream
+        .read_exact(&mut header)
+        .expect("Failed to read EOF header after columns");
+    let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
+    let mut eof_packet = vec![0u8; length as usize];
+    stream
+        .read_exact(&mut eof_packet)
+        .expect("Failed to read EOF packet");
+    assert_eq!(eof_packet[0], 0xfe, "Should get EOF packet after columns");
+
     // Read rows and collect values
     let mut values = Vec::new();
     loop {
@@ -534,8 +545,8 @@ fn test_query(stream: &mut TcpStream, query: &str, expected_values: Vec<&str>) {
             .read_exact(&mut row_data)
             .expect("Failed to read row data");
 
-        if row_data[0] == 0x00 && length < 10 {
-            // OK packet - end of results
+        if row_data[0] == 0xfe && length < 9 {
+            // EOF packet - end of results
             break;
         }
 

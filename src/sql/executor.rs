@@ -1,9 +1,9 @@
+use chrono;
+use regex::Regex;
 use sqlparser::ast::*;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
-use regex::Regex;
-use chrono;
 
 use crate::database::{Database, Table, Value};
 use crate::YamlBaseError;
@@ -125,7 +125,10 @@ impl QueryExecutor {
             columns: columns.clone(),
             rows: vec![row_values],
         };
-        debug!("SELECT without FROM complete. Columns: {:?}, Rows: {:?}", result.columns, result.rows);
+        debug!(
+            "SELECT without FROM complete. Columns: {:?}, Rows: {:?}",
+            result.columns, result.rows
+        );
         Ok(result)
     }
 
@@ -306,13 +309,32 @@ impl QueryExecutor {
                 self.evaluate_binary_op(left, op, right, row, table)
             }
             Expr::Value(sqlparser::ast::Value::Boolean(b)) => Ok(*b),
-            Expr::InList { expr, list, negated } => {
-                debug!("Found InList expression: expr={:?}, negated={}", expr, negated);
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                debug!(
+                    "Found InList expression: expr={:?}, negated={}",
+                    expr, negated
+                );
                 self.evaluate_in_list(expr, list, *negated, row, table)
             }
-            Expr::Like { expr, pattern, negated, .. } => {
-                debug!("Found Like expression: expr={:?}, pattern={:?}, negated={}", expr, pattern, negated);
+            Expr::Like {
+                expr,
+                pattern,
+                negated,
+                ..
+            } => {
+                debug!(
+                    "Found Like expression: expr={:?}, pattern={:?}, negated={}",
+                    expr, pattern, negated
+                );
                 self.evaluate_like(expr, pattern, *negated, row, table)
+            }
+            Expr::Nested(inner) => {
+                // Handle parenthesized expressions by evaluating the inner expression
+                self.evaluate_expr(inner, row, table)
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported: {:?}",
@@ -330,14 +352,14 @@ impl QueryExecutor {
         table: &Table,
     ) -> crate::Result<bool> {
         let value = self.get_expr_value(expr, row, table)?;
-        
+
         for list_expr in list {
             let list_value = self.get_expr_value(list_expr, row, table)?;
             if value == list_value {
                 return Ok(!negated);
             }
         }
-        
+
         Ok(negated)
     }
 
@@ -351,35 +373,52 @@ impl QueryExecutor {
     ) -> crate::Result<bool> {
         let value = self.get_expr_value(expr, row, table)?;
         let pattern_value = self.get_expr_value(pattern, row, table)?;
-        
+
         // Convert values to strings for LIKE comparison
         let value_str = match &value {
             Value::Text(s) => s.clone(),
             _ => return Ok(negated), // Non-text values don't match LIKE patterns
         };
-        
+
         let pattern_str = match &pattern_value {
             Value::Text(s) => s.clone(),
-            _ => return Err(YamlBaseError::Database {
-                message: "LIKE pattern must be a string".to_string(),
-            }),
+            _ => {
+                return Err(YamlBaseError::Database {
+                    message: "LIKE pattern must be a string".to_string(),
+                })
+            }
         };
-        
+
         // Convert SQL LIKE pattern to regex
-        // Escape regex special characters first, then convert SQL wildcards
-        let mut regex_pattern = regex::escape(&pattern_str);
-        
-        // Replace escaped SQL wildcards with regex equivalents
-        regex_pattern = regex_pattern.replace("\\%", ".*");
-        regex_pattern = regex_pattern.replace("\\_", ".");
-        
+        // We need to handle SQL wildcards before escaping
+        let mut regex_pattern = String::new();
+        let chars: Vec<char> = pattern_str.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            match chars[i] {
+                '%' => regex_pattern.push_str(".*"),
+                '_' => regex_pattern.push('.'),
+                c => {
+                    // Escape regex special characters
+                    if "^$.*+?{}[]|()\\".contains(c) {
+                        regex_pattern.push('\\');
+                    }
+                    regex_pattern.push(c);
+                }
+            }
+            i += 1;
+        }
+
         let matches = match Regex::new(&format!("^{}$", regex_pattern)) {
             Ok(re) => re.is_match(&value_str),
-            Err(_) => return Err(YamlBaseError::Database {
-                message: format!("Invalid LIKE pattern: {}", pattern_str),
-            }),
+            Err(_) => {
+                return Err(YamlBaseError::Database {
+                    message: format!("Invalid LIKE pattern: {}", pattern_str),
+                })
+            }
         };
-        
+
         Ok(if negated { !matches } else { matches })
     }
 
@@ -407,42 +446,42 @@ impl QueryExecutor {
                 // For other operators, evaluate the values first
                 let left_val = self.get_expr_value(left, row, table)?;
                 let right_val = self.get_expr_value(right, row, table)?;
-                
+
                 match op {
-            BinaryOperator::Eq => Ok(left_val == right_val),
-            BinaryOperator::NotEq => Ok(left_val != right_val),
-            BinaryOperator::Lt => {
-                if let Some(ord) = left_val.compare(&right_val) {
-                    Ok(ord.is_lt())
-                } else {
-                    Ok(false)
-                }
-            }
-            BinaryOperator::LtEq => {
-                if let Some(ord) = left_val.compare(&right_val) {
-                    Ok(ord.is_le())
-                } else {
-                    Ok(false)
-                }
-            }
-            BinaryOperator::Gt => {
-                if let Some(ord) = left_val.compare(&right_val) {
-                    Ok(ord.is_gt())
-                } else {
-                    Ok(false)
-                }
-            }
-            BinaryOperator::GtEq => {
-                if let Some(ord) = left_val.compare(&right_val) {
-                    Ok(ord.is_ge())
-                } else {
-                    Ok(false)
-                }
-            }
-            _ => Err(YamlBaseError::NotImplemented(format!(
-                "Binary operator not supported: {:?}",
-                op
-            ))),
+                    BinaryOperator::Eq => Ok(left_val == right_val),
+                    BinaryOperator::NotEq => Ok(left_val != right_val),
+                    BinaryOperator::Lt => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(ord.is_lt())
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    BinaryOperator::LtEq => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(ord.is_le())
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    BinaryOperator::Gt => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(ord.is_gt())
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    BinaryOperator::GtEq => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(ord.is_ge())
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator not supported: {:?}",
+                        op
+                    ))),
                 }
             }
         }
@@ -466,9 +505,10 @@ impl QueryExecutor {
                         // Parse the date string into NaiveDate
                         match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
                             Ok(date) => Ok(Value::Date(date)),
-                            Err(_) => Err(YamlBaseError::TypeConversion(
-                                format!("Invalid date format: {}", value)
-                            ))
+                            Err(_) => Err(YamlBaseError::TypeConversion(format!(
+                                "Invalid date format: {}",
+                                value
+                            ))),
                         }
                     }
                     _ => Ok(Value::Text(value.clone())),
@@ -577,6 +617,7 @@ impl QueryExecutor {
 mod tests {
     use super::*;
     use crate::database::{Column, Database, Table, Value};
+    use chrono::NaiveDate;
     use sqlparser::ast::Statement;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -625,6 +666,22 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
+    }
+
+    fn create_column(
+        name: &str,
+        sql_type: crate::yaml::schema::SqlType,
+        primary_key: bool,
+    ) -> Column {
+        Column {
+            name: name.to_string(),
+            sql_type,
+            primary_key,
+            nullable: false,
+            unique: primary_key,
+            default: None,
+            references: None,
+        }
     }
 
     #[tokio::test]
@@ -726,9 +783,9 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(-5));
 
-        let stmt = parse_statement("SELECT -3.14");
+        let stmt = parse_statement("SELECT -3.5");
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Double(-3.14));
+        assert_eq!(result.rows[0][0], Value::Double(-3.5));
     }
 
     #[tokio::test]
@@ -758,5 +815,519 @@ mod tests {
         assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
         assert_eq!(result.rows[1][0], Value::Integer(2));
         assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_not_in_operator() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                Column {
+                    name: "id".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Integer,
+                    primary_key: true,
+                    nullable: false,
+                    unique: true,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "status".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                    primary_key: false,
+                    nullable: false,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+
+            let mut table = Table::new("projects".to_string(), columns);
+
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("Active".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("Pending".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Cancelled".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(4), Value::Text("Closed".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+        let stmt = parse_statement(
+            "SELECT id, status FROM projects WHERE status NOT IN ('Cancelled', 'Closed')",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][1], Value::Text("Active".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Pending".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_in_operator() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("type", crate::yaml::schema::SqlType::Varchar(50), false),
+            ];
+
+            let mut table = Table::new("tasks".to_string(), columns);
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Development".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("Research".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("Support".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+        let stmt =
+            parse_statement("SELECT id, type FROM tasks WHERE type IN ('Development', 'Research')");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][1], Value::Text("Development".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Research".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_like_operator_with_percent() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("name", crate::yaml::schema::SqlType::Varchar(100), false),
+            ];
+
+            let mut table = Table::new("classifications".to_string(), columns);
+
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("NS-High".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("NS-Medium".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("Public".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+
+        // Test with % at end
+        let stmt = parse_statement("SELECT id, name FROM classifications WHERE name LIKE 'NS%'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+
+        // Test with % at beginning
+        let stmt = parse_statement("SELECT id, name FROM classifications WHERE name LIKE '%High'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][1], Value::Text("NS-High".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_like_operator_with_underscore() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("code", crate::yaml::schema::SqlType::Varchar(10), false),
+            ];
+
+            let mut table = Table::new("codes".to_string(), columns);
+
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("A1B".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("A2B".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("A12B".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+        let stmt = parse_statement("SELECT id, code FROM codes WHERE code LIKE 'A_B'");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][1], Value::Text("A1B".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("A2B".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_not_equals_operators() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("flag", crate::yaml::schema::SqlType::Varchar(1), false),
+            ];
+
+            let mut table = Table::new("flags".to_string(), columns);
+
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("Y".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("N".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("Y".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+
+        // Test <> operator
+        let stmt = parse_statement("SELECT id FROM flags WHERE flag <> 'Y'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+
+        // Test != operator
+        let stmt = parse_statement("SELECT id FROM flags WHERE flag != 'Y'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+    }
+
+    #[tokio::test]
+    async fn test_date_literal_comparisons() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("start_date", crate::yaml::schema::SqlType::Date, false),
+            ];
+
+            let mut table = Table::new("events".to_string(), columns);
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 12, 1).unwrap()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 6, 1).unwrap()),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+        let stmt = parse_statement("SELECT id FROM events WHERE start_date > DATE '2025-01-01'");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+        assert_eq!(result.rows[1][0], Value::Integer(3));
+    }
+
+    #[tokio::test]
+    async fn test_complex_nested_conditions() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("status", crate::yaml::schema::SqlType::Varchar(20), false),
+                create_column("type", crate::yaml::schema::SqlType::Varchar(50), false),
+                create_column("priority", crate::yaml::schema::SqlType::Integer, false),
+            ];
+
+            let mut table = Table::new("items".to_string(), columns);
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Active".to_string()),
+                    Value::Text("Development".to_string()),
+                    Value::Integer(1),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Pending".to_string()),
+                    Value::Text("Research".to_string()),
+                    Value::Integer(2),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Active".to_string()),
+                    Value::Text("Support".to_string()),
+                    Value::Integer(3),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+        let stmt = parse_statement(
+            "SELECT id FROM items WHERE (status = 'Active' OR status = 'Pending') AND type IN ('Development', 'Research') AND priority < 3"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[1][0], Value::Integer(2));
+    }
+
+    #[tokio::test]
+    async fn test_like_with_special_regex_chars() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("pattern", crate::yaml::schema::SqlType::Varchar(50), false),
+            ];
+
+            let mut table = Table::new("patterns".to_string(), columns);
+
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("test.com".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("test[123]".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("test^abc".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+
+        // Dots should be treated as literals, not regex wildcards
+        let stmt = parse_statement("SELECT id FROM patterns WHERE pattern LIKE 'test.com'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_not_like_operator() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column(
+                    "category",
+                    crate::yaml::schema::SqlType::Varchar(100),
+                    false,
+                ),
+            ];
+
+            let mut table = Table::new("items".to_string(), columns);
+
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("NS-High".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("NS-Medium".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("NS-Low".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(4), Value::Text("Public".to_string())])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+
+        // Test NOT LIKE
+        let stmt = parse_statement("SELECT id, category FROM items WHERE category NOT LIKE 'NS%'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(4));
+        assert_eq!(result.rows[0][1], Value::Text("Public".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_complex_enterprise_query() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column(
+                    "SAP_PROJECT_ID",
+                    crate::yaml::schema::SqlType::Varchar(255),
+                    true,
+                ),
+                create_column(
+                    "PROJECT_NAME",
+                    crate::yaml::schema::SqlType::Varchar(255),
+                    false,
+                ),
+                create_column(
+                    "VERSION_CODE",
+                    crate::yaml::schema::SqlType::Varchar(50),
+                    false,
+                ),
+                create_column(
+                    "STATUS_CODE",
+                    crate::yaml::schema::SqlType::Varchar(50),
+                    false,
+                ),
+                create_column(
+                    "ACTIVE_FLAG",
+                    crate::yaml::schema::SqlType::Varchar(1),
+                    false,
+                ),
+                create_column(
+                    "CLOSED_FOR_TIME_ENTRY",
+                    crate::yaml::schema::SqlType::Varchar(1),
+                    false,
+                ),
+                create_column(
+                    "SECURITY_CLASSIFICATION",
+                    crate::yaml::schema::SqlType::Varchar(100),
+                    false,
+                ),
+                create_column(
+                    "PROJECT_STRUCTURE",
+                    crate::yaml::schema::SqlType::Varchar(100),
+                    false,
+                ),
+                create_column("START_DATE", crate::yaml::schema::SqlType::Date, false),
+                create_column(
+                    "PF_PRODUCT_GROUP_NAME",
+                    crate::yaml::schema::SqlType::Varchar(255),
+                    false,
+                ),
+                create_column(
+                    "PROJECT_CLASS",
+                    crate::yaml::schema::SqlType::Varchar(255),
+                    false,
+                ),
+                create_column(
+                    "IFRS_TYPE",
+                    crate::yaml::schema::SqlType::Varchar(255),
+                    false,
+                ),
+            ];
+
+            let mut table = Table::new("SF_PROJECT_V2".to_string(), columns);
+
+            // Add test data that should match
+            table
+                .insert_row(vec![
+                    Value::Text("PR-2025-001".to_string()),
+                    Value::Text("5G Development".to_string()),
+                    Value::Text("Published".to_string()),
+                    Value::Text("Active".to_string()),
+                    Value::Text("Y".to_string()),
+                    Value::Text("N".to_string()),
+                    Value::Text("NS-High".to_string()),
+                    Value::Text("Project".to_string()),
+                    Value::Date(NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()),
+                    Value::Text("Automotive".to_string()),
+                    Value::Text("Product Development".to_string()),
+                    Value::Text("PROD DEV".to_string()),
+                ])
+                .unwrap();
+
+            // Add test data that should NOT match (closed status)
+            table
+                .insert_row(vec![
+                    Value::Text("PR-2024-999".to_string()),
+                    Value::Text("Legacy System".to_string()),
+                    Value::Text("Published".to_string()),
+                    Value::Text("Closed".to_string()),
+                    Value::Text("Y".to_string()),
+                    Value::Text("N".to_string()),
+                    Value::Text("NS-Low".to_string()),
+                    Value::Text("Project".to_string()),
+                    Value::Date(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+                    Value::Text("Support IT".to_string()),
+                    Value::Text("Product Development".to_string()),
+                    Value::Text("PROD DEV".to_string()),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = QueryExecutor::new(db);
+
+        // Test the full Enterprise query
+        let stmt = parse_statement(
+            "SELECT SAP_PROJECT_ID, PROJECT_NAME FROM SF_PROJECT_V2 WHERE VERSION_CODE = 'Published' \
+             AND STATUS_CODE NOT IN ('Cancelled', 'Closed') AND ACTIVE_FLAG = 'Y' \
+             AND CLOSED_FOR_TIME_ENTRY <> 'Y' AND SECURITY_CLASSIFICATION LIKE 'NS%' \
+             AND PROJECT_STRUCTURE = 'Project' AND START_DATE > DATE '2025-01-01' \
+             AND PF_PRODUCT_GROUP_NAME NOT IN ('Support IT', 'The Support IT', 'The Demo Portfolio', 'The Archive') \
+             AND PROJECT_CLASS IN ('Product Development', 'Technology & Research Development') \
+             AND IFRS_TYPE IN ('PROD DEV', 'TECH & RESEARCH DEV')"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("PR-2025-001".to_string()));
+        assert_eq!(result.rows[0][1], Value::Text("5G Development".to_string()));
     }
 }
