@@ -1,0 +1,47 @@
+[package]
+name = "yamlbase-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tokio = { version = "1", features = ["rt", "macros"] }
+sqlparser = "0.36"
+
+[dependencies.yamlbase]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_sql_parser"
+path = "fuzz_targets/fuzz_sql_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_yaml_parser"
+path = "fuzz_targets/fuzz_yaml_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_mysql_protocol"
+path = "fuzz_targets/fuzz_mysql_protocol.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_filter_parser"
+path = "fuzz_targets/fuzz_filter_parser.rs"
+test = false
+doc = false

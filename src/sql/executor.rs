@@ -139,6 +139,17 @@ impl QueryExecutor {
                 debug!("Converting SQL value to DB value: {:?}", val);
                 self.sql_value_to_db_value(val)
             }
+            Expr::Identifier(ident) => {
+                debug!("Evaluating identifier: {}", ident.value);
+                // Handle system variables (@@variable_name)
+                if ident.value.starts_with("@@") {
+                    self.get_system_variable(&ident.value)
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        format!("Identifier '{}' not supported in SELECT without FROM", ident.value),
+                    ))
+                }
+            }
             Expr::UnaryOp { op, expr } => match op {
                 UnaryOperator::Minus => {
                     let val = self.evaluate_constant_expr(expr)?;
@@ -390,24 +401,47 @@ impl QueryExecutor {
         };
 
         // Convert SQL LIKE pattern to regex
-        // We need to handle SQL wildcards before escaping
+        // Handle SQL escape sequences and wildcards
         let mut regex_pattern = String::new();
         let chars: Vec<char> = pattern_str.chars().collect();
         let mut i = 0;
 
         while i < chars.len() {
-            match chars[i] {
-                '%' => regex_pattern.push_str(".*"),
-                '_' => regex_pattern.push('.'),
-                c => {
-                    // Escape regex special characters
-                    if "^$.*+?{}[]|()\\".contains(c) {
-                        regex_pattern.push('\\');
+            if chars[i] == '\\' && i + 1 < chars.len() {
+                // Handle SQL escape sequences
+                match chars[i + 1] {
+                    '%' => {
+                        regex_pattern.push('%');
+                        i += 2;
                     }
-                    regex_pattern.push(c);
+                    '_' => {
+                        regex_pattern.push('_');
+                        i += 2;
+                    }
+                    '\\' => {
+                        regex_pattern.push_str("\\\\");
+                        i += 2;
+                    }
+                    _ => {
+                        // Invalid escape sequence, treat as literal backslash
+                        regex_pattern.push_str("\\\\");
+                        i += 1;
+                    }
                 }
+            } else {
+                match chars[i] {
+                    '%' => regex_pattern.push_str(".*"),
+                    '_' => regex_pattern.push('.'),
+                    c => {
+                        // Escape regex special characters
+                        if "^$.*+?{}[]|()".contains(c) {
+                            regex_pattern.push('\\');
+                        }
+                        regex_pattern.push(c);
+                    }
+                }
+                i += 1;
             }
-            i += 1;
         }
 
         let matches = match Regex::new(&format!("^{}$", regex_pattern)) {
@@ -597,6 +631,41 @@ impl QueryExecutor {
         });
 
         Ok(rows)
+    }
+
+    fn get_system_variable(&self, var_name: &str) -> crate::Result<Value> {
+        // Remove @@ prefix and handle session/global prefixes
+        let name = if var_name.starts_with("@@") {
+            &var_name[2..]
+        } else {
+            var_name
+        };
+        
+        // Handle session. and global. prefixes
+        let name = if name.starts_with("session.") {
+            &name[8..]
+        } else if name.starts_with("SESSION.") {
+            &name[8..]
+        } else if name.starts_with("global.") {
+            &name[7..]
+        } else if name.starts_with("GLOBAL.") {
+            &name[7..]
+        } else {
+            name
+        };
+        
+        // Convert to lowercase for comparison
+        let name_lower = name.to_lowercase();
+        
+        // Return appropriate values for known system variables
+        match name_lower.as_str() {
+            "version" => Ok(Value::Text("8.0.35-yamlbase".to_string())),
+            "version_comment" => Ok(Value::Text("1".to_string())),
+            _ => {
+                // Default all other system variables to "1"
+                Ok(Value::Text("1".to_string()))
+            }
+        }
     }
 
     fn apply_limit(&self, rows: Vec<Vec<Value>>, limit: &Expr) -> crate::Result<Vec<Vec<Value>>> {
@@ -1329,5 +1398,69 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("PR-2025-001".to_string()));
         assert_eq!(result.rows[0][1], Value::Text("5G Development".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_like_escape_sequences() {
+        // Create a custom database for this test
+        let mut db = Database::new("test_db".to_string());
+        
+        // Create test table with needed columns
+        let columns = vec![
+            create_column("id", crate::yaml::schema::SqlType::Integer, true),
+            create_column("name", crate::yaml::schema::SqlType::Varchar(255), false),
+        ];
+        
+        let mut table = Table::new("test_table".to_string(), columns);
+        // Row with literal %
+        table.insert_row(vec![
+            Value::Integer(10),
+            Value::Text("100%".to_string()),
+        ]).unwrap();
+        // Row with literal _
+        table.insert_row(vec![
+            Value::Integer(11),
+            Value::Text("user_name".to_string()),
+        ]).unwrap();
+        // Row with literal \\
+        table.insert_row(vec![
+            Value::Integer(12),
+            Value::Text("C:\\path\\file".to_string()),
+        ]).unwrap();
+        
+        db.add_table(table).unwrap();
+        let db = Arc::new(RwLock::new(db));
+
+        let executor = QueryExecutor::new(db);
+
+        // Test escaped % (should match literal %)
+        let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE '100\\%'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(10));
+
+        // Test escaped _ (should match literal _)
+        let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE 'user\\_name'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(11));
+
+        // Test escaped \\ (should match literal \\)
+        let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE 'C:\\\\path\\\\file'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(12));
+
+        // Test unescaped % as wildcard
+        let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE '%name'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1); // Should match user_name
+        assert_eq!(result.rows[0][0], Value::Integer(11));
+
+        // Test unescaped _ as single character wildcard
+        let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE '10_%'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1); // Should match 100%
+        assert_eq!(result.rows[0][0], Value::Integer(10));
     }
 }
