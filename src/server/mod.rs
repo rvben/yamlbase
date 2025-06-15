@@ -60,7 +60,7 @@ impl Server {
             let (stream, addr) = listener.accept().await?;
             info!("New connection from {}", addr);
 
-            let connection = Connection::new(self.config.clone(), self.storage.database());
+            let connection = Connection::new(self.config.clone(), Arc::new(self.storage.clone()));
 
             tokio::spawn(async move {
                 if let Err(e) = connection.handle(stream).await {
