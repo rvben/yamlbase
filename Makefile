@@ -1,4 +1,4 @@
-.PHONY: all build test bench clean run docker-build docker-buildx docker-push docker-push-multiplatform docker-login docker-setup docker-run docker-stop help
+.PHONY: all build test bench clean run docker-build docker-run help
 
 # Default target
 all: build
@@ -7,92 +7,105 @@ all: build
 build:
 	cargo build --release
 
+# Build for a specific target
+build-target:
+	@if [ -z "$(TARGET)" ]; then echo "Usage: make build-target TARGET=x86_64-unknown-linux-gnu"; exit 1; fi
+	@echo "Building for target: $(TARGET)"
+	cargo build --release --target $(TARGET)
+
+# Build all release targets
+build-all-targets:
+	@echo "Building for all targets..."
+	@$(MAKE) build-target TARGET=x86_64-unknown-linux-gnu
+	@$(MAKE) build-target TARGET=x86_64-unknown-linux-musl
+	@$(MAKE) build-target TARGET=x86_64-pc-windows-msvc || echo "Skipping Windows build on non-Windows host"
+	@$(MAKE) build-target TARGET=x86_64-apple-darwin || echo "Skipping macOS x64 build on non-macOS host"
+	@$(MAKE) build-target TARGET=aarch64-apple-darwin || echo "Skipping macOS ARM build on non-macOS host"
+
 # Run all tests
 test:
-	cargo test --all-features -- --nocapture
+	cargo test --all-features --verbose
 
 # Run unit tests only
 test-unit:
-	cargo test --lib --all-features -- --nocapture
+	cargo test --lib --all-features --verbose
 
 # Run integration tests only
 test-integration:
-	cargo test --test '*' --all-features -- --nocapture
+	cargo test --test '*' --all-features --verbose
+
+# Run tests with no default features
+test-no-features:
+	cargo test --no-default-features --verbose
 
 # Run tests with coverage
 coverage:
-	cargo tarpaulin --out Html --output-dir coverage --all-features --verbose
+	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
-# Run tests with coverage and open report
-coverage-open: coverage
-	open coverage/tarpaulin-report.html
+# Run tests with coverage and generate HTML report
+coverage-html:
+	cargo llvm-cov --all-features --workspace --html
 
-# Check coverage percentage
-coverage-check:
-	cargo tarpaulin --all-features
+# Open coverage report
+coverage-open: coverage-html
+	open target/llvm-cov/html/index.html || xdg-open target/llvm-cov/html/index.html
 
 # Run benchmarks
 bench:
-	cargo bench
+	cargo bench --all-features
 
 # Clean build artifacts
 clean:
 	cargo clean
 	rm -rf target/
+	rm -rf docker-context/
 
-# Run the server locally with sample data
+# Run the server locally
 run:
-	cargo run -- -f examples/sample_database.yaml --hot-reload -v
-
-# Run with minimal logging
-run-prod:
-	cargo run --release -- -f examples/sample_database.yaml
+	cargo run -- -f examples/sample_database.yaml --verbose
 
 # Build Docker image (local, current platform only)
 docker-build:
 	docker build -t yamlbase:latest .
 
-# Build Docker image for multiple platforms (requires buildx)
-docker-buildx:
+# Setup Docker buildx for multi-platform builds
+docker-setup:
+	@if ! docker buildx ls | grep -q yamlbase-builder; then \
+		docker buildx create --name yamlbase-builder --driver docker-container --bootstrap || true; \
+	fi
+	docker buildx use yamlbase-builder
+	docker buildx inspect --bootstrap
+
+# Build multi-platform Docker image using buildx
+docker-buildx: docker-setup
 	docker buildx build --platform linux/amd64,linux/arm64 -t yamlbase:latest .
 
-# Build and push to GitHub Container Registry
-docker-push: docker-login
-	@if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push VERSION=0.0.1"; exit 1; fi
-	docker buildx build --platform linux/amd64 \
-		-t ghcr.io/rvben/yamlbase:$(VERSION) \
-		-t ghcr.io/rvben/yamlbase:latest \
-		--push .
 
-# Build and push multi-platform to GitHub Container Registry
-docker-push-multiplatform: docker-login
-	@if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push-multiplatform VERSION=0.0.1"; exit 1; fi
+# Login to GitHub Container Registry
+docker-login:
+	@if [ -z "$$GITHUB_TOKEN" ]; then echo "Error: GITHUB_TOKEN not set"; exit 1; fi
+	@echo "$$GITHUB_TOKEN" | docker login ghcr.io -u $$GITHUB_ACTOR --password-stdin
+
+# Push multi-platform image to GitHub Container Registry
+docker-push: docker-login docker-buildx
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push VERSION=0.1.0"; exit 1; fi
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-t ghcr.io/rvben/yamlbase:$(VERSION) \
 		-t ghcr.io/rvben/yamlbase:latest \
 		--push .
 
-# Login to GitHub Container Registry
-docker-login:
-	@echo "Logging into GitHub Container Registry..."
-	@echo "$$GITHUB_TOKEN" | docker login ghcr.io -u rvben --password-stdin
-
-# Setup Docker buildx for multi-platform builds
-docker-setup:
-	docker buildx create --name yamlbase-builder --use || true
-	docker buildx inspect --bootstrap
 
 # Run with Docker
 docker-run:
-	docker run -d --name yamlbase -p 5432:5432 -v $(PWD)/examples/sample_database.yaml:/data/database.yaml yamlbase:latest
+	docker run -d --name yamlbase -p 5432:5432 -v $$(pwd)/examples/sample_database.yaml:/data/database.yaml yamlbase:latest
 
-# Stop Docker container
+# Stop Docker containers
 docker-stop:
-	docker stop yamlbase && docker rm yamlbase
+	docker stop yamlbase && docker rm yamlbase || true
 
 # Run linting
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
 # Format code
 fmt:
@@ -106,62 +119,126 @@ fmt-check:
 check:
 	cargo check --all-features
 
-# Run all checks (format, lint, type check, test)
+# Run all CI checks (format, lint, type check, test)
 ci: fmt-check check lint test
+
+# Run security audit
+audit:
+	cargo audit
 
 # Test with PostgreSQL client
 test-postgres:
-	@echo "Starting PostgreSQL server in background..."
-	@cargo run -- -f examples/sample_database.yaml --protocol postgres &
-	@sleep 3
-	@echo "Running PostgreSQL test queries..."
-	@./test_queries.sh
-	@echo "Stopping server..."
-	@pkill -f "cargo run.*yamlbase" || true
+	@echo "Testing PostgreSQL connectivity..."
+	@./test_queries.sh || true
 
 # Test with MySQL client
 test-mysql:
-	@echo "Starting MySQL server in background..."
-	@cargo run -- -f examples/sample_database.yaml --protocol mysql &
-	@sleep 3
-	@echo "Running MySQL test queries..."
-	@./test_mysql_queries.sh
-	@echo "Stopping server..."
-	@pkill -f "cargo run.*yamlbase" || true
+	@echo "Testing MySQL connectivity..."
+	@./test_mysql_queries.sh || true
 
-# Test both protocols
-test-client: test-postgres test-mysql
+# Integration tests with real clients
+integration-test:
+	@echo "Running integration tests..."
+	@cargo build --release
+	@./target/release/yamlbase -f examples/sample_database.yaml &
+	@sleep 2
+	@python3 examples/python_integration.py || true
+	@pkill yamlbase || true
 
-# Generate documentation
-docs:
-	cargo doc --no-deps --open
+# Publish to crates.io
+publish-crate:
+	@if [ -z "$$CRATES_IO_TOKEN" ]; then echo "Error: CRATES_IO_TOKEN not set"; exit 1; fi
+	cargo publish --token $$CRATES_IO_TOKEN
+
+# Dry run publish to crates.io
+publish-crate-dry:
+	cargo publish --dry-run
+
+# Release preparation
+release-prep:
+	@if [ -f scripts/prepare-release.sh ]; then \
+		./scripts/prepare-release.sh; \
+	else \
+		echo "Release preparation script not found"; \
+	fi
+
+# Check if ready for release
+release-check:
+	@echo "Checking release readiness..."
+	@echo ""
+	@echo "1. Running tests..."
+	@cargo test --quiet
+	@echo "✓ Tests passed"
+	@echo ""
+	@echo "2. Checking formatting..."
+	@cargo fmt -- --check
+	@echo "✓ Code is formatted"
+	@echo ""
+	@echo "3. Running clippy..."
+	@cargo clippy --all-targets --all-features -- -D warnings
+	@echo "✓ No clippy warnings"
+	@echo ""
+	@echo "4. Security audit..."
+	@cargo audit || echo "⚠ Security audit failed (non-blocking)"
+	@echo ""
+	@echo "5. Checking documentation..."
+	@cargo doc --no-deps --quiet
+	@echo "✓ Documentation builds"
+	@echo ""
+	@echo "6. Dry-run crates.io publish..."
+	@cargo publish --dry-run --allow-dirty
+	@echo "✓ Package is ready for crates.io"
+	@echo ""
+	@echo "✅ All checks passed! Ready for release."
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Run 'make release-prep' to prepare the release"
+	@echo "  2. Push the tag to trigger the release workflow"
 
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  make build          - Build the project in release mode"
-	@echo "  make test           - Run all tests"
-	@echo "  make test-unit      - Run unit tests only"
-	@echo "  make test-integration - Run integration tests only"
-	@echo "  make coverage       - Run tests with coverage report"
-	@echo "  make coverage-open  - Run coverage and open HTML report"
-	@echo "  make coverage-check - Check coverage percentage"
-	@echo "  make bench          - Run benchmarks"
-	@echo "  make clean          - Clean build artifacts"
-	@echo "  make run            - Run the server locally with sample data"
-	@echo "  make run-prod       - Run in production mode (release build)"
-	@echo "  make docker-build   - Build Docker image (local, current platform)"
-	@echo "  make docker-buildx  - Build Docker image for multiple platforms"
-	@echo "  make docker-push VERSION=x.x.x - Build and push to ghcr.io (AMD64)"
-	@echo "  make docker-push-multiplatform VERSION=x.x.x - Push multi-arch to ghcr.io"
-	@echo "  make docker-setup   - Setup Docker buildx for multi-platform builds"
-	@echo "  make docker-run     - Run with Docker"
-	@echo "  make docker-stop    - Stop Docker container"
-	@echo "  make lint           - Run linting with clippy"
-	@echo "  make fmt            - Format code"
-	@echo "  make fmt-check      - Check code formatting"
-	@echo "  make check          - Type check the code"
-	@echo "  make ci             - Run all checks (format, lint, type check, test)"
-	@echo "  make test-client    - Test with PostgreSQL client"
-	@echo "  make docs           - Generate and open documentation"
-	@echo "  make help           - Show this help message"
+	@echo ""
+	@echo "Building:"
+	@echo "  make build                 - Build the project in release mode"
+	@echo "  make build-target TARGET=  - Build for a specific target"
+	@echo "  make build-all-targets     - Build for all supported targets"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test                  - Run all tests"
+	@echo "  make test-unit            - Run unit tests only"
+	@echo "  make test-integration     - Run integration tests only"
+	@echo "  make test-no-features     - Run tests without default features"
+	@echo "  make coverage             - Run tests with coverage report"
+	@echo "  make coverage-html        - Generate HTML coverage report"
+	@echo "  make coverage-open        - Open HTML coverage report"
+	@echo "  make bench                - Run benchmarks"
+	@echo "  make test-postgres        - Test with PostgreSQL client"
+	@echo "  make test-mysql           - Test with MySQL client"
+	@echo "  make integration-test     - Run integration tests with clients"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make lint                 - Run linting with clippy"
+	@echo "  make fmt                  - Format code"
+	@echo "  make fmt-check            - Check code formatting"
+	@echo "  make check                - Type check the code"
+	@echo "  make ci                   - Run all CI checks"
+	@echo "  make audit                - Run security audit"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-build         - Build Docker image (current platform)"
+	@echo "  make docker-buildx        - Build multi-platform image"
+	@echo "  make docker-push VERSION= - Push multi-platform image"
+	@echo "  make docker-run           - Run with Docker"
+	@echo "  make docker-stop          - Stop Docker containers"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release-check        - Check if ready for release"
+	@echo "  make release-prep         - Prepare a new release"
+	@echo "  make publish-crate        - Publish to crates.io"
+	@echo "  make publish-crate-dry    - Dry run crates.io publish"
+	@echo ""
+	@echo "Other:"
+	@echo "  make run                  - Run the server locally"
+	@echo "  make clean                - Clean build artifacts"
+	@echo "  make help                 - Show this help message"

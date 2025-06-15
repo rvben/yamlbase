@@ -113,6 +113,17 @@ fn test_mysql_connection_and_simple_query() {
             .read_exact(&mut _col_def)
             .expect("Failed to read column def");
 
+        // Read EOF packet after column definitions
+        stream
+            .read_exact(&mut header)
+            .expect("Failed to read EOF header after columns");
+        let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
+        let mut eof_packet = vec![0u8; length as usize];
+        stream
+            .read_exact(&mut eof_packet)
+            .expect("Failed to read EOF packet");
+        assert_eq!(eof_packet[0], 0xfe, "Should get EOF packet after columns");
+
         // Read row data
         stream
             .read_exact(&mut header)
@@ -127,16 +138,16 @@ fn test_mysql_connection_and_simple_query() {
         assert_eq!(row_data[0], 1, "Length should be 1");
         assert_eq!(row_data[1], b'1', "Value should be '1'");
 
-        // Read OK packet (end of results)
+        // Read EOF packet (end of results)
         stream
             .read_exact(&mut header)
-            .expect("Failed to read OK header");
+            .expect("Failed to read final EOF header");
         let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-        let mut ok_packet = vec![0u8; length as usize];
+        let mut final_eof = vec![0u8; length as usize];
         stream
-            .read_exact(&mut ok_packet)
-            .expect("Failed to read OK packet");
-        assert_eq!(ok_packet[0], 0x00, "Should get OK packet");
+            .read_exact(&mut final_eof)
+            .expect("Failed to read final EOF packet");
+        assert_eq!(final_eof[0], 0xfe, "Should get EOF packet at end");
     });
 
     // Kill server
