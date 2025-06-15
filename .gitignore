@@ -28,3 +28,8 @@ assets/*.png
 
 # Environment variables
 .env*
+
+# Fuzzing
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/

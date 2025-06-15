@@ -96,12 +96,22 @@ impl MySqlProtocol {
         // Verify password
         let expected = compute_auth_response(&self.config.password, &state.auth_data);
         debug!(
-            "Password check - auth_response len: {}, expected len: {}",
+            "Password check - auth_response len: {}, expected len: {}, config password: {}",
             auth_response.len(),
-            expected.len()
+            expected.len(),
+            self.config.password
         );
-        if auth_response != expected {
-            debug!("Password mismatch");
+        
+        // Handle authentication
+        if auth_response.is_empty() && !expected.is_empty() {
+            // Client sent empty auth response but we require a password
+            debug!("Empty auth response but password required");
+            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
+                .await?;
+            return Ok(());
+        } else if auth_response != expected {
+            // Normal auth response verification
+            debug!("Password mismatch - expected: {:?}, got: {:?}", expected, auth_response);
             self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
                 .await?;
             return Ok(());
@@ -298,11 +308,28 @@ impl MySqlProtocol {
         state: &mut ConnectionState,
         query: &str,
     ) -> crate::Result<()> {
-        let query_upper = query.trim().to_uppercase();
+        let query_trimmed = query.trim();
+        let query_upper = query_trimmed.to_uppercase();
+        
+        // Handle empty queries
+        if query_trimmed.is_empty() {
+            debug!("Empty query received");
+            self.send_error(stream, state, 1064, "42000", "Syntax error: Empty query")
+                .await?;
+            return Ok(());
+        }
 
-        // Handle special MySQL queries
-        if query_upper.starts_with("SELECT @@") {
-            return self.handle_system_var_query(stream, state, query).await;
+        // Handle queries with system variables by preprocessing them
+        let mut processed_query = if query_trimmed.contains("@@") {
+            self.preprocess_system_variables(query_trimmed)
+        } else {
+            query_trimmed.to_string()
+        };
+        
+        // Convert MySQL backticks - just remove them since our parser handles unquoted identifiers
+        if processed_query.contains('`') {
+            processed_query = processed_query.replace('`', "");
+            debug!("Removed backticks: {}", processed_query);
         }
 
         // Handle SET NAMES command (ignore it - we always use UTF-8)
@@ -318,7 +345,7 @@ impl MySqlProtocol {
         }
 
         // Parse SQL
-        let statements = match parse_sql(query) {
+        let statements = match parse_sql(&processed_query) {
             Ok(stmts) => stmts,
             Err(e) => {
                 self.send_error(
@@ -355,24 +382,48 @@ impl MySqlProtocol {
         Ok(())
     }
 
-    async fn handle_system_var_query(
-        &self,
-        stream: &mut TcpStream,
-        state: &mut ConnectionState,
-        query: &str,
-    ) -> crate::Result<()> {
-        let value = if query.contains("version") {
-            SERVER_VERSION
-        } else {
-            "1"
-        };
-
-        // Send simple result set with one column and one row
-        let columns = vec!["@@version"];
-        let rows = vec![vec![value]];
-
-        self.send_simple_result_set(stream, state, &columns, &rows)
-            .await
+    
+    fn preprocess_system_variables(&self, query: &str) -> String {
+        use once_cell::sync::Lazy;
+        use regex::Regex;
+        
+        // Only preprocess SELECT queries that contain system variables
+        let query_upper = query.to_uppercase();
+        if !query_upper.starts_with("SELECT") || !query.contains("@@") {
+            return query.to_string();
+        }
+        
+        static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version|VERSION|Version)\b").unwrap()
+        });
+        
+        static VERSION_COMMENT_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b").unwrap()
+        });
+        
+        static SYSTEM_VAR_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap()
+        });
+        
+        let mut result = query.to_string();
+        
+        // First handle @@version specifically
+        result = VERSION_RE.replace_all(&result, "'8.0.35-yamlbase'").to_string();
+        
+        // Handle @@version_comment
+        result = VERSION_COMMENT_RE.replace_all(&result, "'1'").to_string();
+        
+        // Check if we already replaced all instances
+        if !result.contains("@@") {
+            debug!("Preprocessed query: {} -> {}", query, result);
+            return result;
+        }
+        
+        // Replace remaining system variables with '1'
+        result = SYSTEM_VAR_RE.replace_all(&result, "'1'").to_string();
+        
+        debug!("Preprocessed query: {} -> {}", query, result);
+        result
     }
 
     async fn send_query_result(
@@ -555,6 +606,7 @@ impl MySqlProtocol {
 
         self.write_packet(stream, state, &packet).await
     }
+
 
     async fn send_error(
         &self,

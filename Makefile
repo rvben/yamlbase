@@ -126,6 +126,28 @@ ci: fmt-check check lint test
 audit:
 	cargo audit
 
+# Run fuzz tests (requires nightly Rust)
+fuzz:
+	@echo "Running fuzz tests (requires nightly Rust)..."
+	@if ! rustup toolchain list | grep -q nightly; then \
+		echo "Installing nightly toolchain..."; \
+		rustup install nightly; \
+	fi
+	@if ! command -v cargo-fuzz >/dev/null 2>&1; then \
+		echo "Installing cargo-fuzz..."; \
+		cargo install cargo-fuzz; \
+	fi
+	@echo "Running SQL parser fuzzing for 60 seconds..."
+	cargo +nightly fuzz run fuzz_sql_parser -- -max_total_time=60
+
+# Run all fuzz targets for a short time
+fuzz-all:
+	@echo "Running all fuzz targets for 30 seconds each..."
+	cargo +nightly fuzz run fuzz_sql_parser -- -max_total_time=30
+	cargo +nightly fuzz run fuzz_yaml_parser -- -max_total_time=30
+	cargo +nightly fuzz run fuzz_mysql_protocol -- -max_total_time=30
+	cargo +nightly fuzz run fuzz_filter_parser -- -max_total_time=30
+
 # Test with PostgreSQL client
 test-postgres:
 	@echo "Testing PostgreSQL connectivity..."
@@ -224,6 +246,8 @@ help:
 	@echo "  make check                - Type check the code"
 	@echo "  make ci                   - Run all CI checks"
 	@echo "  make audit                - Run security audit"
+	@echo "  make fuzz                 - Run fuzz testing (requires nightly)"
+	@echo "  make fuzz-all             - Run all fuzz targets"
 	@echo ""
 	@echo "Docker:"
 	@echo "  make docker-build         - Build Docker image (current platform)"

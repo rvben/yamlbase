@@ -142,11 +142,37 @@ impl Database {
     }
 
     pub fn get_table(&self, name: &str) -> Option<&Table> {
-        self.tables.get(name)
+        // First try exact match
+        if let Some(table) = self.tables.get(name) {
+            return Some(table);
+        }
+        
+        // Fall back to case-insensitive search
+        let name_lower = name.to_lowercase();
+        for (table_name, table) in &self.tables {
+            if table_name.to_lowercase() == name_lower {
+                return Some(table);
+            }
+        }
+        None
     }
 
     pub fn get_table_mut(&mut self, name: &str) -> Option<&mut Table> {
-        self.tables.get_mut(name)
+        // First try exact match
+        if self.tables.contains_key(name) {
+            return self.tables.get_mut(name);
+        }
+        
+        // Fall back to case-insensitive search
+        let name_lower = name.to_lowercase();
+        for (table_name, _) in self.tables.iter() {
+            if table_name.to_lowercase() == name_lower {
+                // Need to clone the key to avoid borrow checker issues
+                let key = table_name.clone();
+                return self.tables.get_mut(&key);
+            }
+        }
+        None
     }
 }
 
@@ -203,7 +229,19 @@ impl Table {
     }
 
     pub fn get_column_index(&self, name: &str) -> Option<usize> {
-        self.column_index.get(name).copied()
+        // First try exact match
+        if let Some(&index) = self.column_index.get(name) {
+            return Some(index);
+        }
+        
+        // Fall back to case-insensitive search
+        let name_lower = name.to_lowercase();
+        for (col_name, &index) in &self.column_index {
+            if col_name.to_lowercase() == name_lower {
+                return Some(index);
+            }
+        }
+        None
     }
 }
 

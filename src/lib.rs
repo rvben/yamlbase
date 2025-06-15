@@ -5,6 +5,11 @@ pub mod server;
 pub mod sql;
 pub mod yaml;
 
+// Make test_utils available for integration tests
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
+
 pub use config::Config;
 pub use database::Database;
 pub use server::Server;
