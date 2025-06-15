@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::config::Config;
-use crate::database::{Database, Value};
+use crate::database::{Storage, Value};
+use crate::protocol::postgres_extended::ExtendedProtocol;
 use crate::sql::{parse_sql, QueryExecutor};
 use crate::YamlBaseError;
 
@@ -15,6 +15,7 @@ pub struct PostgresProtocol {
     config: Arc<Config>,
     executor: QueryExecutor,
     _database_name: String,
+    extended_protocol: ExtendedProtocol,
 }
 
 #[derive(Debug, Default)]
@@ -26,15 +27,16 @@ struct ConnectionState {
 }
 
 impl PostgresProtocol {
-    pub fn new(config: Arc<Config>, database: Arc<RwLock<Database>>) -> Self {
+    pub fn new(config: Arc<Config>, storage: Arc<Storage>) -> Self {
         Self {
             config,
-            executor: QueryExecutor::new(database),
+            executor: QueryExecutor::new(storage),
             _database_name: String::new(), // Will be set later if needed
+            extended_protocol: ExtendedProtocol::new(),
         }
     }
 
-    pub async fn handle_connection(&self, mut stream: TcpStream) -> crate::Result<()> {
+    pub async fn handle_connection(&mut self, mut stream: TcpStream) -> crate::Result<()> {
         info!("New PostgreSQL connection");
 
         let mut buffer = BytesMut::with_capacity(4096);
@@ -74,6 +76,45 @@ impl PostgresProtocol {
                     // Simple query
                     let query = self.parse_query(&buffer[5..length + 1])?;
                     self.handle_query(&mut stream, &query).await?;
+                }
+                b'P' => {
+                    // Parse (extended query protocol)
+                    self.extended_protocol.handle_parse(&mut stream, &buffer[5..length + 1]).await?;
+                }
+                b'B' => {
+                    // Bind (extended query protocol)
+                    self.extended_protocol.handle_bind(&mut stream, &buffer[5..length + 1]).await?;
+                }
+                b'D' => {
+                    // Describe (extended query protocol)
+                    self.extended_protocol.handle_describe(&mut stream, &buffer[5..length + 1], &self.executor).await?;
+                }
+                b'E' => {
+                    // Execute (extended query protocol)
+                    self.extended_protocol.handle_execute(&mut stream, &buffer[5..length + 1], &self.executor).await?;
+                }
+                b'S' => {
+                    // Sync (extended query protocol)
+                    self.extended_protocol.handle_sync(&mut stream).await?;
+                }
+                b'C' => {
+                    // Close (extended query protocol)
+                    let close_type = buffer[5];
+                    let name_end = buffer[6..length + 1].iter().position(|&b| b == 0).unwrap_or(length - 5);
+                    let name = std::str::from_utf8(&buffer[6..6 + name_end])
+                        .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in close name".to_string()))?;
+                    
+                    if close_type == b'S' {
+                        self.extended_protocol.close_statement(name);
+                    } else if close_type == b'P' {
+                        self.extended_protocol.close_portal(name);
+                    }
+                    
+                    // Send CloseComplete
+                    let mut close_buf = BytesMut::new();
+                    close_buf.put_u8(b'3');
+                    close_buf.put_u32(4);
+                    stream.write_all(&close_buf).await?;
                 }
                 b'X' => {
                     // Terminate

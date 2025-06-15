@@ -6,7 +6,8 @@ use tokio::net::TcpStream;
 use tracing::{debug, info};
 
 use crate::config::Config;
-use crate::database::Database;
+use crate::database::Storage;
+use crate::protocol::mysql_caching_sha2::{CachingSha2Auth, CACHING_SHA2_PLUGIN_NAME};
 use crate::sql::{parse_sql, QueryExecutor};
 use crate::YamlBaseError;
 
@@ -47,6 +48,7 @@ struct ConnectionState {
     sequence_id: u8,
     _capabilities: u32,
     auth_data: Vec<u8>,
+    client_auth_plugin: Option<String>,
 }
 
 impl Default for ConnectionState {
@@ -55,15 +57,16 @@ impl Default for ConnectionState {
             sequence_id: 0,
             _capabilities: 0,
             auth_data: generate_auth_data(),
+            client_auth_plugin: None,
         }
     }
 }
 
 impl MySqlProtocol {
-    pub fn new(config: Arc<Config>, database: Arc<tokio::sync::RwLock<Database>>) -> Self {
+    pub fn new(config: Arc<Config>, storage: Arc<Storage>) -> Self {
         Self {
             config,
-            executor: QueryExecutor::new(database),
+            executor: QueryExecutor::new(storage),
             _database_name: String::new(), // Will be set later if needed
         }
     }
@@ -78,8 +81,9 @@ impl MySqlProtocol {
 
         // Read handshake response
         let response_packet = self.read_packet(&mut stream, &mut state).await?;
-        let (username, auth_response, _database) =
+        let (username, auth_response, _database, client_plugin) =
             self.parse_handshake_response(&response_packet)?;
+        state.client_auth_plugin = client_plugin;
 
         // Simple authentication check
         debug!(
@@ -102,19 +106,50 @@ impl MySqlProtocol {
             self.config.password
         );
         
-        // Handle authentication
-        if auth_response.is_empty() && !expected.is_empty() {
-            // Client sent empty auth response but we require a password
-            debug!("Empty auth response but password required");
-            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
-                .await?;
-            return Ok(());
-        } else if auth_response != expected {
-            // Normal auth response verification
-            debug!("Password mismatch - expected: {:?}, got: {:?}", expected, auth_response);
-            self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
-                .await?;
-            return Ok(());
+        // Check if client requested caching_sha2_password
+        let client_wants_caching = state.client_auth_plugin
+            .as_ref()
+            .map(|p| p == CACHING_SHA2_PLUGIN_NAME)
+            .unwrap_or(false);
+        
+        if client_wants_caching || auth_response.is_empty() {
+            // Switch to caching_sha2_password
+            debug!("Client requested caching_sha2_password or sent empty auth");
+            
+            // Generate new auth data for caching_sha2
+            let caching_auth_data = generate_auth_data();
+            let caching_auth = CachingSha2Auth::new(caching_auth_data.clone());
+            
+            // Send auth switch request
+            caching_auth.send_auth_switch_request(&mut stream, &mut state.sequence_id).await?;
+            
+            // Read client's response to auth switch
+            let auth_switch_response = self.read_packet(&mut stream, &mut state).await?;
+            
+            // Authenticate using caching_sha2_password
+            let auth_success = caching_auth.authenticate(
+                &mut stream,
+                &mut state.sequence_id,
+                &username,
+                "", // password will be sent in clear text
+                &self.config.username,
+                &self.config.password,
+                auth_switch_response,
+            ).await?;
+            
+            if !auth_success {
+                self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
+                    .await?;
+                return Ok(());
+            }
+        } else {
+            // Use mysql_native_password authentication
+            if auth_response != expected {
+                debug!("Password mismatch - expected: {:?}, got: {:?}", expected, auth_response);
+                self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
+                    .await?;
+                return Ok(());
+            }
         }
 
         // Send OK packet
@@ -227,7 +262,7 @@ impl MySqlProtocol {
     fn parse_handshake_response(
         &self,
         packet: &[u8],
-    ) -> crate::Result<(String, Vec<u8>, Option<String>)> {
+    ) -> crate::Result<(String, Vec<u8>, Option<String>, Option<String>)> {
         debug!("Parsing handshake response, packet len: {}", packet.len());
         let mut pos = 0;
 
@@ -299,7 +334,32 @@ impl MySqlProtocol {
             None
         };
 
-        Ok((username, auth_response, database))
+        // Try to read auth plugin name if present
+        let auth_plugin = if pos < packet.len() {
+            // Skip to auth plugin name (may have client attributes first)
+            // For simplicity, we'll just check if there's more data
+            let plugin_end = packet[pos..]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(packet.len() - pos);
+            if plugin_end > 0 {
+                Some(
+                    std::str::from_utf8(&packet[pos..pos + plugin_end])
+                        .map_err(|_| {
+                            YamlBaseError::Protocol("Invalid UTF-8 in auth plugin".to_string())
+                        })?
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        debug!("Client auth plugin: {:?}", auth_plugin);
+
+        Ok((username, auth_response, database, auth_plugin))
     }
 
     async fn handle_query(

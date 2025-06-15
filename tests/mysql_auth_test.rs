@@ -150,18 +150,61 @@ fn test_mysql_auth_empty_password_modern_client() {
         // Both are valid responses for this test scenario
         
         if response[0] == 0xfe {
-            // Server sent auth switch request - send empty response
-            let packet = vec![0, 0, 0, header[3] + 1];
-            stream.write_all(&packet).expect("Failed to send empty auth");
+            // Server sent auth switch request
+            // Extract plugin name
+            let plugin_end = response[1..].iter().position(|&b| b == 0).unwrap_or(response.len() - 1);
+            let plugin_name = std::str::from_utf8(&response[1..1 + plugin_end]).unwrap_or("");
             
-            // Should receive error since we didn't provide valid auth
-            verify_auth_failure(&mut stream);
+            if plugin_name == "caching_sha2_password" {
+                // Send empty auth response for caching_sha2_password
+                let packet = vec![0, 0, 0, header[3] + 1];
+                stream.write_all(&packet).expect("Failed to send empty auth response");
+                
+                // Read auth more data packet
+                let mut header = [0u8; 4];
+                stream.read_exact(&mut header).expect("Failed to read header");
+                let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
+                
+                let mut auth_more = vec![0u8; length as usize];
+                stream.read_exact(&mut auth_more).expect("Failed to read auth more data");
+                
+                if auth_more[0] == 0x01 && auth_more.get(1) == Some(&0x04) {
+                    // Server requests full authentication
+                    // Send empty password
+                    let packet = vec![1, 0, 0, header[3] + 1, 0];
+                    stream.write_all(&packet).expect("Failed to send empty password");
+                    
+                    // Now should receive error
+                    verify_auth_failure(&mut stream);
+                } else {
+                    panic!("Unexpected auth more data: {:?}", auth_more);
+                }
+            } else {
+                // Old mysql_native_password flow
+                let packet = vec![0, 0, 0, header[3] + 1];
+                stream.write_all(&packet).expect("Failed to send empty auth");
+                verify_auth_failure(&mut stream);
+            }
+        } else if response[0] == 0x01 {
+            // Server sent auth more data packet (caching_sha2_password)
+            // Check the status byte
+            if response.len() > 1 && response[1] == 0x04 {
+                // Server is requesting full authentication
+                // Send empty password (just null terminator)
+                let packet = vec![1, 0, 0, header[3] + 1, 0];
+                stream.write_all(&packet).expect("Failed to send empty password");
+                
+                // Should receive error since password is required
+                verify_auth_failure(&mut stream);
+            } else {
+                panic!("Unexpected auth more data status: 0x{:02x}", response.get(1).unwrap_or(&0));
+            }
         } else if response[0] == 0xff {
             // Server sent error directly - this is also valid
             let error_code = u16::from_le_bytes([response[1], response[2]]);
             assert_eq!(error_code, 1045, "Expected access denied error");
         } else {
-            panic!("Unexpected response packet type: {}", response[0]);
+            panic!("Unexpected response packet type: 0x{:02x}", response[0]);
         }
     });
     

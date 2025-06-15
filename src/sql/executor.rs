@@ -2,14 +2,13 @@ use chrono;
 use regex::Regex;
 use sqlparser::ast::*;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::database::{Database, Table, Value};
+use crate::database::{Database, Storage, Table, Value};
 use crate::YamlBaseError;
 
 pub struct QueryExecutor {
-    database: Arc<RwLock<Database>>,
+    storage: Arc<Storage>,
 }
 
 #[derive(Debug, Clone)]
@@ -19,8 +18,8 @@ pub struct QueryResult {
 }
 
 impl QueryExecutor {
-    pub fn new(database: Arc<RwLock<Database>>) -> Self {
-        Self { database }
+    pub fn new(storage: Arc<Storage>) -> Self {
+        Self { storage }
     }
 
     pub async fn execute(&self, statement: &Statement) -> crate::Result<QueryResult> {
@@ -33,7 +32,8 @@ impl QueryExecutor {
     }
 
     async fn execute_query(&self, query: &Query) -> crate::Result<QueryResult> {
-        let db = self.database.read().await;
+        let db_arc = self.storage.database();
+        let db = db_arc.read().await;
 
         match &query.body.as_ref() {
             SetExpr::Select(select) => self.execute_select(&db, select, query).await,
@@ -68,7 +68,7 @@ impl QueryExecutor {
         let columns = self.extract_columns(select, table)?;
 
         // Filter rows based on WHERE clause
-        let filtered_rows = self.filter_rows(table, &select.selection)?;
+        let filtered_rows = self.filter_rows(table, &table_name, &select.selection).await?;
 
         // Project columns
         let projected_rows = self.project_columns(&filtered_rows, &columns, table)?;
@@ -293,11 +293,30 @@ impl QueryExecutor {
         Ok(columns)
     }
 
-    fn filter_rows<'a>(
+    async fn filter_rows<'a>(
         &self,
         table: &'a Table,
+        table_name: &str,
         selection: &Option<Expr>,
     ) -> crate::Result<Vec<&'a Vec<Value>>> {
+        // Check if this is a simple primary key lookup
+        if let Some(pk_value) = self.extract_primary_key_lookup(selection, table) {
+            debug!("Using primary key index for lookup: {:?}", pk_value);
+            
+            // Use the index for O(1) lookup
+            if let Some(row) = self.storage.find_by_primary_key(table_name, &pk_value).await {
+                // We need to find the reference in the table's rows vector
+                // This is a bit inefficient but maintains the existing API
+                for table_row in &table.rows {
+                    if table_row == &row {
+                        return Ok(vec![table_row]);
+                    }
+                }
+            }
+            return Ok(vec![]);
+        }
+
+        // Fall back to full table scan
         let mut result = Vec::new();
 
         for row in &table.rows {
@@ -311,6 +330,40 @@ impl QueryExecutor {
         }
 
         Ok(result)
+    }
+
+    /// Extract primary key value if WHERE clause is a simple equality check on primary key
+    fn extract_primary_key_lookup(&self, selection: &Option<Expr>, table: &Table) -> Option<Value> {
+        let where_expr = selection.as_ref()?;
+        
+        // Check if we have a primary key
+        let pk_idx = table.primary_key_index?;
+        let pk_column = &table.columns[pk_idx].name;
+        
+        // Look for simple equality: WHERE primary_key = value
+        if let Expr::BinaryOp { left, op, right } = where_expr {
+            if matches!(op, BinaryOperator::Eq) {
+                // Check if left side is the primary key column
+                if let Expr::Identifier(ident) = left.as_ref() {
+                    if ident.value.to_lowercase() == pk_column.to_lowercase() {
+                        // Extract the value from the right side
+                        if let Expr::Value(sql_value) = right.as_ref() {
+                            return self.sql_value_to_db_value(sql_value).ok();
+                        }
+                    }
+                }
+                // Also check if right side is the column (value = primary_key)
+                if let Expr::Identifier(ident) = right.as_ref() {
+                    if ident.value.to_lowercase() == pk_column.to_lowercase() {
+                        if let Expr::Value(sql_value) = left.as_ref() {
+                            return self.sql_value_to_db_value(sql_value).ok();
+                        }
+                    }
+                }
+            }
+        }
+        
+        None
     }
 
     fn evaluate_expr(&self, expr: &Expr, row: &[Value], table: &Table) -> crate::Result<bool> {
@@ -685,11 +738,21 @@ impl QueryExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::{Column, Database, Table, Value};
+    use crate::database::{Column, Database, Storage as DbStorage, Table, Value};
     use chrono::NaiveDate;
     use sqlparser::ast::Statement;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+    
+    // Helper function to create a test executor with storage
+    async fn create_test_executor_from_arc(db: Arc<RwLock<Database>>) -> QueryExecutor {
+        let db_owned = {
+            let db_read = db.read().await;
+            db_read.clone()
+        };
+        let storage = Arc::new(DbStorage::new(db_owned));
+        QueryExecutor::new(storage)
+    }
 
     async fn create_test_database() -> Arc<RwLock<Database>> {
         let mut db = Database::new("test_db".to_string());
@@ -756,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_simple() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT 1");
         let result = executor.execute(&stmt).await.unwrap();
@@ -770,7 +833,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_multiple_values() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT 1, 2, 3");
         let result = executor.execute(&stmt).await.unwrap();
@@ -788,7 +851,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_with_alias() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT 1 AS num, 'hello' AS greeting");
         let result = executor.execute(&stmt).await.unwrap();
@@ -804,7 +867,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_arithmetic() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Test addition
         let stmt = parse_statement("SELECT 1 + 1");
@@ -830,7 +893,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_mixed_types() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT 42, 'test', true, null");
         let result = executor.execute(&stmt).await.unwrap();
@@ -846,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_negative_numbers() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT -5");
         let result = executor.execute(&stmt).await.unwrap();
@@ -860,7 +923,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_without_from_division_by_zero() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT 1 / 0");
         let result = executor.execute(&stmt).await;
@@ -871,7 +934,7 @@ mod tests {
     #[tokio::test]
     async fn test_select_with_from_still_works() {
         let db = create_test_database().await;
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         let stmt = parse_statement("SELECT * FROM users");
         let result = executor.execute(&stmt).await.unwrap();
@@ -933,7 +996,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
         let stmt = parse_statement(
             "SELECT id, status FROM projects WHERE status NOT IN ('Cancelled', 'Closed')",
         );
@@ -972,7 +1035,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
         let stmt =
             parse_statement("SELECT id, type FROM tasks WHERE type IN ('Development', 'Research')");
         let result = executor.execute(&stmt).await.unwrap();
@@ -1010,7 +1073,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Test with % at end
         let stmt = parse_statement("SELECT id, name FROM classifications WHERE name LIKE 'NS%'");
@@ -1049,7 +1112,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
         let stmt = parse_statement("SELECT id, code FROM codes WHERE code LIKE 'A_B'");
         let result = executor.execute(&stmt).await.unwrap();
 
@@ -1083,7 +1146,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Test <> operator
         let stmt = parse_statement("SELECT id FROM flags WHERE flag <> 'Y'");
@@ -1132,7 +1195,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
         let stmt = parse_statement("SELECT id FROM events WHERE start_date > DATE '2025-01-01'");
         let result = executor.execute(&stmt).await.unwrap();
 
@@ -1183,7 +1246,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
         let stmt = parse_statement(
             "SELECT id FROM items WHERE (status = 'Active' OR status = 'Pending') AND type IN ('Development', 'Research') AND priority < 3"
         );
@@ -1222,7 +1285,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Dots should be treated as literals, not regex wildcards
         let stmt = parse_statement("SELECT id FROM patterns WHERE pattern LIKE 'test.com'");
@@ -1266,7 +1329,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Test NOT LIKE
         let stmt = parse_statement("SELECT id, category FROM items WHERE category NOT LIKE 'NS%'");
@@ -1381,7 +1444,7 @@ mod tests {
             db_write.add_table(table).unwrap();
         }
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Test the full Sciforma query
         let stmt = parse_statement(
@@ -1431,7 +1494,7 @@ mod tests {
         db.add_table(table).unwrap();
         let db = Arc::new(RwLock::new(db));
 
-        let executor = QueryExecutor::new(db);
+        let executor = create_test_executor_from_arc(db).await;
 
         // Test escaped % (should match literal %)
         let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE '100\\%'");
