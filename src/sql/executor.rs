@@ -14,12 +14,17 @@ pub struct QueryExecutor {
 #[derive(Debug, Clone)]
 pub struct QueryResult {
     pub columns: Vec<String>,
+    pub column_types: Vec<crate::yaml::schema::SqlType>,
     pub rows: Vec<Vec<Value>>,
 }
 
 impl QueryExecutor {
     pub fn new(storage: Arc<Storage>) -> Self {
         Self { storage }
+    }
+    
+    pub fn storage(&self) -> &Arc<Storage> {
+        &self.storage
     }
 
     pub async fn execute(&self, statement: &Statement) -> crate::Result<QueryResult> {
@@ -64,6 +69,11 @@ impl QueryExecutor {
                 message: format!("Table '{}' not found", table_name),
             })?;
 
+        // Check if this is an aggregate query
+        if self.is_aggregate_query(select) {
+            return self.execute_aggregate_select(db, select, query, table, &table_name).await;
+        }
+
         // Get column names for projection
         let columns = self.extract_columns(select, table)?;
 
@@ -87,8 +97,14 @@ impl QueryExecutor {
             sorted_rows
         };
 
+        // Get column types from the table
+        let column_types = columns.iter().map(|(_, idx)| {
+            table.columns[*idx].sql_type.clone()
+        }).collect();
+
         Ok(QueryResult {
             columns: columns.iter().map(|c| c.0.clone()).collect(),
+            column_types,
             rows: final_rows,
         })
     }
@@ -121,8 +137,33 @@ impl QueryExecutor {
             }
         }
 
+        // Infer types from the values
+        let column_types = row_values.iter().map(|value| {
+            match value {
+                Value::Integer(i) => {
+                    // Use BigInt for values that might be larger than i32
+                    if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
+                        crate::yaml::schema::SqlType::BigInt
+                    } else {
+                        crate::yaml::schema::SqlType::Integer
+                    }
+                },
+                Value::Double(_) | Value::Float(_) => crate::yaml::schema::SqlType::Double,
+                Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
+                Value::Date(_) => crate::yaml::schema::SqlType::Date,
+                Value::Time(_) => crate::yaml::schema::SqlType::Time,
+                Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
+                Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
+                Value::Json(_) => crate::yaml::schema::SqlType::Text,
+                Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
+                Value::Text(_) => crate::yaml::schema::SqlType::Text,
+                Value::Null => crate::yaml::schema::SqlType::Text,
+            }
+        }).collect();
+
         let result = QueryResult {
             columns: columns.clone(),
+            column_types,
             rows: vec![row_values],
         };
         debug!(
@@ -395,6 +436,16 @@ impl QueryExecutor {
                     expr, pattern, negated
                 );
                 self.evaluate_like(expr, pattern, *negated, row, table)
+            }
+            Expr::IsNull(expr) => {
+                debug!("Found IsNull expression: expr={:?}", expr);
+                let value = self.get_expr_value(expr, row, table)?;
+                Ok(matches!(value, Value::Null))
+            }
+            Expr::IsNotNull(expr) => {
+                debug!("Found IsNotNull expression: expr={:?}", expr);
+                let value = self.get_expr_value(expr, row, table)?;
+                Ok(!matches!(value, Value::Null))
             }
             Expr::Nested(inner) => {
                 // Handle parenthesized expressions by evaluating the inner expression
@@ -731,6 +782,215 @@ impl QueryExecutor {
             Err(YamlBaseError::NotImplemented(
                 "Only numeric LIMIT values are supported".to_string(),
             ))
+        }
+    }
+
+    fn is_aggregate_query(&self, select: &Select) -> bool {
+        for item in &select.projection {
+            match item {
+                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                    if self.contains_aggregate_function(expr) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn contains_aggregate_function(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Function(func) => {
+                let func_name = func.name.0.first()
+                    .map(|ident| ident.value.to_uppercase())
+                    .unwrap_or_default();
+                matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+            }
+            _ => false,
+        }
+    }
+
+    async fn execute_aggregate_select(
+        &self,
+        _db: &Database,
+        select: &Select,
+        _query: &Query,
+        table: &Table,
+        table_name: &str,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing aggregate SELECT query");
+
+        // Filter rows based on WHERE clause
+        let filtered_rows = self.filter_rows(table, table_name, &select.selection).await?;
+
+        // Process aggregate functions
+        let mut columns = Vec::new();
+        let mut row_values = Vec::new();
+
+        for (idx, item) in select.projection.iter().enumerate() {
+            match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    let (col_name, value) = self.evaluate_aggregate_expr(expr, &filtered_rows, table, idx)?;
+                    columns.push(col_name);
+                    row_values.push(value);
+                }
+                SelectItem::ExprWithAlias { expr, alias } => {
+                    let (_, value) = self.evaluate_aggregate_expr(expr, &filtered_rows, table, idx)?;
+                    columns.push(alias.value.clone());
+                    row_values.push(value);
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Complex projections in aggregate queries are not supported".to_string(),
+                    ))
+                }
+            }
+        }
+
+        // Determine column types for aggregate results
+        let column_types = select.projection.iter().map(|item| {
+            match item {
+                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                    self.get_aggregate_result_type(expr)
+                }
+                _ => crate::yaml::schema::SqlType::Text,
+            }
+        }).collect();
+
+        Ok(QueryResult {
+            columns,
+            column_types,
+            rows: vec![row_values],
+        })
+    }
+
+    fn get_aggregate_result_type(&self, expr: &Expr) -> crate::yaml::schema::SqlType {
+        match expr {
+            Expr::Function(func) => {
+                let func_name = func.name.0.first()
+                    .map(|ident| ident.value.to_uppercase())
+                    .unwrap_or_default();
+                
+                match func_name.as_str() {
+                    "COUNT" => crate::yaml::schema::SqlType::BigInt, // COUNT returns i64
+                    "SUM" => crate::yaml::schema::SqlType::Text, // We return as formatted text for monetary values
+                    "AVG" => crate::yaml::schema::SqlType::Double,
+                    "MIN" | "MAX" => crate::yaml::schema::SqlType::Text, // Depends on input type, default to text
+                    _ => crate::yaml::schema::SqlType::Text,
+                }
+            }
+            _ => crate::yaml::schema::SqlType::Text,
+        }
+    }
+
+    fn evaluate_aggregate_expr(
+        &self,
+        expr: &Expr,
+        rows: &[&Vec<Value>],
+        table: &Table,
+        _idx: usize,
+    ) -> crate::Result<(String, Value)> {
+        match expr {
+            Expr::Function(func) => {
+                let func_name = func.name.0.first()
+                    .map(|ident| ident.value.to_uppercase())
+                    .unwrap_or_default();
+                
+                match func_name.as_str() {
+                    "COUNT" => {
+                        let count = match &func.args {
+                            FunctionArguments::None => {
+                                // COUNT() - should be an error but treat as COUNT(*)
+                                rows.len() as i64
+                            }
+                            FunctionArguments::List(args) => {
+                                if args.args.is_empty() {
+                                    // COUNT() - should be an error but treat as COUNT(*)
+                                    rows.len() as i64
+                                } else if args.args.len() == 1 {
+                                    match &args.args[0] {
+                                        FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                                            // COUNT(*)
+                                            rows.len() as i64
+                                        }
+                                        FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                            // COUNT(column)
+                                            let mut count = 0i64;
+                                            for row in rows {
+                                                let value = self.get_expr_value(expr, row, table)?;
+                                                if !matches!(value, Value::Null) {
+                                                    count += 1;
+                                                }
+                                            }
+                                            count
+                                        }
+                                        _ => {
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "Unsupported COUNT argument".to_string(),
+                                            ))
+                                        }
+                                    }
+                                } else {
+                                    return Err(YamlBaseError::Database {
+                                        message: "COUNT expects at most one argument".to_string(),
+                                    });
+                                }
+                            }
+                            _ => {
+                                return Err(YamlBaseError::NotImplemented(
+                                    "Unsupported function arguments".to_string(),
+                                ))
+                            }
+                        };
+                        Ok((func_name.clone(), Value::Integer(count)))
+                    }
+                    "SUM" => {
+                        match &func.args {
+                            FunctionArguments::List(args) if args.args.len() == 1 => {
+                                match &args.args[0] {
+                                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                        let mut sum = 0.0;
+                                        for row in rows {
+                                            let value = self.get_expr_value(expr, row, table)?;
+                                            match value {
+                                                Value::Integer(i) => sum += i as f64,
+                                                Value::Double(d) => sum += d,
+                                                Value::Float(f) => sum += f as f64,
+                                                Value::Decimal(d) => sum += d.to_string().parse::<f64>().unwrap_or(0.0),
+                                                Value::Null => {} // Skip NULL values
+                                                _ => {
+                                                    return Err(YamlBaseError::Database {
+                                                        message: "Cannot sum non-numeric values".to_string(),
+                                                    })
+                                                }
+                                            }
+                                        }
+                                        // Return as string with 2 decimal places for monetary values
+                                        Ok((func_name.clone(), Value::Text(format!("{:.2}", sum))))
+                                    }
+                                    _ => {
+                                        return Err(YamlBaseError::NotImplemented(
+                                            "Unsupported SUM argument".to_string(),
+                                        ))
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(YamlBaseError::Database {
+                                    message: "SUM requires exactly one argument".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(
+                        format!("Aggregate function {} not supported", func_name),
+                    )),
+                }
+            }
+            _ => Err(YamlBaseError::NotImplemented(
+                "Only aggregate functions are supported in aggregate queries".to_string(),
+            )),
         }
     }
 }

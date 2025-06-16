@@ -233,7 +233,7 @@ impl MySqlProtocol {
         packet.put_u16_le((capabilities & 0xFFFF) as u16);
 
         // Character set (utf8mb4)
-        packet.put_u8(255);
+        packet.put_u8(33);
 
         // Status flags
         packet.put_u16_le(SERVER_STATUS_AUTOCOMMIT);
@@ -461,6 +461,10 @@ impl MySqlProtocol {
             Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b").unwrap()
         });
         
+        static MAX_ALLOWED_PACKET_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:max_allowed_packet|MAX_ALLOWED_PACKET|Max_Allowed_Packet)\b").unwrap()
+        });
+        
         static SYSTEM_VAR_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap()
         });
@@ -472,6 +476,9 @@ impl MySqlProtocol {
         
         // Handle @@version_comment
         result = VERSION_COMMENT_RE.replace_all(&result, "'1'").to_string();
+        
+        // Handle @@max_allowed_packet - MySQL default is 64MB (67108864 bytes)
+        result = MAX_ALLOWED_PACKET_RE.replace_all(&result, "67108864").to_string();
         
         // Check if we already replaced all instances
         if !result.contains("@@") {
@@ -569,7 +576,7 @@ impl MySqlProtocol {
             col_packet.put_u8(0x0c);
 
             // Character set (utf8mb4)
-            col_packet.put_u16_le(255);
+            col_packet.put_u16_le(33);
 
             // Column length
             col_packet.put_u32_le(255);

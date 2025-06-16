@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -48,26 +48,34 @@ impl PostgresProtocol {
 
         // Main message loop
         loop {
-            buffer.clear();
-
-            // Read message type and length
-            if stream.read_buf(&mut buffer).await? == 0 {
-                info!("Client disconnected");
-                break;
+            // Read more data if buffer is empty
+            if buffer.is_empty() {
+                if stream.read_buf(&mut buffer).await? == 0 {
+                    info!("Client disconnected");
+                    break;
+                }
             }
 
+            // Check if we have enough data for a message header
             if buffer.len() < 5 {
+                // Read more data
+                if stream.read_buf(&mut buffer).await? == 0 {
+                    info!("Client disconnected");
+                    break;
+                }
                 continue;
             }
 
             let msg_type = buffer[0];
             let length = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
 
-            // Read rest of message if needed
-            while buffer.len() < length + 1 {
+            // Check if we have the complete message
+            if buffer.len() < length + 1 {
+                // Read more data
                 if stream.read_buf(&mut buffer).await? == 0 {
                     return Ok(());
                 }
+                continue;
             }
 
             // Process message
@@ -127,6 +135,9 @@ impl PostgresProtocol {
                         .await?;
                 }
             }
+            
+            // Remove the processed message from the buffer
+            buffer.advance(length + 1);
         }
 
         Ok(())
@@ -199,7 +210,8 @@ impl PostgresProtocol {
 
         if buffer.len() >= 5 && buffer[0] == b'p' {
             // Password message
-            let password = self.parse_password_message(&buffer[5..])?;
+            let msg_len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
+            let password = self.parse_password_message(&buffer[5..5 + msg_len - 4])?;
 
             // Verify credentials
             debug!(
@@ -212,6 +224,9 @@ impl PostgresProtocol {
             {
                 state.authenticated = true;
                 self.send_auth_ok(stream, state).await?;
+                
+                // Clear the buffer after processing password message
+                buffer.advance(1 + msg_len);
             } else {
                 self.send_error(stream, "28P01", "Authentication failed")
                     .await?;

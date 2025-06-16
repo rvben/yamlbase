@@ -143,6 +143,7 @@ impl YamlColumn {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlType {
     Integer,
+    BigInt,  // For i64 values like COUNT(*)
     Varchar(usize),
     Text,
     Timestamp,

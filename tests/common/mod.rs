@@ -125,91 +125,120 @@ impl TestServer {
     }
     
     pub async fn new_postgres(db: Database) -> Self {
-        let port = get_free_port();
-        
-        // Write database to temp file
-        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        let yaml_content = format!(
-            "databases:\n  {}:\n",
-            db.name
-        );
-        
-        // Add tables
-        let mut tables_yaml = String::new();
-        for table in db.tables.values() {
-            tables_yaml.push_str(&format!("    {}:\n      columns:\n", table.name));
-            for col in &table.columns {
-                tables_yaml.push_str(&format!("        - name: {}\n", col.name));
-                tables_yaml.push_str(&format!("          type: {:?}\n", col.sql_type).to_lowercase());
-                if col.primary_key {
-                    tables_yaml.push_str("          primary_key: true\n");
-                }
-                if col.nullable {
-                    tables_yaml.push_str("          nullable: true\n");
-                }
-            }
-            tables_yaml.push_str("      data:\n");
-            for row in &table.rows {
-                tables_yaml.push_str("        - ");
-                for (i, (col, val)) in table.columns.iter().zip(row.iter()).enumerate() {
-                    if i > 0 {
-                        tables_yaml.push_str("          ");
-                    }
-                    tables_yaml.push_str(&format!("{}: ", col.name));
-                    match val {
-                        yamlbase::database::Value::Null => tables_yaml.push_str("null"),
-                        yamlbase::database::Value::Integer(i) => tables_yaml.push_str(&i.to_string()),
-                        yamlbase::database::Value::Text(s) => tables_yaml.push_str(&format!("\"{}\"", s)),
-                        yamlbase::database::Value::Boolean(b) => tables_yaml.push_str(&b.to_string()),
-                        _ => tables_yaml.push_str(&format!("{:?}", val)),
-                    }
-                    if i < table.columns.len() - 1 {
-                        tables_yaml.push_str("\n");
-                    }
-                }
-                tables_yaml.push_str("\n");
-            }
-        }
-        
-        let full_yaml = format!("{}{}", yaml_content, tables_yaml);
-        temp_file.write_all(full_yaml.as_bytes()).expect("Failed to write temp file");
-        temp_file.flush().expect("Failed to flush temp file");
-        
-        let yaml_path = temp_file.path().to_str().unwrap().to_string();
-        
-        let process = Command::new("cargo")
-            .args(&[
-                "run",
-                "--",
-                "-f",
-                &yaml_path,
-                "--protocol",
-                "postgres",
-                "-p",
-                &port.to_string(),
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("Failed to start server");
+        // Run the blocking operations in a blocking thread
+        tokio::task::spawn_blocking(move || {
+            let port = get_free_port();
             
-        // Wait for server to be ready
-        wait_for_port(port, Duration::from_secs(10));
-        
-        let config = Arc::new(Config {
-            file: PathBuf::from(yaml_path),
-            port: Some(port),
-            bind_address: "127.0.0.1".to_string(),
-            protocol: Protocol::Postgres,
-            username: "yamlbase".to_string(),
-            password: "password".to_string(),
-            verbose: false,
-            hot_reload: false,
-            log_level: "info".to_string(),
-            database: None,
-        });
-        
-        Self { port, config, process: Some(process), _temp_file: Some(temp_file) }
+            // Write database to temp file
+            let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+            let yaml_content = format!(
+                "database:\n  name: \"{}\"\n  auth:\n    username: \"yamlbase\"\n    password: \"password\"\n\ntables:\n",
+                db.name
+            );
+            
+            // Add tables
+            let mut tables_yaml = String::new();
+            for table in db.tables.values() {
+                tables_yaml.push_str(&format!("  {}:\n    columns:\n", table.name));
+                for col in &table.columns {
+                    // Map sql_type to a SQL column definition string
+                    let type_str = match &col.sql_type {
+                        yamlbase::yaml::schema::SqlType::Integer => {
+                            if col.primary_key {
+                                "INTEGER PRIMARY KEY".to_string()
+                            } else {
+                                "INTEGER".to_string()
+                            }
+                        }
+                        yamlbase::yaml::schema::SqlType::Text => "TEXT".to_string(),
+                        yamlbase::yaml::schema::SqlType::Varchar(n) => format!("VARCHAR({})", n),
+                        yamlbase::yaml::schema::SqlType::Boolean => "BOOLEAN".to_string(),
+                        yamlbase::yaml::schema::SqlType::Date => "DATE".to_string(),
+                        yamlbase::yaml::schema::SqlType::Timestamp => "TIMESTAMP".to_string(),
+                        yamlbase::yaml::schema::SqlType::Float => "FLOAT".to_string(),
+                        yamlbase::yaml::schema::SqlType::Double => "DOUBLE".to_string(),
+                        yamlbase::yaml::schema::SqlType::Decimal(p, s) => format!("DECIMAL({},{})", p, s),
+                        yamlbase::yaml::schema::SqlType::BigInt => "BIGINT".to_string(),
+                        yamlbase::yaml::schema::SqlType::Time => "TIME".to_string(),
+                        yamlbase::yaml::schema::SqlType::Uuid => "UUID".to_string(),
+                        yamlbase::yaml::schema::SqlType::Json => "JSON".to_string(),
+                    };
+                    
+                    let mut col_def = type_str.to_string();
+                    if col.nullable && !col.primary_key {
+                        col_def.push_str(" NULL");
+                    } else if !col.primary_key {
+                        col_def.push_str(" NOT NULL");
+                    }
+                    if col.unique && !col.primary_key {
+                        col_def.push_str(" UNIQUE");
+                    }
+                    
+                    tables_yaml.push_str(&format!("      {}: \"{}\"\n", col.name, col_def));
+                }
+                tables_yaml.push_str("    data:\n");
+                for row in &table.rows {
+                    tables_yaml.push_str("      - ");
+                    for (i, (col, val)) in table.columns.iter().zip(row.iter()).enumerate() {
+                        if i > 0 {
+                            tables_yaml.push_str("        ");
+                        }
+                        tables_yaml.push_str(&format!("{}: ", col.name));
+                        match val {
+                            yamlbase::database::Value::Null => tables_yaml.push_str("null"),
+                            yamlbase::database::Value::Integer(i) => tables_yaml.push_str(&i.to_string()),
+                            yamlbase::database::Value::Text(s) => tables_yaml.push_str(&format!("\"{}\"", s)),
+                            yamlbase::database::Value::Boolean(b) => tables_yaml.push_str(&b.to_string()),
+                            _ => tables_yaml.push_str(&format!("{:?}", val)),
+                        }
+                        if i < table.columns.len() - 1 {
+                            tables_yaml.push_str("\n");
+                        }
+                    }
+                    tables_yaml.push_str("\n");
+                }
+            }
+            
+            let full_yaml = format!("{}{}", yaml_content, tables_yaml);
+            temp_file.write_all(full_yaml.as_bytes()).expect("Failed to write temp file");
+            temp_file.flush().expect("Failed to flush temp file");
+            
+            let yaml_path = temp_file.path().to_str().unwrap().to_string();
+            
+            let process = Command::new("cargo")
+                .args(&[
+                    "run",
+                    "--",
+                    "-f",
+                    &yaml_path,
+                    "--protocol",
+                    "postgres",
+                    "-p",
+                    &port.to_string(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("Failed to start server");
+                
+            // Wait for server to be ready
+            wait_for_port(port, Duration::from_secs(10));
+            
+            let config = Arc::new(Config {
+                file: PathBuf::from(yaml_path),
+                port: Some(port),
+                bind_address: "127.0.0.1".to_string(),
+                protocol: Protocol::Postgres,
+                username: "yamlbase".to_string(),
+                password: "password".to_string(),
+                verbose: false,
+                hot_reload: false,
+                log_level: "info".to_string(),
+                database: None,
+            });
+            
+            Self { port, config, process: Some(process), _temp_file: Some(temp_file) }
+        }).await.expect("Failed to create test server")
     }
     
     pub fn port(&self) -> u16 {
