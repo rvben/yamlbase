@@ -16,18 +16,20 @@ impl TestServer {
         // Create temporary YAML file
         let mut temp_file = NamedTempFile::new().unwrap();
         let yaml_content = r#"
-databases:
-  test_db:
-    users:
-      columns:
-        - name: id
-          type: integer
-          primary_key: true
-        - name: name
-          type: text
-      data:
-        - id: 1
-          name: "Test User"
+database:
+  name: "test_db"
+  auth:
+    username: "root"
+    password: "password"
+
+tables:
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "TEXT"
+    data:
+      - id: 1
+        name: "Test User"
 "#;
         temp_file.write_all(yaml_content.as_bytes()).unwrap();
         temp_file.flush().unwrap();
@@ -116,7 +118,7 @@ fn test_mysql_caching_sha2_authentication() {
     response.extend(&0x00_00_00_01u32.to_le_bytes());
     
     // Character set (utf8mb4)
-    response.push(255);
+    response.push(33);
     
     // Reserved
     response.extend(&[0; 23]);
@@ -147,8 +149,8 @@ fn test_mysql_caching_sha2_authentication() {
         let plugin_data_start = packet[1..].iter().position(|&b| b == 0).unwrap() + 2;
         let new_auth_data = &packet[plugin_data_start..packet.len() - 1];
         
-        // Compute auth response for caching_sha2_password
-        let auth_response = compute_caching_sha2_response("password", new_auth_data);
+        // Compute auth response for caching_sha2_password with wrong password to test full auth
+        let auth_response = compute_caching_sha2_response("wrongpassword", new_auth_data);
         
         // Send auth response
         write_packet(&mut stream, 3, &auth_response);

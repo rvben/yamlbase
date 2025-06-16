@@ -266,6 +266,7 @@ impl Value {
 
     pub fn compare(&self, other: &Value) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering;
+        use rust_decimal::prelude::*;
 
         match (self, other) {
             (Value::Null, Value::Null) => Some(Ordering::Equal),
@@ -282,6 +283,56 @@ impl Value {
             (Value::Date(a), Value::Date(b)) => Some(a.cmp(b)),
             (Value::Time(a), Value::Time(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
+
+            // Handle cross-type numeric comparisons
+            (Value::Integer(a), Value::Double(b)) => (*a as f64).partial_cmp(b),
+            (Value::Double(a), Value::Integer(b)) => a.partial_cmp(&(*b as f64)),
+            (Value::Integer(a), Value::Float(b)) => (*a as f32).partial_cmp(b),
+            (Value::Float(a), Value::Integer(b)) => a.partial_cmp(&(*b as f32)),
+            (Value::Float(a), Value::Double(b)) => (*a as f64).partial_cmp(b),
+            (Value::Double(a), Value::Float(b)) => a.partial_cmp(&(*b as f64)),
+            
+            // Handle Decimal comparisons with other numeric types
+            (Value::Decimal(a), Value::Integer(b)) => {
+                match Decimal::from_i64(*b) {
+                    Some(b_decimal) => Some(a.cmp(&b_decimal)),
+                    None => None,
+                }
+            },
+            (Value::Integer(a), Value::Decimal(b)) => {
+                match Decimal::from_i64(*a) {
+                    Some(a_decimal) => Some(a_decimal.cmp(b)),
+                    None => None,
+                }
+            },
+            (Value::Decimal(a), Value::Double(b)) => {
+                // Convert double to decimal for comparison
+                match Decimal::from_f64(*b) {
+                    Some(b_decimal) => Some(a.cmp(&b_decimal)),
+                    None => None,
+                }
+            },
+            (Value::Double(a), Value::Decimal(b)) => {
+                // Convert double to decimal for comparison
+                match Decimal::from_f64(*a) {
+                    Some(a_decimal) => Some(a_decimal.cmp(b)),
+                    None => None,
+                }
+            },
+            (Value::Decimal(a), Value::Float(b)) => {
+                // Convert float to decimal for comparison
+                match Decimal::from_f32(*b) {
+                    Some(b_decimal) => Some(a.cmp(&b_decimal)),
+                    None => None,
+                }
+            },
+            (Value::Float(a), Value::Decimal(b)) => {
+                // Convert float to decimal for comparison
+                match Decimal::from_f32(*a) {
+                    Some(a_decimal) => Some(a_decimal.cmp(b)),
+                    None => None,
+                }
+            },
 
             _ => None,
         }
