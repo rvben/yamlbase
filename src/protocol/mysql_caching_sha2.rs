@@ -1,5 +1,5 @@
 use bytes::{BufMut, BytesMut};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::debug;
@@ -37,7 +37,10 @@ impl CachingSha2Auth {
         expected_password: &str,
         auth_response: Vec<u8>,
     ) -> crate::Result<bool> {
-        debug!("Starting caching_sha2_password authentication for user: {}", username);
+        debug!(
+            "Starting caching_sha2_password authentication for user: {}",
+            username
+        );
 
         // Verify username
         if username != expected_username {
@@ -48,15 +51,16 @@ impl CachingSha2Auth {
         // If client sent empty auth response, we need to request full authentication
         if auth_response.is_empty() && !password.is_empty() {
             debug!("Empty auth response, requesting full authentication");
-            self.send_auth_more_data(stream, sequence_id, PERFORM_FULL_AUTH).await?;
-            
+            self.send_auth_more_data(stream, sequence_id, PERFORM_FULL_AUTH)
+                .await?;
+
             // Read the password
             let password_packet = self.read_packet(stream, sequence_id).await?;
             if password_packet.is_empty() {
                 debug!("Empty password packet received");
                 return Ok(false);
             }
-            
+
             // Remove null terminator if present
             let client_password = if password_packet.last() == Some(&0) {
                 std::str::from_utf8(&password_packet[..password_packet.len() - 1])
@@ -65,33 +69,35 @@ impl CachingSha2Auth {
                 std::str::from_utf8(&password_packet)
                     .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in password".to_string()))?
             };
-            
+
             debug!("Received password in clear text");
             return Ok(client_password == expected_password);
         }
 
         // Compute expected auth response
         let expected = compute_auth_response(expected_password, &self.auth_data);
-        
+
         // Check if auth response matches
         if auth_response == expected {
             debug!("Fast authentication successful");
             // Send fast auth success
-            self.send_auth_more_data(stream, sequence_id, FAST_AUTH_SUCCESS).await?;
+            self.send_auth_more_data(stream, sequence_id, FAST_AUTH_SUCCESS)
+                .await?;
             return Ok(true);
         }
 
         // Auth failed, request full authentication
         debug!("Fast authentication failed, requesting full authentication");
-        self.send_auth_more_data(stream, sequence_id, PERFORM_FULL_AUTH).await?;
-        
+        self.send_auth_more_data(stream, sequence_id, PERFORM_FULL_AUTH)
+            .await?;
+
         // Read the password in clear text
         let password_packet = self.read_packet(stream, sequence_id).await?;
         if password_packet.is_empty() {
             debug!("Empty password packet received");
             return Ok(false);
         }
-        
+
         // Remove null terminator if present
         let client_password = if password_packet.last() == Some(&0) {
             std::str::from_utf8(&password_packet[..password_packet.len() - 1])
@@ -100,7 +106,7 @@ impl CachingSha2Auth {
             std::str::from_utf8(&password_packet)
                 .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in password".to_string()))?
         };
-        
+
         debug!("Checking clear text password");
         Ok(client_password == expected_password)
     }
@@ -115,7 +121,7 @@ impl CachingSha2Auth {
         let mut packet = BytesMut::new();
         packet.put_u8(AUTH_MORE_DATA);
         packet.put_u8(status);
-        
+
         self.write_packet(stream, sequence_id, &packet).await
     }
 
@@ -126,14 +132,14 @@ impl CachingSha2Auth {
         sequence_id: &mut u8,
     ) -> crate::Result<()> {
         debug!("Sending auth switch request for caching_sha2_password");
-        
+
         let mut packet = BytesMut::new();
         packet.put_u8(AUTH_SWITCH_REQUEST);
         packet.put_slice(CACHING_SHA2_PLUGIN_NAME.as_bytes());
         packet.put_u8(0); // null terminator
         packet.put_slice(&self.auth_data);
         packet.put_u8(0); // null terminator
-        
+
         self.write_packet(stream, sequence_id, &packet).await
     }
 
@@ -235,10 +241,10 @@ mod tests {
         // Test with known values
         let auth_data = b"12345678901234567890";
         let password = "password";
-        
+
         let response = compute_auth_response(password, auth_data);
         assert_eq!(response.len(), 32); // SHA256 produces 32 bytes
-        
+
         // Empty password should return empty response
         let empty_response = compute_auth_response("", auth_data);
         assert!(empty_response.is_empty());

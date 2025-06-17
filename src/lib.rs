@@ -9,7 +9,6 @@ pub mod yaml;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
-
 pub use config::Config;
 pub use database::Database;
 pub use server::Server;

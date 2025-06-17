@@ -5,11 +5,13 @@ use tokio::net::TcpStream;
 use tracing::debug;
 
 use crate::database::Value;
-use crate::sql::{parse_sql, QueryExecutor};
 use crate::sql::executor::QueryResult;
+use crate::sql::{parse_sql, QueryExecutor};
 use crate::yaml::schema::SqlType;
 use crate::YamlBaseError;
-use sqlparser::ast::{Expr, Statement, Value as SqlValue, SelectItem, FunctionArguments, FunctionArg, FunctionArgExpr};
+use sqlparser::ast::{
+    Expr, FunctionArg, FunctionArgExpr, FunctionArguments, SelectItem, Statement, Value as SqlValue,
+};
 
 #[derive(Debug, Clone)]
 pub struct PreparedStatement {
@@ -40,50 +42,56 @@ impl ExtendedProtocol {
         }
     }
 
-    pub async fn handle_parse(
-        &mut self,
-        stream: &mut TcpStream,
-        data: &[u8],
-    ) -> crate::Result<()> {
+    pub async fn handle_parse(&mut self, stream: &mut TcpStream, data: &[u8]) -> crate::Result<()> {
         debug!("Handling Parse message");
-        
+
         let mut pos = 0;
-        
+
         // Read statement name
-        let name_end = data[pos..].iter().position(|&b| b == 0).unwrap_or(data.len() - pos);
+        let name_end = data[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(data.len() - pos);
         let name = std::str::from_utf8(&data[pos..pos + name_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in statement name".to_string()))?
             .to_string();
         pos += name_end + 1;
-        
+
         // Read query
-        let query_end = data[pos..].iter().position(|&b| b == 0).unwrap_or(data.len() - pos);
+        let query_end = data[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(data.len() - pos);
         let query = std::str::from_utf8(&data[pos..pos + query_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in query".to_string()))?
             .to_string();
         pos += query_end + 1;
-        
+
         // Read parameter type count
         if pos + 2 > data.len() {
-            return Err(YamlBaseError::Protocol("Incomplete parse message".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Incomplete parse message".to_string(),
+            ));
         }
         let param_count = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
         pos += 2;
-        
+
         // Read parameter types
         let mut parameter_types = Vec::new();
         for _ in 0..param_count {
             if pos + 4 > data.len() {
-                return Err(YamlBaseError::Protocol("Incomplete parameter types".to_string()));
+                return Err(YamlBaseError::Protocol(
+                    "Incomplete parameter types".to_string(),
+                ));
             }
             let oid = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
             parameter_types.push(oid_to_sql_type(oid));
             pos += 4;
         }
-        
+
         // Parse the SQL
         let parsed_statements = parse_sql(&query)?;
-        
+
         // If no parameter types were provided, we need to infer them from the query
         if parameter_types.is_empty() && !parsed_statements.is_empty() {
             if let Statement::Query(query_ref) = &parsed_statements[0] {
@@ -92,9 +100,13 @@ impl ExtendedProtocol {
                 parameter_types = inferred_types;
             }
         }
-        
-        debug!("PreparedStatement '{}' has {} parameter types", name, parameter_types.len());
-        
+
+        debug!(
+            "PreparedStatement '{}' has {} parameter types",
+            name,
+            parameter_types.len()
+        );
+
         // Store prepared statement
         let stmt = PreparedStatement {
             name: name.clone(),
@@ -102,112 +114,133 @@ impl ExtendedProtocol {
             parameter_types,
             parsed_statements,
         };
-        
+
         self.prepared_statements.insert(name, stmt);
-        
+
         // Send ParseComplete
         let mut buf = BytesMut::new();
         buf.put_u8(b'1');
         buf.put_u32(4);
         stream.write_all(&buf).await?;
-        
+
         Ok(())
     }
 
-    pub async fn handle_bind(
-        &mut self,
-        stream: &mut TcpStream,
-        data: &[u8],
-    ) -> crate::Result<()> {
+    pub async fn handle_bind(&mut self, stream: &mut TcpStream, data: &[u8]) -> crate::Result<()> {
         debug!("Handling Bind message");
-        
+
         let mut pos = 0;
-        
+
         // Read portal name
-        let portal_name_end = data[pos..].iter().position(|&b| b == 0).unwrap_or(data.len() - pos);
+        let portal_name_end = data[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(data.len() - pos);
         let portal_name = std::str::from_utf8(&data[pos..pos + portal_name_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in portal name".to_string()))?
             .to_string();
         pos += portal_name_end + 1;
-        
+
         // Read statement name
-        let stmt_name_end = data[pos..].iter().position(|&b| b == 0).unwrap_or(data.len() - pos);
+        let stmt_name_end = data[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(data.len() - pos);
         let stmt_name = std::str::from_utf8(&data[pos..pos + stmt_name_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in statement name".to_string()))?
             .to_string();
         pos += stmt_name_end + 1;
-        
+
         // Get the prepared statement
-        let statement = self.prepared_statements.get(&stmt_name)
-            .ok_or_else(|| YamlBaseError::Protocol(format!("Unknown prepared statement: {}", stmt_name)))?
+        let statement = self
+            .prepared_statements
+            .get(&stmt_name)
+            .ok_or_else(|| {
+                YamlBaseError::Protocol(format!("Unknown prepared statement: {}", stmt_name))
+            })?
             .clone();
-        
+
         // Read parameter format codes
         if pos + 2 > data.len() {
-            return Err(YamlBaseError::Protocol("Incomplete bind message".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Incomplete bind message".to_string(),
+            ));
         }
         let format_code_count = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
         pos += 2;
-        
+
         let mut _format_codes = Vec::new();
         for _ in 0..format_code_count {
             if pos + 2 > data.len() {
-                return Err(YamlBaseError::Protocol("Incomplete format codes".to_string()));
+                return Err(YamlBaseError::Protocol(
+                    "Incomplete format codes".to_string(),
+                ));
             }
             let format = u16::from_be_bytes([data[pos], data[pos + 1]]);
             _format_codes.push(format);
             pos += 2;
         }
-        
+
         // Read parameter values
         if pos + 2 > data.len() {
-            return Err(YamlBaseError::Protocol("Incomplete parameter count".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Incomplete parameter count".to_string(),
+            ));
         }
         let param_value_count = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
         pos += 2;
-        
+
         let mut parameters = Vec::new();
         for i in 0..param_value_count {
             if pos + 4 > data.len() {
-                return Err(YamlBaseError::Protocol("Incomplete parameter value".to_string()));
+                return Err(YamlBaseError::Protocol(
+                    "Incomplete parameter value".to_string(),
+                ));
             }
-            let length = i32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+            let length =
+                i32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
             pos += 4;
-            
+
             if length == -1 {
                 parameters.push(Value::Null);
             } else {
                 let length = length as usize;
                 if pos + length > data.len() {
-                    return Err(YamlBaseError::Protocol("Incomplete parameter data".to_string()));
+                    return Err(YamlBaseError::Protocol(
+                        "Incomplete parameter data".to_string(),
+                    ));
                 }
                 let value_data = &data[pos..pos + length];
                 pos += length;
-                
+
                 // Convert based on parameter type
                 let sql_type = statement.parameter_types.get(i).unwrap_or(&SqlType::Text);
                 let value = parse_parameter_value(value_data, sql_type)?;
                 parameters.push(value);
             }
         }
-        
+
         // Read result format codes
         if pos + 2 > data.len() {
-            return Err(YamlBaseError::Protocol("Incomplete result format count".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Incomplete result format count".to_string(),
+            ));
         }
         let result_format_count = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
         pos += 2;
-        
+
         let mut result_formats = Vec::new();
         for _ in 0..result_format_count {
             if pos + 2 > data.len() {
-                return Err(YamlBaseError::Protocol("Incomplete result format codes".to_string()));
+                return Err(YamlBaseError::Protocol(
+                    "Incomplete result format codes".to_string(),
+                ));
             }
             let format = u16::from_be_bytes([data[pos], data[pos + 1]]);
             result_formats.push(format);
             pos += 2;
         }
-        
+
         // Store portal
         let portal = Portal {
             name: portal_name.clone(),
@@ -215,15 +248,15 @@ impl ExtendedProtocol {
             parameters,
             result_formats,
         };
-        
+
         self.portals.insert(portal_name, portal);
-        
+
         // Send BindComplete
         let mut buf = BytesMut::new();
         buf.put_u8(b'2');
         buf.put_u32(4);
         stream.write_all(&buf).await?;
-        
+
         Ok(())
     }
 
@@ -234,16 +267,21 @@ impl ExtendedProtocol {
         executor: &QueryExecutor,
     ) -> crate::Result<()> {
         debug!("Handling Describe message with {} bytes", data.len());
-        
+
         if data.is_empty() {
-            return Err(YamlBaseError::Protocol("Empty describe message".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Empty describe message".to_string(),
+            ));
         }
-        
+
         let describe_type = data[0];
-        let name_end = data[1..].iter().position(|&b| b == 0).unwrap_or(data.len() - 1);
+        let name_end = data[1..]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(data.len() - 1);
         let name = std::str::from_utf8(&data[1..1 + name_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in describe name".to_string()))?;
-        
+
         match describe_type {
             b'S' => {
                 // Describe statement
@@ -257,14 +295,19 @@ impl ExtendedProtocol {
                         buf.put_u32(sql_type_to_oid(param_type));
                     }
                     stream.write_all(&buf).await?;
-                    
+
                     // For SELECT queries, we need to describe the result
                     if !stmt.parsed_statements.is_empty() {
-                        if let sqlparser::ast::Statement::Query(query) = &stmt.parsed_statements[0] {
+                        if let sqlparser::ast::Statement::Query(query) = &stmt.parsed_statements[0]
+                        {
                             // Try to extract column information from the query
                             if let sqlparser::ast::SetExpr::Select(select) = &*query.body {
-                                let (columns, types) = extract_columns_and_types_from_select(select, executor);
-                                send_row_description_for_columns_with_types(stream, &columns, &types).await?;
+                                let (columns, types) =
+                                    extract_columns_and_types_from_select(select, executor);
+                                send_row_description_for_columns_with_types(
+                                    stream, &columns, &types,
+                                )
+                                .await?;
                             } else {
                                 // Send NoData if we can't determine columns
                                 buf.clear();
@@ -281,7 +324,10 @@ impl ExtendedProtocol {
                         }
                     }
                 } else {
-                    return Err(YamlBaseError::Protocol(format!("Unknown statement: {}", name)));
+                    return Err(YamlBaseError::Protocol(format!(
+                        "Unknown statement: {}",
+                        name
+                    )));
                 }
             }
             b'P' => {
@@ -289,8 +335,13 @@ impl ExtendedProtocol {
                 if let Some(portal) = self.portals.get(name) {
                     // For SELECT queries, describe the result
                     if !portal.statement.parsed_statements.is_empty() {
-                        if let sqlparser::ast::Statement::Query(_) = &portal.statement.parsed_statements[0] {
-                            match executor.execute(&portal.statement.parsed_statements[0]).await {
+                        if let sqlparser::ast::Statement::Query(_) =
+                            &portal.statement.parsed_statements[0]
+                        {
+                            match executor
+                                .execute(&portal.statement.parsed_statements[0])
+                                .await
+                            {
                                 Ok(result) => {
                                     send_row_description(stream, &result).await?;
                                 }
@@ -315,10 +366,13 @@ impl ExtendedProtocol {
                 }
             }
             _ => {
-                return Err(YamlBaseError::Protocol(format!("Unknown describe type: {}", describe_type as char)));
+                return Err(YamlBaseError::Protocol(format!(
+                    "Unknown describe type: {}",
+                    describe_type as char
+                )));
             }
         }
-        
+
         Ok(())
     }
 
@@ -329,41 +383,54 @@ impl ExtendedProtocol {
         executor: &QueryExecutor,
     ) -> crate::Result<()> {
         debug!("Handling Execute message");
-        
+
         let mut pos = 0;
-        
+
         // Read portal name
-        let name_end = data[pos..].iter().position(|&b| b == 0).unwrap_or(data.len() - pos);
+        let name_end = data[pos..]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(data.len() - pos);
         let portal_name = std::str::from_utf8(&data[pos..pos + name_end])
             .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in portal name".to_string()))?;
         pos += name_end + 1;
-        
+
         // Read row limit
         if pos + 4 > data.len() {
-            return Err(YamlBaseError::Protocol("Incomplete execute message".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Incomplete execute message".to_string(),
+            ));
         }
-        let _row_limit = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-        
+        let _row_limit =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+
         // Get portal
-        let portal = self.portals.get(portal_name)
+        let portal = self
+            .portals
+            .get(portal_name)
             .ok_or_else(|| YamlBaseError::Protocol(format!("Unknown portal: {}", portal_name)))?;
-        
+
         // Execute the statement with parameter substitution
         if !portal.statement.parsed_statements.is_empty() {
             // Clone the statement and substitute parameters
             let mut statement = portal.statement.parsed_statements[0].clone();
             substitute_parameters(&mut statement, &portal.parameters)?;
-            
+
             match executor.execute(&statement).await {
                 Ok(result) => {
-                    debug!("Execute result: {} rows, {} columns: {:?}", result.rows.len(), result.columns.len(), result.columns);
+                    debug!(
+                        "Execute result: {} rows, {} columns: {:?}",
+                        result.rows.len(),
+                        result.columns.len(),
+                        result.columns
+                    );
                     if !result.rows.is_empty() {
                         debug!("First row: {:?}", result.rows[0]);
                     }
-                    
+
                     // Pass the result formats from the portal
                     send_data_rows(stream, &result, &portal.result_formats).await?;
-                    
+
                     // Send CommandComplete
                     let mut buf = BytesMut::new();
                     buf.put_u8(b'C');
@@ -378,20 +445,20 @@ impl ExtendedProtocol {
                 }
             }
         }
-        
+
         Ok(())
     }
 
     pub async fn handle_sync(&self, stream: &mut TcpStream) -> crate::Result<()> {
         debug!("Handling Sync message");
-        
+
         // Send ReadyForQuery
         let mut buf = BytesMut::new();
         buf.put_u8(b'Z');
         buf.put_u32(5);
         buf.put_u8(b'I'); // Idle
         stream.write_all(&buf).await?;
-        
+
         Ok(())
     }
 
@@ -407,7 +474,7 @@ impl ExtendedProtocol {
 async fn send_row_description(stream: &mut TcpStream, result: &QueryResult) -> crate::Result<()> {
     let mut buf = BytesMut::new();
     buf.put_u8(b'T');
-    
+
     // Calculate length
     let mut length = 6; // 4 bytes for length + 2 bytes for field count
     for col in &result.columns {
@@ -415,14 +482,14 @@ async fn send_row_description(stream: &mut TcpStream, result: &QueryResult) -> c
     }
     buf.put_u32(length as u32);
     buf.put_u16(result.columns.len() as u16);
-    
+
     // Send field descriptions
     for (i, col) in result.columns.iter().enumerate() {
         buf.put_slice(col.as_bytes());
         buf.put_u8(0); // Null terminator
         buf.put_u32(0); // Table OID
         buf.put_u16(i as u16); // Column number
-        
+
         // Get the type OID from column_types if available
         let type_oid = if i < result.column_types.len() {
             sql_type_to_oid(&result.column_types[i])
@@ -430,20 +497,24 @@ async fn send_row_description(stream: &mut TcpStream, result: &QueryResult) -> c
             25 // Default to text
         };
         buf.put_u32(type_oid);
-        
+
         buf.put_i16(-1); // Type size
         buf.put_i32(-1); // Type modifier
         buf.put_i16(0); // Format code (text)
     }
-    
+
     stream.write_all(&buf).await?;
     Ok(())
 }
 
-async fn send_row_description_for_columns_with_types(stream: &mut TcpStream, columns: &[String], types: &[SqlType]) -> crate::Result<()> {
+async fn send_row_description_for_columns_with_types(
+    stream: &mut TcpStream,
+    columns: &[String],
+    types: &[SqlType],
+) -> crate::Result<()> {
     let mut buf = BytesMut::new();
     buf.put_u8(b'T');
-    
+
     // Calculate length
     let mut length = 6; // 4 bytes for length + 2 bytes for field count
     for col in columns {
@@ -451,14 +522,14 @@ async fn send_row_description_for_columns_with_types(stream: &mut TcpStream, col
     }
     buf.put_u32(length as u32);
     buf.put_u16(columns.len() as u16);
-    
+
     // Send field descriptions
     for (i, col) in columns.iter().enumerate() {
         buf.put_slice(col.as_bytes());
         buf.put_u8(0); // Null terminator
         buf.put_u32(0); // Table OID
         buf.put_u16(i as u16); // Column number
-        
+
         // Get the type OID from types if available
         let type_oid = if i < types.len() {
             sql_type_to_oid(&types[i])
@@ -466,20 +537,23 @@ async fn send_row_description_for_columns_with_types(stream: &mut TcpStream, col
             25 // Default to text
         };
         buf.put_u32(type_oid);
-        
+
         buf.put_i16(-1); // Type size
         buf.put_i32(-1); // Type modifier
         buf.put_i16(0); // Format code (text)
     }
-    
+
     stream.write_all(&buf).await?;
     Ok(())
 }
 
-fn extract_columns_and_types_from_select(select: &sqlparser::ast::Select, executor: &QueryExecutor) -> (Vec<String>, Vec<SqlType>) {
+fn extract_columns_and_types_from_select(
+    select: &sqlparser::ast::Select,
+    executor: &QueryExecutor,
+) -> (Vec<String>, Vec<SqlType>) {
     let mut columns = Vec::new();
     let mut types = Vec::new();
-    
+
     for item in &select.projection {
         match item {
             sqlparser::ast::SelectItem::UnnamedExpr(expr) => {
@@ -490,10 +564,13 @@ fn extract_columns_and_types_from_select(select: &sqlparser::ast::Select, execut
                         types.push(infer_type_from_column_name(&ident.value));
                     }
                     Expr::Function(func) => {
-                        let func_name = func.name.0.first()
+                        let func_name = func
+                            .name
+                            .0
+                            .first()
                             .map(|ident| ident.value.to_uppercase())
                             .unwrap_or_default();
-                        
+
                         // For aggregate functions, we know the result type
                         match func_name.as_str() {
                             "COUNT" => {
@@ -526,10 +603,13 @@ fn extract_columns_and_types_from_select(select: &sqlparser::ast::Select, execut
                 // Try to determine type from expression
                 match expr {
                     Expr::Function(func) => {
-                        let func_name = func.name.0.first()
+                        let func_name = func
+                            .name
+                            .0
+                            .first()
                             .map(|ident| ident.value.to_uppercase())
                             .unwrap_or_default();
-                        
+
                         match func_name.as_str() {
                             "COUNT" => types.push(SqlType::BigInt), // COUNT returns i64
                             "SUM" => types.push(SqlType::Text),
@@ -562,7 +642,7 @@ fn extract_columns_and_types_from_select(select: &sqlparser::ast::Select, execut
             }
         }
     }
-    
+
     (columns, types)
 }
 
@@ -590,11 +670,15 @@ fn get_table_name_from_relation(relation: &sqlparser::ast::TableFactor) -> Optio
     }
 }
 
-async fn send_data_rows(stream: &mut TcpStream, result: &QueryResult, result_formats: &[u16]) -> crate::Result<()> {
+async fn send_data_rows(
+    stream: &mut TcpStream,
+    result: &QueryResult,
+    result_formats: &[u16],
+) -> crate::Result<()> {
     for row in &result.rows {
         let mut buf = BytesMut::new();
         buf.put_u8(b'D');
-        
+
         // First pass: calculate row length
         let mut row_length = 6; // 4 bytes for length + 2 bytes for field count
         for (col_idx, val) in row.iter().enumerate() {
@@ -611,7 +695,7 @@ async fn send_data_rows(stream: &mut TcpStream, result: &QueryResult, result_for
                 } else {
                     0 // Default to text if not specified
                 };
-                
+
                 if format == 1 {
                     // Binary format
                     match val {
@@ -640,10 +724,10 @@ async fn send_data_rows(stream: &mut TcpStream, result: &QueryResult, result_for
                 }
             }
         }
-        
+
         buf.put_u32(row_length as u32);
         buf.put_u16(row.len() as u16);
-        
+
         // Second pass: send field values
         for (col_idx, val) in row.iter().enumerate() {
             if matches!(val, Value::Null) {
@@ -659,7 +743,7 @@ async fn send_data_rows(stream: &mut TcpStream, result: &QueryResult, result_for
                 } else {
                     0 // Default to text if not specified
                 };
-                
+
                 if format == 1 {
                     // Binary format
                     match val {
@@ -709,66 +793,66 @@ async fn send_data_rows(stream: &mut TcpStream, result: &QueryResult, result_for
                 }
             }
         }
-        
+
         stream.write_all(&buf).await?;
     }
     Ok(())
 }
 
-async fn send_error_response(stream: &mut TcpStream, code: &str, message: &str) -> crate::Result<()> {
+async fn send_error_response(
+    stream: &mut TcpStream,
+    code: &str,
+    message: &str,
+) -> crate::Result<()> {
     let mut buf = BytesMut::new();
     buf.put_u8(b'E');
-    
-    let error_fields = vec![
-        (b'S', "ERROR"),
-        (b'C', code),
-        (b'M', message),
-    ];
-    
+
+    let error_fields = vec![(b'S', "ERROR"), (b'C', code), (b'M', message)];
+
     let mut length = 4; // Length field
     for (_, val) in &error_fields {
         length += 1 + val.len() + 1; // Field type + value + null
     }
     length += 1; // Final null
-    
+
     buf.put_u32(length as u32);
-    
+
     for (field_type, val) in error_fields {
         buf.put_u8(field_type);
         buf.put_slice(val.as_bytes());
         buf.put_u8(0);
     }
     buf.put_u8(0); // End of fields
-    
+
     stream.write_all(&buf).await?;
     Ok(())
 }
 
 fn oid_to_sql_type(oid: u32) -> SqlType {
     match oid {
-        16 => SqlType::Boolean,      // bool
-        20 => SqlType::BigInt,       // int8
-        21 => SqlType::Integer,      // int2
-        23 => SqlType::Integer,      // int4
-        25 => SqlType::Text,         // text
-        700 => SqlType::Float,       // float4
-        701 => SqlType::Double,      // float8
-        1043 => SqlType::Varchar(255), // varchar
-        1082 => SqlType::Date,       // date
-        1083 => SqlType::Time,       // time
-        1114 => SqlType::Timestamp,  // timestamp
+        16 => SqlType::Boolean,          // bool
+        20 => SqlType::BigInt,           // int8
+        21 => SqlType::Integer,          // int2
+        23 => SqlType::Integer,          // int4
+        25 => SqlType::Text,             // text
+        700 => SqlType::Float,           // float4
+        701 => SqlType::Double,          // float8
+        1043 => SqlType::Varchar(255),   // varchar
+        1082 => SqlType::Date,           // date
+        1083 => SqlType::Time,           // time
+        1114 => SqlType::Timestamp,      // timestamp
         1700 => SqlType::Decimal(38, 0), // numeric
-        2950 => SqlType::Uuid,       // uuid
-        3802 => SqlType::Json,       // jsonb
-        _ => SqlType::Text,          // Default to text
+        2950 => SqlType::Uuid,           // uuid
+        3802 => SqlType::Json,           // jsonb
+        _ => SqlType::Text,              // Default to text
     }
 }
 
 fn sql_type_to_oid(sql_type: &SqlType) -> u32 {
     match sql_type {
         SqlType::Boolean => 16,
-        SqlType::Integer => 23,  // int4 - PostgreSQL INTEGER type
-        SqlType::BigInt => 20,   // int8 - PostgreSQL BIGINT type
+        SqlType::Integer => 23, // int4 - PostgreSQL INTEGER type
+        SqlType::BigInt => 20,  // int8 - PostgreSQL BIGINT type
         SqlType::Float => 700,
         SqlType::Double => 701,
         SqlType::Decimal(_, _) => 1700,
@@ -788,13 +872,18 @@ fn substitute_parameters(statement: &mut Statement, parameters: &[Value]) -> cra
             substitute_parameters_in_query(query, parameters)?;
         }
         _ => {
-            return Err(YamlBaseError::Protocol("Parameter substitution only supported for queries".to_string()));
+            return Err(YamlBaseError::Protocol(
+                "Parameter substitution only supported for queries".to_string(),
+            ));
         }
     }
     Ok(())
 }
 
-fn substitute_parameters_in_query(query: &mut sqlparser::ast::Query, parameters: &[Value]) -> crate::Result<()> {
+fn substitute_parameters_in_query(
+    query: &mut sqlparser::ast::Query,
+    parameters: &[Value],
+) -> crate::Result<()> {
     if let sqlparser::ast::SetExpr::Select(select) = &mut *query.body {
         if let Some(selection) = &mut select.selection {
             substitute_parameters_in_expr(selection, parameters)?;
@@ -813,10 +902,16 @@ fn substitute_parameters_in_expr(expr: &mut Expr, parameters: &[Value]) -> crate
                         let param_value = &parameters[param_idx - 1];
                         *expr = value_to_sql_expr(param_value);
                     } else {
-                        return Err(YamlBaseError::Protocol(format!("Invalid parameter index: ${}", param_idx)));
+                        return Err(YamlBaseError::Protocol(format!(
+                            "Invalid parameter index: ${}",
+                            param_idx
+                        )));
                     }
                 } else {
-                    return Err(YamlBaseError::Protocol(format!("Invalid placeholder format: {}", s)));
+                    return Err(YamlBaseError::Protocol(format!(
+                        "Invalid placeholder format: {}",
+                        s
+                    )));
                 }
             }
         }
@@ -833,12 +928,19 @@ fn substitute_parameters_in_expr(expr: &mut Expr, parameters: &[Value]) -> crate
                 substitute_parameters_in_expr(item, parameters)?;
             }
         }
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             substitute_parameters_in_expr(expr, parameters)?;
             substitute_parameters_in_expr(low, parameters)?;
             substitute_parameters_in_expr(high, parameters)?;
         }
-        Expr::Case { operand, conditions, results, else_result } => {
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
             if let Some(op) = operand {
                 substitute_parameters_in_expr(op, parameters)?;
             }
@@ -886,12 +988,12 @@ fn value_to_sql_expr(value: &Value) -> Expr {
 
 fn infer_parameter_types(query: &sqlparser::ast::Query) -> Vec<SqlType> {
     let mut parameter_types = std::collections::HashMap::new();
-    
+
     if let sqlparser::ast::SetExpr::Select(select) = &*query.body {
         if let Some(selection) = &select.selection {
             infer_types_in_expr(selection, &mut parameter_types);
         }
-        
+
         // Also check projection for parameters in aggregate functions
         for item in &select.projection {
             match item {
@@ -902,7 +1004,7 @@ fn infer_parameter_types(query: &sqlparser::ast::Query) -> Vec<SqlType> {
             }
         }
     }
-    
+
     // Convert HashMap to Vec, using the parameter index as the key
     let max_param = parameter_types.keys().max().copied().unwrap_or(0);
     let mut result = Vec::new();
@@ -912,17 +1014,20 @@ fn infer_parameter_types(query: &sqlparser::ast::Query) -> Vec<SqlType> {
     result
 }
 
-fn infer_types_in_expr(expr: &Expr, parameter_types: &mut std::collections::HashMap<usize, SqlType>) {
+fn infer_types_in_expr(
+    expr: &Expr,
+    parameter_types: &mut std::collections::HashMap<usize, SqlType>,
+) {
     match expr {
         Expr::BinaryOp { left, op, right } => {
             // For comparison operators, try to infer parameter type from the other side
             match op {
-                sqlparser::ast::BinaryOperator::Eq | 
-                sqlparser::ast::BinaryOperator::NotEq |
-                sqlparser::ast::BinaryOperator::Lt |
-                sqlparser::ast::BinaryOperator::LtEq |
-                sqlparser::ast::BinaryOperator::Gt |
-                sqlparser::ast::BinaryOperator::GtEq => {
+                sqlparser::ast::BinaryOperator::Eq
+                | sqlparser::ast::BinaryOperator::NotEq
+                | sqlparser::ast::BinaryOperator::Lt
+                | sqlparser::ast::BinaryOperator::LtEq
+                | sqlparser::ast::BinaryOperator::Gt
+                | sqlparser::ast::BinaryOperator::GtEq => {
                     // If one side is a parameter and the other is a column, infer type
                     if let Expr::Value(SqlValue::Placeholder(s)) = &**left {
                         if let Some(num_str) = s.strip_prefix('$') {
@@ -960,12 +1065,19 @@ fn infer_types_in_expr(expr: &Expr, parameter_types: &mut std::collections::Hash
                 infer_types_in_expr(item, parameter_types);
             }
         }
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             infer_types_in_expr(expr, parameter_types);
             infer_types_in_expr(low, parameter_types);
             infer_types_in_expr(high, parameter_types);
         }
-        Expr::Case { operand, conditions, results, else_result } => {
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
             if let Some(op) = operand {
                 infer_types_in_expr(op, parameter_types);
             }
@@ -988,7 +1100,7 @@ fn infer_types_in_expr(expr: &Expr, parameter_types: &mut std::collections::Hash
         Expr::Like { expr, pattern, .. } => {
             // For LIKE expressions, both sides should be text
             infer_types_in_expr(expr, parameter_types);
-            
+
             // If the pattern is a parameter, mark it as text
             if let Expr::Value(SqlValue::Placeholder(s)) = &**pattern {
                 if let Some(num_str) = s.strip_prefix('$') {
@@ -1011,8 +1123,12 @@ fn infer_type_from_expr(expr: &Expr) -> Option<SqlType> {
             match ident.value.to_lowercase().as_str() {
                 "age" | "id" | "count" | "quantity" | "value" => Some(SqlType::Integer),
                 "price" | "amount" | "total" => Some(SqlType::Double),
-                "active" | "enabled" | "deleted" | "is_active" | "in_stock" => Some(SqlType::Boolean),
-                "name" | "username" | "email" | "description" | "status" | "customer_name" => Some(SqlType::Text),
+                "active" | "enabled" | "deleted" | "is_active" | "in_stock" => {
+                    Some(SqlType::Boolean)
+                }
+                "name" | "username" | "email" | "description" | "status" | "customer_name" => {
+                    Some(SqlType::Text)
+                }
                 "created_at" | "updated_at" => Some(SqlType::Timestamp),
                 "created_date" => Some(SqlType::Date),
                 _ => None,
@@ -1025,7 +1141,10 @@ fn infer_type_from_expr(expr: &Expr) -> Option<SqlType> {
     }
 }
 
-fn infer_types_in_projection_expr(expr: &Expr, parameter_types: &mut std::collections::HashMap<usize, SqlType>) {
+fn infer_types_in_projection_expr(
+    expr: &Expr,
+    parameter_types: &mut std::collections::HashMap<usize, SqlType>,
+) {
     match expr {
         Expr::Function(func) => {
             // Check function arguments for parameters

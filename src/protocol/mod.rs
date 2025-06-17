@@ -1,6 +1,6 @@
 pub mod connection;
-pub mod mysql_simple;
 pub mod mysql_caching_sha2;
+pub mod mysql_simple;
 pub mod postgres;
 pub mod postgres_extended;
 

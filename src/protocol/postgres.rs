@@ -49,11 +49,9 @@ impl PostgresProtocol {
         // Main message loop
         loop {
             // Read more data if buffer is empty
-            if buffer.is_empty() {
-                if stream.read_buf(&mut buffer).await? == 0 {
-                    info!("Client disconnected");
-                    break;
-                }
+            if buffer.is_empty() && stream.read_buf(&mut buffer).await? == 0 {
+                info!("Client disconnected");
+                break;
             }
 
             // Check if we have enough data for a message header
@@ -87,19 +85,27 @@ impl PostgresProtocol {
                 }
                 b'P' => {
                     // Parse (extended query protocol)
-                    self.extended_protocol.handle_parse(&mut stream, &buffer[5..length + 1]).await?;
+                    self.extended_protocol
+                        .handle_parse(&mut stream, &buffer[5..length + 1])
+                        .await?;
                 }
                 b'B' => {
                     // Bind (extended query protocol)
-                    self.extended_protocol.handle_bind(&mut stream, &buffer[5..length + 1]).await?;
+                    self.extended_protocol
+                        .handle_bind(&mut stream, &buffer[5..length + 1])
+                        .await?;
                 }
                 b'D' => {
                     // Describe (extended query protocol)
-                    self.extended_protocol.handle_describe(&mut stream, &buffer[5..length + 1], &self.executor).await?;
+                    self.extended_protocol
+                        .handle_describe(&mut stream, &buffer[5..length + 1], &self.executor)
+                        .await?;
                 }
                 b'E' => {
                     // Execute (extended query protocol)
-                    self.extended_protocol.handle_execute(&mut stream, &buffer[5..length + 1], &self.executor).await?;
+                    self.extended_protocol
+                        .handle_execute(&mut stream, &buffer[5..length + 1], &self.executor)
+                        .await?;
                 }
                 b'S' => {
                     // Sync (extended query protocol)
@@ -108,16 +114,20 @@ impl PostgresProtocol {
                 b'C' => {
                     // Close (extended query protocol)
                     let close_type = buffer[5];
-                    let name_end = buffer[6..length + 1].iter().position(|&b| b == 0).unwrap_or(length - 5);
-                    let name = std::str::from_utf8(&buffer[6..6 + name_end])
-                        .map_err(|_| YamlBaseError::Protocol("Invalid UTF-8 in close name".to_string()))?;
-                    
+                    let name_end = buffer[6..length + 1]
+                        .iter()
+                        .position(|&b| b == 0)
+                        .unwrap_or(length - 5);
+                    let name = std::str::from_utf8(&buffer[6..6 + name_end]).map_err(|_| {
+                        YamlBaseError::Protocol("Invalid UTF-8 in close name".to_string())
+                    })?;
+
                     if close_type == b'S' {
                         self.extended_protocol.close_statement(name);
                     } else if close_type == b'P' {
                         self.extended_protocol.close_portal(name);
                     }
-                    
+
                     // Send CloseComplete
                     let mut close_buf = BytesMut::new();
                     close_buf.put_u8(b'3');
@@ -135,7 +145,7 @@ impl PostgresProtocol {
                         .await?;
                 }
             }
-            
+
             // Remove the processed message from the buffer
             buffer.advance(length + 1);
         }
@@ -224,7 +234,7 @@ impl PostgresProtocol {
             {
                 state.authenticated = true;
                 self.send_auth_ok(stream, state).await?;
-                
+
                 // Clear the buffer after processing password message
                 buffer.advance(1 + msg_len);
             } else {

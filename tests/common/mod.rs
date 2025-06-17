@@ -1,13 +1,13 @@
 use std::io::{Read, Write};
-use std::net::{TcpStream, TcpListener};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::time::Duration;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 use yamlbase::config::{Config, Protocol};
 use yamlbase::database::Database;
-use std::path::PathBuf;
 
 // Start from a high port to avoid conflicts with common services
 static NEXT_PORT: AtomicU16 = AtomicU16::new(40000);
@@ -37,7 +37,10 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    panic!("Server failed to start on port {} within {:?}", port, timeout);
+    panic!(
+        "Server failed to start on port {} within {:?}",
+        port, timeout
+    );
 }
 
 pub struct TestServer {
@@ -50,7 +53,7 @@ pub struct TestServer {
 impl TestServer {
     pub fn start_mysql(yaml_file: &str) -> Self {
         let port = get_free_port();
-        
+
         let process = Command::new("cargo")
             .args(&[
                 "run",
@@ -66,10 +69,10 @@ impl TestServer {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("Failed to start server");
-            
+
         // Wait for server to be ready
         wait_for_port(port, Duration::from_secs(10));
-        
+
         let config = Arc::new(Config {
             file: PathBuf::from(yaml_file),
             port: Some(port),
@@ -82,13 +85,18 @@ impl TestServer {
             log_level: "info".to_string(),
             database: None,
         });
-        
-        Self { port, config, process: Some(process), _temp_file: None }
+
+        Self {
+            port,
+            config,
+            process: Some(process),
+            _temp_file: None,
+        }
     }
-    
+
     pub fn start_postgres(yaml_file: &str) -> Self {
         let port = get_free_port();
-        
+
         let process = Command::new("cargo")
             .args(&[
                 "run",
@@ -104,10 +112,10 @@ impl TestServer {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("Failed to start server");
-            
+
         // Wait for server to be ready
         wait_for_port(port, Duration::from_secs(10));
-        
+
         let config = Arc::new(Config {
             file: PathBuf::from(yaml_file),
             port: Some(port),
@@ -120,22 +128,27 @@ impl TestServer {
             log_level: "info".to_string(),
             database: None,
         });
-        
-        Self { port, config, process: Some(process), _temp_file: None }
+
+        Self {
+            port,
+            config,
+            process: Some(process),
+            _temp_file: None,
+        }
     }
-    
+
     pub async fn new_postgres(db: Database) -> Self {
         // Run the blocking operations in a blocking thread
         tokio::task::spawn_blocking(move || {
             let port = get_free_port();
-            
+
             // Write database to temp file
             let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
             let yaml_content = format!(
                 "database:\n  name: \"{}\"\n  auth:\n    username: \"yamlbase\"\n    password: \"password\"\n\ntables:\n",
                 db.name
             );
-            
+
             // Add tables
             let mut tables_yaml = String::new();
             for table in db.tables.values() {
@@ -163,7 +176,7 @@ impl TestServer {
                         yamlbase::yaml::schema::SqlType::Uuid => "UUID".to_string(),
                         yamlbase::yaml::schema::SqlType::Json => "JSON".to_string(),
                     };
-                    
+
                     let mut col_def = type_str.to_string();
                     if col.nullable && !col.primary_key {
                         col_def.push_str(" NULL");
@@ -173,7 +186,7 @@ impl TestServer {
                     if col.unique && !col.primary_key {
                         col_def.push_str(" UNIQUE");
                     }
-                    
+
                     tables_yaml.push_str(&format!("      {}: \"{}\"\n", col.name, col_def));
                 }
                 tables_yaml.push_str("    data:\n");
@@ -198,13 +211,13 @@ impl TestServer {
                     tables_yaml.push_str("\n");
                 }
             }
-            
+
             let full_yaml = format!("{}{}", yaml_content, tables_yaml);
             temp_file.write_all(full_yaml.as_bytes()).expect("Failed to write temp file");
             temp_file.flush().expect("Failed to flush temp file");
-            
+
             let yaml_path = temp_file.path().to_str().unwrap().to_string();
-            
+
             let process = Command::new("cargo")
                 .args(&[
                     "run",
@@ -220,10 +233,10 @@ impl TestServer {
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .expect("Failed to start server");
-                
+
             // Wait for server to be ready
             wait_for_port(port, Duration::from_secs(10));
-            
+
             let config = Arc::new(Config {
                 file: PathBuf::from(yaml_path),
                 port: Some(port),
@@ -236,18 +249,17 @@ impl TestServer {
                 log_level: "info".to_string(),
                 database: None,
             });
-            
+
             Self { port, config, process: Some(process), _temp_file: Some(temp_file) }
         }).await.expect("Failed to create test server")
     }
-    
+
     pub fn port(&self) -> u16 {
         self.port
     }
-    
+
     pub fn connect(&self) -> TcpStream {
-        TcpStream::connect(format!("127.0.0.1:{}", self.port))
-            .expect("Failed to connect to server")
+        TcpStream::connect(format!("127.0.0.1:{}", self.port)).expect("Failed to connect to server")
     }
 }
 
@@ -263,23 +275,28 @@ impl Drop for TestServer {
 
 pub fn mysql_connect_and_auth(server: &TestServer, username: &str, password: &str) -> TcpStream {
     let mut stream = server.connect();
-    
+
     // Read handshake
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header).expect("Failed to read header");
+    stream
+        .read_exact(&mut header)
+        .expect("Failed to read header");
     let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
     let sequence = header[3];
-    
+
     let mut handshake = vec![0u8; length as usize];
-    stream.read_exact(&mut handshake).expect("Failed to read handshake");
-    
+    stream
+        .read_exact(&mut handshake)
+        .expect("Failed to read handshake");
+
     // Extract auth data
     let pos = handshake.iter().position(|&b| b == 0).unwrap() + 1 + 4;
     let auth_data_1 = &handshake[pos..pos + 8];
-    let auth_data_2 = &handshake[pos + 8 + 1 + 2 + 1 + 2 + 2 + 1 + 10..pos + 8 + 1 + 2 + 1 + 2 + 2 + 1 + 10 + 12];
+    let auth_data_2 =
+        &handshake[pos + 8 + 1 + 2 + 1 + 2 + 2 + 1 + 10..pos + 8 + 1 + 2 + 1 + 2 + 2 + 1 + 10 + 12];
     let mut auth_data = auth_data_1.to_vec();
     auth_data.extend_from_slice(auth_data_2);
-    
+
     // Send auth response
     let mut response = Vec::new();
     response.extend(&0x000fa685u32.to_le_bytes()); // capabilities
@@ -288,74 +305,84 @@ pub fn mysql_connect_and_auth(server: &TestServer, username: &str, password: &st
     response.extend(&[0u8; 23]); // reserved
     response.extend(username.as_bytes());
     response.push(0);
-    
+
     // Calculate auth response
     let auth_response = mysql_native_password_auth(&auth_data, password);
     response.push(auth_response.len() as u8);
     response.extend(&auth_response);
-    
+
     // Send response
     let mut packet = Vec::new();
     packet.extend(&(response.len() as u32).to_le_bytes()[..3]);
     packet.push(sequence + 1);
     packet.extend(&response);
-    
+
     stream.write_all(&packet).expect("Failed to send auth");
-    
+
     // Read auth result
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header).expect("Failed to read response header");
+    stream
+        .read_exact(&mut header)
+        .expect("Failed to read response header");
     let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-    
+
     let mut response_data = vec![0u8; length as usize];
-    stream.read_exact(&mut response_data).expect("Failed to read response");
-    
+    stream
+        .read_exact(&mut response_data)
+        .expect("Failed to read response");
+
     // Check for auth switch request
     if response_data[0] == 0xfe {
         // Server is requesting auth switch, send empty auth response
         let mut packet = Vec::new();
         packet.extend(&[0, 0, 0]); // length = 0
         packet.push(header[3] + 1); // sequence
-        stream.write_all(&packet).expect("Failed to send empty auth");
-        
+        stream
+            .write_all(&packet)
+            .expect("Failed to send empty auth");
+
         // Read final OK packet
         let mut header = [0u8; 4];
-        stream.read_exact(&mut header).expect("Failed to read OK header");
+        stream
+            .read_exact(&mut header)
+            .expect("Failed to read OK header");
         let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-        
+
         let mut ok_packet = vec![0u8; length as usize];
-        stream.read_exact(&mut ok_packet).expect("Failed to read OK packet");
-        
+        stream
+            .read_exact(&mut ok_packet)
+            .expect("Failed to read OK packet");
+
         if ok_packet[0] != 0x00 {
             panic!("Authentication failed after auth switch");
         }
     } else if response_data[0] != 0x00 {
         panic!("Authentication failed");
     }
-    
+
     stream
 }
 
 fn mysql_native_password_auth(auth_data: &[u8], password: &str) -> Vec<u8> {
     use sha1::{Digest, Sha1};
-    
+
     if password.is_empty() {
         return vec![];
     }
-    
+
     let mut hasher = Sha1::new();
     hasher.update(password.as_bytes());
     let password_hash = hasher.finalize();
-    
+
     let mut hasher = Sha1::new();
     hasher.update(&password_hash);
     let password_double_hash = hasher.finalize();
-    
+
     let mut hasher = Sha1::new();
     hasher.update(auth_data);
     hasher.update(&password_double_hash);
     let result = hasher.finalize();
-    
+
     password_hash
         .iter()
         .zip(result.iter())
@@ -370,28 +397,32 @@ pub fn mysql_test_query(stream: &mut TcpStream, query: &str, _expected_values: V
     packet.push(0); // sequence
     packet.push(0x03); // COM_QUERY
     packet.extend(query.as_bytes());
-    
+
     stream.write_all(&packet).expect("Failed to send query");
-    
+
     // Read response
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header).expect("Failed to read response header");
+    stream
+        .read_exact(&mut header)
+        .expect("Failed to read response header");
     let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-    
+
     let mut response = vec![0u8; length as usize];
-    stream.read_exact(&mut response).expect("Failed to read response");
-    
+    stream
+        .read_exact(&mut response)
+        .expect("Failed to read response");
+
     if response[0] == 0xff {
         let error_code = u16::from_le_bytes([response[1], response[2]]);
         let error_msg = String::from_utf8_lossy(&response[9..]);
         panic!("Query error {}: {}", error_code, error_msg);
     }
-    
+
     // Simple validation - just check that we got a result set
     assert!(response[0] > 0, "Expected result set, got: {:?}", response);
-    
+
     println!("Query '{}' returned result set", query);
-    
+
     // Read and discard remaining packets until EOF
     loop {
         let mut header = [0u8; 4];
@@ -399,12 +430,12 @@ pub fn mysql_test_query(stream: &mut TcpStream, query: &str, _expected_values: V
             break;
         }
         let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-        
+
         let mut data = vec![0u8; length as usize];
         if stream.read_exact(&mut data).is_err() {
             break;
         }
-        
+
         // Check for EOF packet
         if length == 5 && data[0] == 0xfe {
             break;
@@ -418,23 +449,33 @@ pub fn mysql_test_ping(stream: &mut TcpStream) {
     // Let's use a higher sequence number that matches the current state
     let packet = vec![1, 0, 0, 3, 0x0e]; // length=1, seq=3, COM_PING=0x0e
     stream.write_all(&packet).expect("Failed to send ping");
-    
+
     // Read OK response
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header).expect("Failed to read response header");
+    stream
+        .read_exact(&mut header)
+        .expect("Failed to read response header");
     let length = u32::from_le_bytes([header[0], header[1], header[2], 0]);
     let seq = header[3];
-    
+
     let mut response = vec![0u8; length as usize];
-    stream.read_exact(&mut response).expect("Failed to read response");
-    
+    stream
+        .read_exact(&mut response)
+        .expect("Failed to read response");
+
     // Debug: Print the response
     if response[0] != 0x00 {
-        eprintln!("PING response header: {:02x} {:02x} {:02x} {:02x}", header[0], header[1], header[2], header[3]);
-        eprintln!("PING response data: {:?} (length={}, seq={})", response, length, seq);
+        eprintln!(
+            "PING response header: {:02x} {:02x} {:02x} {:02x}",
+            header[0], header[1], header[2], header[3]
+        );
+        eprintln!(
+            "PING response data: {:?} (length={}, seq={})",
+            response, length, seq
+        );
         eprintln!("As hex: {:02x?}", response);
     }
-    
+
     assert_eq!(response[0], 0x00, "Expected OK packet for PING");
     println!("PING successful");
 }
