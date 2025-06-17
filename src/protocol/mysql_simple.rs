@@ -105,38 +105,43 @@ impl MySqlProtocol {
             expected.len(),
             self.config.password
         );
-        
+
         // Check if client requested caching_sha2_password
-        let client_wants_caching = state.client_auth_plugin
+        let client_wants_caching = state
+            .client_auth_plugin
             .as_ref()
             .map(|p| p == CACHING_SHA2_PLUGIN_NAME)
             .unwrap_or(false);
-        
+
         if client_wants_caching || auth_response.is_empty() {
             // Switch to caching_sha2_password
             debug!("Client requested caching_sha2_password or sent empty auth");
-            
+
             // Generate new auth data for caching_sha2
             let caching_auth_data = generate_auth_data();
             let caching_auth = CachingSha2Auth::new(caching_auth_data.clone());
-            
+
             // Send auth switch request
-            caching_auth.send_auth_switch_request(&mut stream, &mut state.sequence_id).await?;
-            
+            caching_auth
+                .send_auth_switch_request(&mut stream, &mut state.sequence_id)
+                .await?;
+
             // Read client's response to auth switch
             let auth_switch_response = self.read_packet(&mut stream, &mut state).await?;
-            
+
             // Authenticate using caching_sha2_password
-            let auth_success = caching_auth.authenticate(
-                &mut stream,
-                &mut state.sequence_id,
-                &username,
-                "", // password will be sent in clear text
-                &self.config.username,
-                &self.config.password,
-                auth_switch_response,
-            ).await?;
-            
+            let auth_success = caching_auth
+                .authenticate(
+                    &mut stream,
+                    &mut state.sequence_id,
+                    &username,
+                    "", // password will be sent in clear text
+                    &self.config.username,
+                    &self.config.password,
+                    auth_switch_response,
+                )
+                .await?;
+
             if !auth_success {
                 self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
                     .await?;
@@ -145,7 +150,10 @@ impl MySqlProtocol {
         } else {
             // Use mysql_native_password authentication
             if auth_response != expected {
-                debug!("Password mismatch - expected: {:?}, got: {:?}", expected, auth_response);
+                debug!(
+                    "Password mismatch - expected: {:?}, got: {:?}",
+                    expected, auth_response
+                );
                 self.send_error(&mut stream, &mut state, 1045, "28000", "Access denied")
                     .await?;
                 return Ok(());
@@ -356,7 +364,7 @@ impl MySqlProtocol {
         } else {
             None
         };
-        
+
         debug!("Client auth plugin: {:?}", auth_plugin);
 
         Ok((username, auth_response, database, auth_plugin))
@@ -370,7 +378,7 @@ impl MySqlProtocol {
     ) -> crate::Result<()> {
         let query_trimmed = query.trim();
         let query_upper = query_trimmed.to_uppercase();
-        
+
         // Handle empty queries
         if query_trimmed.is_empty() {
             debug!("Empty query received");
@@ -385,7 +393,7 @@ impl MySqlProtocol {
         } else {
             query_trimmed.to_string()
         };
-        
+
         // Convert MySQL backticks - just remove them since our parser handles unquoted identifiers
         if processed_query.contains('`') {
             processed_query = processed_query.replace('`', "");
@@ -442,53 +450,56 @@ impl MySqlProtocol {
         Ok(())
     }
 
-    
     fn preprocess_system_variables(&self, query: &str) -> String {
         use once_cell::sync::Lazy;
         use regex::Regex;
-        
+
         // Only preprocess SELECT queries that contain system variables
         let query_upper = query.to_uppercase();
         if !query_upper.starts_with("SELECT") || !query.contains("@@") {
             return query.to_string();
         }
-        
+
         static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version|VERSION|Version)\b").unwrap()
         });
-        
+
         static VERSION_COMMENT_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b").unwrap()
         });
-        
+
         static MAX_ALLOWED_PACKET_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:max_allowed_packet|MAX_ALLOWED_PACKET|Max_Allowed_Packet)\b").unwrap()
         });
-        
+
         static SYSTEM_VAR_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap()
         });
-        
+
         let mut result = query.to_string();
-        
+
         // First handle @@version specifically
-        result = VERSION_RE.replace_all(&result, "'8.0.35-yamlbase'").to_string();
-        
+        result = VERSION_RE
+            .replace_all(&result, "'8.0.35-yamlbase'")
+            .to_string();
+
         // Handle @@version_comment
         result = VERSION_COMMENT_RE.replace_all(&result, "'1'").to_string();
-        
+
         // Handle @@max_allowed_packet - MySQL default is 64MB (67108864 bytes)
-        result = MAX_ALLOWED_PACKET_RE.replace_all(&result, "67108864").to_string();
-        
+        result = MAX_ALLOWED_PACKET_RE
+            .replace_all(&result, "67108864")
+            .to_string();
+
         // Check if we already replaced all instances
         if !result.contains("@@") {
             debug!("Preprocessed query: {} -> {}", query, result);
             return result;
         }
-        
+
         // Replace remaining system variables with '1'
         result = SYSTEM_VAR_RE.replace_all(&result, "'1'").to_string();
-        
+
         debug!("Preprocessed query: {} -> {}", query, result);
         result
     }
@@ -673,7 +684,6 @@ impl MySqlProtocol {
 
         self.write_packet(stream, state, &packet).await
     }
-
 
     async fn send_error(
         &self,

@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2025-06-17
+
+### Added
+- **PostgreSQL Extended Query Protocol** support for prepared statements and parameterized queries
+  - Parse, Bind, Describe, Execute, and Sync message handling
+  - Portal and statement management for efficient query execution
+  - Proper handling of binary and text parameter formats
+  - Full compatibility with PostgreSQL client libraries using extended protocol
+- **MySQL 8.0+ Authentication** with caching_sha2_password support
+  - Implementation of MySQL's default authentication method since version 8.0
+  - RSA public key exchange for secure password transmission
+  - Fast authentication path for cached credentials
+  - Backward compatibility with mysql_native_password
+- **SELECT constant FROM table** syntax support (e.g., `SELECT 1 FROM users`)
+  - Commonly used pattern for health checks and connection testing
+  - Proper handling of constant expressions in presence of FROM clause
+- Comprehensive **fuzz testing** infrastructure for all parsers
+  - SQL parser fuzzing to ensure robustness
+  - YAML parser fuzzing for configuration safety
+  - MySQL protocol fuzzing for security
+  - Filter parser fuzzing with UTF-8 boundary fixes
+- Enhanced **integration testing** with real database clients
+  - PostgreSQL extended protocol flow tests
+  - MySQL 8.0+ authentication tests
+  - Parameter parsing and binding tests
+  - Debug utilities for protocol development
+
+### Fixed
+- Critical compatibility issues with real PostgreSQL and MySQL clients
+- Protocol message handling for complex query flows
+- Binary parameter encoding/decoding in PostgreSQL extended protocol
+- Connection state management for prepared statements
+- UTF-8 boundary crashes in filter parsing (discovered via fuzzing)
+
+### Changed
+- Significant internal refactoring to support stateful protocol features
+- Improved error handling and protocol compliance
+- Better separation of simple and extended protocol paths
+- Enhanced debug logging for protocol troubleshooting
+
+### Developer Experience
+- Added example files for new protocol features
+- Comprehensive test coverage for authentication flows
+- Integration test scripts for real client testing
+- Debug tools for protocol message inspection
+
 ## [0.0.6] - 2025-06-15
 
 ### Added
@@ -133,6 +179,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.1.0]: https://github.com/rvben/yamlbase/releases/tag/v0.1.0
 [0.0.6]: https://github.com/rvben/yamlbase/releases/tag/v0.0.6
 [0.0.5]: https://github.com/rvben/yamlbase/releases/tag/v0.0.5
 [0.0.4]: https://github.com/rvben/yamlbase/releases/tag/v0.0.4

@@ -15,10 +15,10 @@ impl TestServer {
         let mut temp_file = NamedTempFile::new().unwrap();
         std::io::Write::write_all(&mut temp_file, yaml_content.as_bytes()).unwrap();
         let yaml_path = temp_file.path().to_str().unwrap().to_string();
-        
+
         // Find an available port
         let port = get_free_port();
-        
+
         // Start the server
         let process = Command::new("cargo")
             .args(&[
@@ -37,13 +37,13 @@ impl TestServer {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("Failed to start yamlbase server");
-        
+
         // Wait for server to start
         wait_for_postgres_port(port);
-        
+
         // Keep the temp file alive
         std::mem::forget(temp_file);
-        
+
         TestServer { process, port }
     }
 }
@@ -65,7 +65,10 @@ fn wait_for_postgres_port(port: u16) {
     println!("Waiting for PostgreSQL server to start on port {}", port);
     for i in 0..60 {
         match Client::connect(
-            &format!("host=localhost port={} user=yamlbase password=password dbname=test_db", port),
+            &format!(
+                "host=localhost port={} user=yamlbase password=password dbname=test_db",
+                port
+            ),
             NoTls,
         ) {
             Ok(_) => {
@@ -115,33 +118,38 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     let mut client = Client::connect(
-        &format!("host=localhost port={} user=yamlbase password=password dbname=test_db", server.port),
+        &format!(
+            "host=localhost port={} user=yamlbase password=password dbname=test_db",
+            server.port
+        ),
         NoTls,
-    ).expect("Failed to connect");
-    
+    )
+    .expect("Failed to connect");
+
     // Test prepared statement with parameters
-    let stmt = client.prepare("SELECT * FROM users WHERE age > $1 AND active = $2")
+    let stmt = client
+        .prepare("SELECT * FROM users WHERE age > $1 AND active = $2")
         .expect("Failed to prepare statement");
-    
-    let rows = client.query(&stmt, &[&27i32, &true])
+
+    let rows = client
+        .query(&stmt, &[&27i32, &true])
         .expect("Failed to execute prepared statement");
-    
+
     assert_eq!(rows.len(), 2);
-    
+
     // Verify the results
-    let usernames: Vec<String> = rows.iter()
-        .map(|row| row.get::<_, String>(1))
-        .collect();
-    
+    let usernames: Vec<String> = rows.iter().map(|row| row.get::<_, String>(1)).collect();
+
     assert!(usernames.contains(&"alice".to_string()));
     assert!(usernames.contains(&"charlie".to_string()));
-    
+
     // Test reusing the same prepared statement
-    let rows2 = client.query(&stmt, &[&30i32, &false])
+    let rows2 = client
+        .query(&stmt, &[&30i32, &false])
         .expect("Failed to execute prepared statement second time");
-    
+
     assert_eq!(rows2.len(), 0);
 }
 
@@ -179,29 +187,37 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     let mut client = Client::connect(
-        &format!("host=localhost port={} user=yamlbase password=password dbname=test_db", server.port),
+        &format!(
+            "host=localhost port={} user=yamlbase password=password dbname=test_db",
+            server.port
+        ),
         NoTls,
-    ).expect("Failed to connect");
-    
+    )
+    .expect("Failed to connect");
+
     // Test various parameter types
-    let stmt = client.prepare("SELECT * FROM products WHERE price < $1 AND in_stock = $2")
+    let stmt = client
+        .prepare("SELECT * FROM products WHERE price < $1 AND in_stock = $2")
         .expect("Failed to prepare statement");
-    
-    let rows = client.query(&stmt, &[&15.00f64, &true])
+
+    let rows = client
+        .query(&stmt, &[&15.00f64, &true])
         .expect("Failed to execute query");
-    
+
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get::<_, String>(1), "Widget");
-    
+
     // Test NULL handling
-    let null_stmt = client.prepare("SELECT * FROM products WHERE description IS NULL")
+    let null_stmt = client
+        .prepare("SELECT * FROM products WHERE description IS NULL")
         .expect("Failed to prepare NULL check statement");
-    
-    let null_rows = client.query(&null_stmt, &[])
+
+    let null_rows = client
+        .query(&null_stmt, &[])
         .expect("Failed to execute NULL query");
-    
+
     assert_eq!(null_rows.len(), 1);
     assert_eq!(null_rows[0].get::<_, i32>(0), 2);
 }
@@ -238,39 +254,49 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     let mut client = Client::connect(
-        &format!("host=localhost port={} user=yamlbase password=password dbname=test_db", server.port),
+        &format!(
+            "host=localhost port={} user=yamlbase password=password dbname=test_db",
+            server.port
+        ),
         NoTls,
-    ).expect("Failed to connect");
-    
+    )
+    .expect("Failed to connect");
+
     // Prepare multiple statements
-    let stmt1 = client.prepare("SELECT COUNT(*) FROM orders WHERE status = $1")
+    let stmt1 = client
+        .prepare("SELECT COUNT(*) FROM orders WHERE status = $1")
         .expect("Failed to prepare count statement");
-    
-    let stmt2 = client.prepare("SELECT SUM(total) FROM orders WHERE status = $1")
+
+    let stmt2 = client
+        .prepare("SELECT SUM(total) FROM orders WHERE status = $1")
         .expect("Failed to prepare sum statement");
-    
-    let stmt3 = client.prepare("SELECT * FROM orders WHERE customer_name LIKE $1 ORDER BY id")
+
+    let stmt3 = client
+        .prepare("SELECT * FROM orders WHERE customer_name LIKE $1 ORDER BY id")
         .expect("Failed to prepare LIKE statement");
-    
+
     // Execute multiple prepared statements
-    let pending_count: i64 = client.query_one(&stmt1, &[&"pending"])
+    let pending_count: i64 = client
+        .query_one(&stmt1, &[&"pending"])
         .expect("Failed to count pending orders")
         .get(0);
-    
+
     assert_eq!(pending_count, 2);
-    
-    let pending_total: String = client.query_one(&stmt2, &[&"pending"])
+
+    let pending_total: String = client
+        .query_one(&stmt2, &[&"pending"])
         .expect("Failed to sum pending orders")
         .get(0);
-    
+
     assert_eq!(pending_total, "179.98");
-    
+
     // Test LIKE with prepared statement
-    let rows = client.query(&stmt3, &[&"%Brown%"])
+    let rows = client
+        .query(&stmt3, &[&"%Brown%"])
         .expect("Failed to execute LIKE query");
-    
+
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get::<_, String>(1), "Charlie Brown");
 }
@@ -298,33 +324,43 @@ tables:
     for i in 1..=1000 {
         yaml_with_data.push_str(&format!(
             "        - id: {}\n          username: \"user{}\"\n          score: {}\n",
-            i, i, i % 100
+            i,
+            i,
+            i % 100
         ));
     }
 
     let server = TestServer::start_postgres(yaml_with_data.as_str());
-    
+
     let mut client = Client::connect(
-        &format!("host=localhost port={} user=yamlbase password=password dbname=test_db", server.port),
+        &format!(
+            "host=localhost port={} user=yamlbase password=password dbname=test_db",
+            server.port
+        ),
         NoTls,
-    ).expect("Failed to connect");
-    
+    )
+    .expect("Failed to connect");
+
     // Prepare statement once
-    let stmt = client.prepare("SELECT * FROM users WHERE id = $1")
+    let stmt = client
+        .prepare("SELECT * FROM users WHERE id = $1")
         .expect("Failed to prepare statement");
-    
+
     // Execute many times with different parameters
     let start = std::time::Instant::now();
     for i in [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000] {
-        let rows = client.query(&stmt, &[&i])
-            .expect("Failed to execute query");
+        let rows = client.query(&stmt, &[&i]).expect("Failed to execute query");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get::<_, i32>(0), i);
     }
     let duration = start.elapsed();
-    
+
     println!("10 prepared statement executions took: {:?}", duration);
-    
+
     // The prepared statements should be fast due to index usage
-    assert!(duration.as_millis() < 100, "Prepared statements took too long: {:?}", duration);
+    assert!(
+        duration.as_millis() < 100,
+        "Prepared statements took too long: {:?}",
+        duration
+    );
 }

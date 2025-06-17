@@ -47,6 +47,10 @@ mod tests {
         let port = get_free_port();
         // Should be able to bind to the port we got
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port));
-        assert!(listener.is_ok(), "Could not bind to supposedly free port {}", port);
+        assert!(
+            listener.is_ok(),
+            "Could not bind to supposedly free port {}",
+            port
+        );
     }
 }

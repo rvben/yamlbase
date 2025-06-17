@@ -30,7 +30,7 @@ impl QueryExecutor {
     pub fn new(storage: Arc<Storage>) -> Self {
         Self { storage }
     }
-    
+
     pub fn storage(&self) -> &Arc<Storage> {
         &self.storage
     }
@@ -79,14 +79,18 @@ impl QueryExecutor {
 
         // Check if this is an aggregate query
         if self.is_aggregate_query(select) {
-            return self.execute_aggregate_select(db, select, query, table, &table_name).await;
+            return self
+                .execute_aggregate_select(db, select, query, table, &table_name)
+                .await;
         }
 
         // Get column names for projection
         let columns = self.extract_columns(select, table)?;
 
         // Filter rows based on WHERE clause
-        let filtered_rows = self.filter_rows(table, &table_name, &select.selection).await?;
+        let filtered_rows = self
+            .filter_rows(table, &table_name, &select.selection)
+            .await?;
 
         // Project columns
         let projected_rows = self.project_columns(&filtered_rows, &columns, table)?;
@@ -94,12 +98,14 @@ impl QueryExecutor {
         // Apply ORDER BY
         let sorted_rows = if let Some(order_by) = &query.order_by {
             // Convert ProjectionItem to (String, usize) for compatibility with sort_rows
-            let col_info: Vec<(String, usize)> = columns.iter().enumerate().map(|(idx, item)| {
-                match item {
+            let col_info: Vec<(String, usize)> = columns
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| match item {
                     ProjectionItem::TableColumn(name, _) => (name.clone(), idx),
                     ProjectionItem::Constant(name, _) => (name.clone(), idx),
-                }
-            }).collect();
+                })
+                .collect();
             self.sort_rows(projected_rows, &order_by.exprs, &col_info)?
         } else {
             projected_rows
@@ -113,43 +119,47 @@ impl QueryExecutor {
         };
 
         // Get column types
-        let column_types = columns.iter().map(|item| {
-            match item {
-                ProjectionItem::TableColumn(_, idx) => {
-                    table.columns[*idx].sql_type.clone()
-                }
-                ProjectionItem::Constant(_, value) => {
-                    // Infer type from value
-                    match value {
-                        Value::Integer(i) => {
-                            if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
-                                crate::yaml::schema::SqlType::BigInt
-                            } else {
-                                crate::yaml::schema::SqlType::Integer
+        let column_types = columns
+            .iter()
+            .map(|item| {
+                match item {
+                    ProjectionItem::TableColumn(_, idx) => table.columns[*idx].sql_type.clone(),
+                    ProjectionItem::Constant(_, value) => {
+                        // Infer type from value
+                        match value {
+                            Value::Integer(i) => {
+                                if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
+                                    crate::yaml::schema::SqlType::BigInt
+                                } else {
+                                    crate::yaml::schema::SqlType::Integer
+                                }
                             }
-                        },
-                        Value::Double(_) | Value::Float(_) => crate::yaml::schema::SqlType::Double,
-                        Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
-                        Value::Date(_) => crate::yaml::schema::SqlType::Date,
-                        Value::Time(_) => crate::yaml::schema::SqlType::Time,
-                        Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
-                        Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
-                        Value::Json(_) => crate::yaml::schema::SqlType::Text,
-                        Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
-                        Value::Text(_) => crate::yaml::schema::SqlType::Text,
-                        Value::Null => crate::yaml::schema::SqlType::Text,
+                            Value::Double(_) | Value::Float(_) => {
+                                crate::yaml::schema::SqlType::Double
+                            }
+                            Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
+                            Value::Date(_) => crate::yaml::schema::SqlType::Date,
+                            Value::Time(_) => crate::yaml::schema::SqlType::Time,
+                            Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
+                            Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
+                            Value::Json(_) => crate::yaml::schema::SqlType::Text,
+                            Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
+                            Value::Text(_) => crate::yaml::schema::SqlType::Text,
+                            Value::Null => crate::yaml::schema::SqlType::Text,
+                        }
                     }
                 }
-            }
-        }).collect();
+            })
+            .collect();
 
         // Get column names
-        let column_names = columns.iter().map(|item| {
-            match item {
+        let column_names = columns
+            .iter()
+            .map(|item| match item {
                 ProjectionItem::TableColumn(name, _) => name.clone(),
                 ProjectionItem::Constant(name, _) => name.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(QueryResult {
             columns: column_names,
@@ -187,28 +197,31 @@ impl QueryExecutor {
         }
 
         // Infer types from the values
-        let column_types = row_values.iter().map(|value| {
-            match value {
-                Value::Integer(i) => {
-                    // Use BigInt for values that might be larger than i32
-                    if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
-                        crate::yaml::schema::SqlType::BigInt
-                    } else {
-                        crate::yaml::schema::SqlType::Integer
+        let column_types = row_values
+            .iter()
+            .map(|value| {
+                match value {
+                    Value::Integer(i) => {
+                        // Use BigInt for values that might be larger than i32
+                        if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
+                            crate::yaml::schema::SqlType::BigInt
+                        } else {
+                            crate::yaml::schema::SqlType::Integer
+                        }
                     }
-                },
-                Value::Double(_) | Value::Float(_) => crate::yaml::schema::SqlType::Double,
-                Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
-                Value::Date(_) => crate::yaml::schema::SqlType::Date,
-                Value::Time(_) => crate::yaml::schema::SqlType::Time,
-                Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
-                Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
-                Value::Json(_) => crate::yaml::schema::SqlType::Text,
-                Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
-                Value::Text(_) => crate::yaml::schema::SqlType::Text,
-                Value::Null => crate::yaml::schema::SqlType::Text,
-            }
-        }).collect();
+                    Value::Double(_) | Value::Float(_) => crate::yaml::schema::SqlType::Double,
+                    Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
+                    Value::Date(_) => crate::yaml::schema::SqlType::Date,
+                    Value::Time(_) => crate::yaml::schema::SqlType::Time,
+                    Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
+                    Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
+                    Value::Json(_) => crate::yaml::schema::SqlType::Text,
+                    Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
+                    Value::Text(_) => crate::yaml::schema::SqlType::Text,
+                    Value::Null => crate::yaml::schema::SqlType::Text,
+                }
+            })
+            .collect();
 
         let result = QueryResult {
             columns: columns.clone(),
@@ -235,9 +248,10 @@ impl QueryExecutor {
                 if ident.value.starts_with("@@") {
                     self.get_system_variable(&ident.value)
                 } else {
-                    Err(YamlBaseError::NotImplemented(
-                        format!("Identifier '{}' not supported in SELECT without FROM", ident.value),
-                    ))
+                    Err(YamlBaseError::NotImplemented(format!(
+                        "Identifier '{}' not supported in SELECT without FROM",
+                        ident.value
+                    )))
                 }
             }
             Expr::UnaryOp { op, expr } => match op {
@@ -384,11 +398,12 @@ impl QueryExecutor {
                     match expr {
                         Expr::Identifier(ident) => {
                             // Table column with alias
-                            let col_idx = table.get_column_index(&ident.value).ok_or_else(|| {
-                                YamlBaseError::Database {
-                                    message: format!("Column '{}' not found", ident.value),
-                                }
-                            })?;
+                            let col_idx =
+                                table.get_column_index(&ident.value).ok_or_else(|| {
+                                    YamlBaseError::Database {
+                                        message: format!("Column '{}' not found", ident.value),
+                                    }
+                                })?;
                             columns.push(ProjectionItem::TableColumn(alias.value.clone(), col_idx));
                         }
                         _ => {
@@ -420,13 +435,16 @@ impl QueryExecutor {
         table_name: &str,
         selection: &Option<Expr>,
     ) -> crate::Result<Vec<&'a Vec<Value>>> {
-        
         // Check if this is a simple primary key lookup
         if let Some(pk_value) = self.extract_primary_key_lookup(selection, table) {
             debug!("Using primary key index for lookup: {:?}", pk_value);
-            
+
             // Use the index for O(1) lookup
-            if let Some(row) = self.storage.find_by_primary_key(table_name, &pk_value).await {
+            if let Some(row) = self
+                .storage
+                .find_by_primary_key(table_name, &pk_value)
+                .await
+            {
                 // We need to find the reference in the table's rows vector
                 // This is a bit inefficient but maintains the existing API
                 for table_row in &table.rows {
@@ -434,7 +452,6 @@ impl QueryExecutor {
                         return Ok(vec![table_row]);
                     }
                 }
-            } else {
             }
             return Ok(vec![]);
         }
@@ -442,7 +459,7 @@ impl QueryExecutor {
         // Fall back to full table scan
         let mut result = Vec::new();
 
-        for (idx, row) in table.rows.iter().enumerate() {
+        for row in table.rows.iter() {
             if let Some(where_expr) = selection {
                 let matches = self.evaluate_expr(where_expr, row, table)?;
                 if matches {
@@ -459,11 +476,11 @@ impl QueryExecutor {
     /// Extract primary key value if WHERE clause is a simple equality check on primary key
     fn extract_primary_key_lookup(&self, selection: &Option<Expr>, table: &Table) -> Option<Value> {
         let where_expr = selection.as_ref()?;
-        
+
         // Check if we have a primary key
         let pk_idx = table.primary_key_index?;
         let pk_column = &table.columns[pk_idx].name;
-        
+
         // Look for simple equality: WHERE primary_key = value
         if let Expr::BinaryOp { left, op, right } = where_expr {
             if matches!(op, BinaryOperator::Eq) {
@@ -486,7 +503,7 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         None
     }
 
@@ -829,28 +846,28 @@ impl QueryExecutor {
 
     fn get_system_variable(&self, var_name: &str) -> crate::Result<Value> {
         // Remove @@ prefix and handle session/global prefixes
-        let name = if var_name.starts_with("@@") {
-            &var_name[2..]
+        let name = if let Some(stripped) = var_name.strip_prefix("@@") {
+            stripped
         } else {
             var_name
         };
-        
+
         // Handle session. and global. prefixes
-        let name = if name.starts_with("session.") {
-            &name[8..]
-        } else if name.starts_with("SESSION.") {
-            &name[8..]
-        } else if name.starts_with("global.") {
-            &name[7..]
-        } else if name.starts_with("GLOBAL.") {
-            &name[7..]
+        let name = if let Some(stripped) = name.strip_prefix("session.") {
+            stripped
+        } else if let Some(stripped) = name.strip_prefix("SESSION.") {
+            stripped
+        } else if let Some(stripped) = name.strip_prefix("global.") {
+            stripped
+        } else if let Some(stripped) = name.strip_prefix("GLOBAL.") {
+            stripped
         } else {
             name
         };
-        
+
         // Convert to lowercase for comparison
         let name_lower = name.to_lowercase();
-        
+
         // Return appropriate values for known system variables
         match name_lower.as_str() {
             "version" => Ok(Value::Text("8.0.35-yamlbase".to_string())),
@@ -892,7 +909,10 @@ impl QueryExecutor {
     fn contains_aggregate_function(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Function(func) => {
-                let func_name = func.name.0.first()
+                let func_name = func
+                    .name
+                    .0
+                    .first()
                     .map(|ident| ident.value.to_uppercase())
                     .unwrap_or_default();
                 matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
@@ -912,7 +932,9 @@ impl QueryExecutor {
         debug!("Executing aggregate SELECT query");
 
         // Filter rows based on WHERE clause
-        let filtered_rows = self.filter_rows(table, table_name, &select.selection).await?;
+        let filtered_rows = self
+            .filter_rows(table, table_name, &select.selection)
+            .await?;
 
         // Process aggregate functions
         let mut columns = Vec::new();
@@ -921,12 +943,14 @@ impl QueryExecutor {
         for (idx, item) in select.projection.iter().enumerate() {
             match item {
                 SelectItem::UnnamedExpr(expr) => {
-                    let (col_name, value) = self.evaluate_aggregate_expr(expr, &filtered_rows, table, idx)?;
+                    let (col_name, value) =
+                        self.evaluate_aggregate_expr(expr, &filtered_rows, table, idx)?;
                     columns.push(col_name);
                     row_values.push(value);
                 }
                 SelectItem::ExprWithAlias { expr, alias } => {
-                    let (_, value) = self.evaluate_aggregate_expr(expr, &filtered_rows, table, idx)?;
+                    let (_, value) =
+                        self.evaluate_aggregate_expr(expr, &filtered_rows, table, idx)?;
                     columns.push(alias.value.clone());
                     row_values.push(value);
                 }
@@ -939,14 +963,16 @@ impl QueryExecutor {
         }
 
         // Determine column types for aggregate results
-        let column_types = select.projection.iter().map(|item| {
-            match item {
+        let column_types = select
+            .projection
+            .iter()
+            .map(|item| match item {
                 SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
                     self.get_aggregate_result_type(expr)
                 }
                 _ => crate::yaml::schema::SqlType::Text,
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(QueryResult {
             columns,
@@ -958,10 +984,13 @@ impl QueryExecutor {
     fn get_aggregate_result_type(&self, expr: &Expr) -> crate::yaml::schema::SqlType {
         match expr {
             Expr::Function(func) => {
-                let func_name = func.name.0.first()
+                let func_name = func
+                    .name
+                    .0
+                    .first()
                     .map(|ident| ident.value.to_uppercase())
                     .unwrap_or_default();
-                
+
                 match func_name.as_str() {
                     "COUNT" => crate::yaml::schema::SqlType::BigInt, // COUNT returns i64
                     "SUM" => crate::yaml::schema::SqlType::Text, // We return as formatted text for monetary values
@@ -983,10 +1012,13 @@ impl QueryExecutor {
     ) -> crate::Result<(String, Value)> {
         match expr {
             Expr::Function(func) => {
-                let func_name = func.name.0.first()
+                let func_name = func
+                    .name
+                    .0
+                    .first()
                     .map(|ident| ident.value.to_uppercase())
                     .unwrap_or_default();
-                
+
                 match func_name.as_str() {
                     "COUNT" => {
                         let count = match &func.args {
@@ -1008,7 +1040,8 @@ impl QueryExecutor {
                                             // COUNT(column)
                                             let mut count = 0i64;
                                             for row in rows {
-                                                let value = self.get_expr_value(expr, row, table)?;
+                                                let value =
+                                                    self.get_expr_value(expr, row, table)?;
                                                 if !matches!(value, Value::Null) {
                                                     count += 1;
                                                 }
@@ -1047,11 +1080,15 @@ impl QueryExecutor {
                                                 Value::Integer(i) => sum += i as f64,
                                                 Value::Double(d) => sum += d,
                                                 Value::Float(f) => sum += f as f64,
-                                                Value::Decimal(d) => sum += d.to_string().parse::<f64>().unwrap_or(0.0),
+                                                Value::Decimal(d) => {
+                                                    sum +=
+                                                        d.to_string().parse::<f64>().unwrap_or(0.0)
+                                                }
                                                 Value::Null => {} // Skip NULL values
                                                 _ => {
                                                     return Err(YamlBaseError::Database {
-                                                        message: "Cannot sum non-numeric values".to_string(),
+                                                        message: "Cannot sum non-numeric values"
+                                                            .to_string(),
                                                     })
                                                 }
                                             }
@@ -1059,23 +1096,20 @@ impl QueryExecutor {
                                         // Return as string with 2 decimal places for monetary values
                                         Ok((func_name.clone(), Value::Text(format!("{:.2}", sum))))
                                     }
-                                    _ => {
-                                        return Err(YamlBaseError::NotImplemented(
-                                            "Unsupported SUM argument".to_string(),
-                                        ))
-                                    }
+                                    _ => Err(YamlBaseError::NotImplemented(
+                                        "Unsupported SUM argument".to_string(),
+                                    )),
                                 }
                             }
-                            _ => {
-                                return Err(YamlBaseError::Database {
-                                    message: "SUM requires exactly one argument".to_string(),
-                                });
-                            }
+                            _ => Err(YamlBaseError::Database {
+                                message: "SUM requires exactly one argument".to_string(),
+                            }),
                         }
                     }
-                    _ => Err(YamlBaseError::NotImplemented(
-                        format!("Aggregate function {} not supported", func_name),
-                    )),
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Aggregate function {} not supported",
+                        func_name
+                    ))),
                 }
             }
             _ => Err(YamlBaseError::NotImplemented(
@@ -1093,7 +1127,7 @@ mod tests {
     use sqlparser::ast::Statement;
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    
+
     // Helper function to create a test executor with storage
     async fn create_test_executor_from_arc(db: Arc<RwLock<Database>>) -> QueryExecutor {
         let db_owned = {
@@ -1817,30 +1851,33 @@ mod tests {
     async fn test_like_escape_sequences() {
         // Create a custom database for this test
         let mut db = Database::new("test_db".to_string());
-        
+
         // Create test table with needed columns
         let columns = vec![
             create_column("id", crate::yaml::schema::SqlType::Integer, true),
             create_column("name", crate::yaml::schema::SqlType::Varchar(255), false),
         ];
-        
+
         let mut table = Table::new("test_table".to_string(), columns);
         // Row with literal %
-        table.insert_row(vec![
-            Value::Integer(10),
-            Value::Text("100%".to_string()),
-        ]).unwrap();
+        table
+            .insert_row(vec![Value::Integer(10), Value::Text("100%".to_string())])
+            .unwrap();
         // Row with literal _
-        table.insert_row(vec![
-            Value::Integer(11),
-            Value::Text("user_name".to_string()),
-        ]).unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(11),
+                Value::Text("user_name".to_string()),
+            ])
+            .unwrap();
         // Row with literal \\
-        table.insert_row(vec![
-            Value::Integer(12),
-            Value::Text("C:\\path\\file".to_string()),
-        ]).unwrap();
-        
+        table
+            .insert_row(vec![
+                Value::Integer(12),
+                Value::Text("C:\\path\\file".to_string()),
+            ])
+            .unwrap();
+
         db.add_table(table).unwrap();
         let db = Arc::new(RwLock::new(db));
 
@@ -1859,7 +1896,8 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Integer(11));
 
         // Test escaped \\ (should match literal \\)
-        let stmt = parse_statement("SELECT id FROM test_table WHERE name LIKE 'C:\\\\path\\\\file'");
+        let stmt =
+            parse_statement("SELECT id FROM test_table WHERE name LIKE 'C:\\\\path\\\\file'");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(12));
@@ -1881,7 +1919,7 @@ mod tests {
     async fn test_select_constant_from_table() {
         // Create database with test table already included
         let mut db = Database::new("test_db".to_string());
-        
+
         let columns = vec![
             create_column("id", crate::yaml::schema::SqlType::Integer, true),
             create_column("name", crate::yaml::schema::SqlType::Varchar(100), false),
@@ -1900,13 +1938,13 @@ mod tests {
             .unwrap();
 
         db.add_table(table).unwrap();
-        
+
         // Now create Storage with the complete database
         let storage = Arc::new(DbStorage::new(db));
-        
+
         // Wait a bit for the async index building to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let executor = QueryExecutor::new(storage);
 
         // Test 1: SELECT 1 FROM test_table
@@ -1957,7 +1995,7 @@ mod tests {
 
         // Test 5: SELECT 1 FROM test_table WHERE id = 2
         let stmt = parse_statement("SELECT 1 FROM test_table WHERE id = 2");
-        
+
         let result = executor.execute(&stmt).await.unwrap();
 
         assert_eq!(result.rows.len(), 1); // Only one row should match

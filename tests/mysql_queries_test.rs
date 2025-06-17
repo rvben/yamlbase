@@ -1,14 +1,14 @@
 mod common;
 
-use common::{TestServer, mysql_connect_and_auth, mysql_test_query, mysql_test_ping};
+use common::{mysql_connect_and_auth, mysql_test_ping, mysql_test_query, TestServer};
 
 #[test]
 fn test_mysql_various_queries() {
     let server = TestServer::start_mysql("examples/database_with_auth.yaml");
-    
+
     let result = std::panic::catch_unwind(|| {
         let mut stream = mysql_connect_and_auth(&server, "dbadmin", "securepass123");
-        
+
         // Test SELECT without FROM
         mysql_test_query(&mut stream, "SELECT 1", vec!["1"]);
         mysql_test_query(&mut stream, "SELECT 1 + 1", vec!["2"]);
@@ -22,7 +22,7 @@ fn test_mysql_various_queries() {
         mysql_test_query(&mut stream, "SELECT true", vec!["true"]);
         mysql_test_query(&mut stream, "SELECT false", vec!["false"]);
         mysql_test_query(&mut stream, "SELECT null", vec!["NULL"]);
-        
+
         // Test SELECT with FROM
         mysql_test_query(
             &mut stream,
@@ -39,11 +39,11 @@ fn test_mysql_various_queries() {
             "SELECT id, username FROM users ORDER BY id DESC",
             vec!["2", "bob", "1", "alice"],
         );
-        
+
         // Test PING command - temporarily disabled due to sequence number issues
         // mysql_test_ping(&mut stream);
     });
-    
+
     if let Err(e) = result {
         eprintln!("Test failed: {:?}", e);
         panic!("Test failed");
@@ -53,21 +53,33 @@ fn test_mysql_various_queries() {
 #[test]
 fn test_mysql_system_variables() {
     let server = TestServer::start_mysql("examples/database_with_auth.yaml");
-    
+
     let result = std::panic::catch_unwind(|| {
         let mut stream = mysql_connect_and_auth(&server, "dbadmin", "securepass123");
-        
+
         // Test system variables
         mysql_test_query(&mut stream, "SELECT @@version", vec!["5.7.0-yamlbase"]);
         mysql_test_query(&mut stream, "SELECT @@VERSION", vec!["5.7.0-yamlbase"]);
-        mysql_test_query(&mut stream, "SELECT @@version_comment", vec!["YamlBase Server"]);
+        mysql_test_query(
+            &mut stream,
+            "SELECT @@version_comment",
+            vec!["YamlBase Server"],
+        );
         mysql_test_query(&mut stream, "SELECT @@protocol_version", vec!["10"]);
-        
+
         // Mixed queries
-        mysql_test_query(&mut stream, "SELECT 1, @@version", vec!["1", "5.7.0-yamlbase"]);
-        mysql_test_query(&mut stream, "SELECT @@version, @@version_comment", vec!["5.7.0-yamlbase", "YamlBase Server"]);
+        mysql_test_query(
+            &mut stream,
+            "SELECT 1, @@version",
+            vec!["1", "5.7.0-yamlbase"],
+        );
+        mysql_test_query(
+            &mut stream,
+            "SELECT @@version, @@version_comment",
+            vec!["5.7.0-yamlbase", "YamlBase Server"],
+        );
     });
-    
+
     if let Err(e) = result {
         eprintln!("Test failed: {:?}", e);
         panic!("Test failed");
@@ -77,10 +89,10 @@ fn test_mysql_system_variables() {
 #[test]
 fn test_mysql_where_conditions() {
     let server = TestServer::start_mysql("examples/database_with_auth.yaml");
-    
+
     let result = std::panic::catch_unwind(|| {
         let mut stream = mysql_connect_and_auth(&server, "dbadmin", "securepass123");
-        
+
         // Test various WHERE conditions
         mysql_test_query(
             &mut stream,
@@ -128,7 +140,7 @@ fn test_mysql_where_conditions() {
             vec!["alice"],
         );
     });
-    
+
     if let Err(e) = result {
         eprintln!("Test failed: {:?}", e);
         panic!("Test failed");
@@ -138,10 +150,10 @@ fn test_mysql_where_conditions() {
 #[test]
 fn test_mysql_limit_queries() {
     let server = TestServer::start_mysql("examples/database_with_auth.yaml");
-    
+
     let result = std::panic::catch_unwind(|| {
         let mut stream = mysql_connect_and_auth(&server, "dbadmin", "securepass123");
-        
+
         // Test LIMIT
         mysql_test_query(
             &mut stream,
@@ -159,7 +171,7 @@ fn test_mysql_limit_queries() {
             vec!["1", "2"],
         );
     });
-    
+
     if let Err(e) = result {
         eprintln!("Test failed: {:?}", e);
         panic!("Test failed");

@@ -146,7 +146,7 @@ impl Database {
         if let Some(table) = self.tables.get(name) {
             return Some(table);
         }
-        
+
         // Fall back to case-insensitive search
         let name_lower = name.to_lowercase();
         for (table_name, table) in &self.tables {
@@ -162,7 +162,7 @@ impl Database {
         if self.tables.contains_key(name) {
             return self.tables.get_mut(name);
         }
-        
+
         // Fall back to case-insensitive search
         let name_lower = name.to_lowercase();
         for (table_name, _) in self.tables.iter() {
@@ -233,7 +233,7 @@ impl Table {
         if let Some(&index) = self.column_index.get(name) {
             return Some(index);
         }
-        
+
         // Fall back to case-insensitive search
         let name_lower = name.to_lowercase();
         for (col_name, &index) in &self.column_index {
@@ -265,8 +265,8 @@ impl Value {
     }
 
     pub fn compare(&self, other: &Value) -> Option<std::cmp::Ordering> {
-        use std::cmp::Ordering;
         use rust_decimal::prelude::*;
+        use std::cmp::Ordering;
 
         match (self, other) {
             (Value::Null, Value::Null) => Some(Ordering::Equal),
@@ -291,48 +291,30 @@ impl Value {
             (Value::Float(a), Value::Integer(b)) => a.partial_cmp(&(*b as f32)),
             (Value::Float(a), Value::Double(b)) => (*a as f64).partial_cmp(b),
             (Value::Double(a), Value::Float(b)) => a.partial_cmp(&(*b as f64)),
-            
+
             // Handle Decimal comparisons with other numeric types
             (Value::Decimal(a), Value::Integer(b)) => {
-                match Decimal::from_i64(*b) {
-                    Some(b_decimal) => Some(a.cmp(&b_decimal)),
-                    None => None,
-                }
-            },
+                Decimal::from_i64(*b).map(|b_decimal| a.cmp(&b_decimal))
+            }
             (Value::Integer(a), Value::Decimal(b)) => {
-                match Decimal::from_i64(*a) {
-                    Some(a_decimal) => Some(a_decimal.cmp(b)),
-                    None => None,
-                }
-            },
+                Decimal::from_i64(*a).map(|a_decimal| a_decimal.cmp(b))
+            }
             (Value::Decimal(a), Value::Double(b)) => {
                 // Convert double to decimal for comparison
-                match Decimal::from_f64(*b) {
-                    Some(b_decimal) => Some(a.cmp(&b_decimal)),
-                    None => None,
-                }
-            },
+                Decimal::from_f64(*b).map(|b_decimal| a.cmp(&b_decimal))
+            }
             (Value::Double(a), Value::Decimal(b)) => {
                 // Convert double to decimal for comparison
-                match Decimal::from_f64(*a) {
-                    Some(a_decimal) => Some(a_decimal.cmp(b)),
-                    None => None,
-                }
-            },
+                Decimal::from_f64(*a).map(|a_decimal| a_decimal.cmp(b))
+            }
             (Value::Decimal(a), Value::Float(b)) => {
                 // Convert float to decimal for comparison
-                match Decimal::from_f32(*b) {
-                    Some(b_decimal) => Some(a.cmp(&b_decimal)),
-                    None => None,
-                }
-            },
+                Decimal::from_f32(*b).map(|b_decimal| a.cmp(&b_decimal))
+            }
             (Value::Float(a), Value::Decimal(b)) => {
                 // Convert float to decimal for comparison
-                match Decimal::from_f32(*a) {
-                    Some(a_decimal) => Some(a_decimal.cmp(b)),
-                    None => None,
-                }
-            },
+                Decimal::from_f32(*a).map(|a_decimal| a_decimal.cmp(b))
+            }
 
             _ => None,
         }
