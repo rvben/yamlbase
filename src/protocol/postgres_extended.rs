@@ -1009,7 +1009,7 @@ fn infer_type_from_expr(expr: &Expr) -> Option<SqlType> {
         Expr::Identifier(ident) => {
             // Try to infer type from column name
             match ident.value.to_lowercase().as_str() {
-                "age" | "id" | "count" | "quantity" => Some(SqlType::Integer),
+                "age" | "id" | "count" | "quantity" | "value" => Some(SqlType::Integer),
                 "price" | "amount" | "total" => Some(SqlType::Double),
                 "active" | "enabled" | "deleted" | "is_active" | "in_stock" => Some(SqlType::Boolean),
                 "name" | "username" | "email" | "description" | "status" | "customer_name" => Some(SqlType::Text),

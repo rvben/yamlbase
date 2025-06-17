@@ -18,6 +18,14 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Value>>,
 }
 
+#[derive(Debug, Clone)]
+enum ProjectionItem {
+    // A column from the table (name, index)
+    TableColumn(String, usize),
+    // A constant expression with its computed value and column alias
+    Constant(String, Value),
+}
+
 impl QueryExecutor {
     pub fn new(storage: Arc<Storage>) -> Self {
         Self { storage }
@@ -85,7 +93,14 @@ impl QueryExecutor {
 
         // Apply ORDER BY
         let sorted_rows = if let Some(order_by) = &query.order_by {
-            self.sort_rows(projected_rows, &order_by.exprs, &columns)?
+            // Convert ProjectionItem to (String, usize) for compatibility with sort_rows
+            let col_info: Vec<(String, usize)> = columns.iter().enumerate().map(|(idx, item)| {
+                match item {
+                    ProjectionItem::TableColumn(name, _) => (name.clone(), idx),
+                    ProjectionItem::Constant(name, _) => (name.clone(), idx),
+                }
+            }).collect();
+            self.sort_rows(projected_rows, &order_by.exprs, &col_info)?
         } else {
             projected_rows
         };
@@ -97,13 +112,47 @@ impl QueryExecutor {
             sorted_rows
         };
 
-        // Get column types from the table
-        let column_types = columns.iter().map(|(_, idx)| {
-            table.columns[*idx].sql_type.clone()
+        // Get column types
+        let column_types = columns.iter().map(|item| {
+            match item {
+                ProjectionItem::TableColumn(_, idx) => {
+                    table.columns[*idx].sql_type.clone()
+                }
+                ProjectionItem::Constant(_, value) => {
+                    // Infer type from value
+                    match value {
+                        Value::Integer(i) => {
+                            if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
+                                crate::yaml::schema::SqlType::BigInt
+                            } else {
+                                crate::yaml::schema::SqlType::Integer
+                            }
+                        },
+                        Value::Double(_) | Value::Float(_) => crate::yaml::schema::SqlType::Double,
+                        Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
+                        Value::Date(_) => crate::yaml::schema::SqlType::Date,
+                        Value::Time(_) => crate::yaml::schema::SqlType::Time,
+                        Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
+                        Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
+                        Value::Json(_) => crate::yaml::schema::SqlType::Text,
+                        Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
+                        Value::Text(_) => crate::yaml::schema::SqlType::Text,
+                        Value::Null => crate::yaml::schema::SqlType::Text,
+                    }
+                }
+            }
+        }).collect();
+
+        // Get column names
+        let column_names = columns.iter().map(|item| {
+            match item {
+                ProjectionItem::TableColumn(name, _) => name.clone(),
+                ProjectionItem::Constant(name, _) => name.clone(),
+            }
         }).collect();
 
         Ok(QueryResult {
-            columns: columns.iter().map(|c| c.0.clone()).collect(),
+            columns: column_names,
             column_types,
             rows: final_rows,
         })
@@ -304,23 +353,54 @@ impl QueryExecutor {
         &self,
         select: &Select,
         table: &Table,
-    ) -> crate::Result<Vec<(String, usize)>> {
+    ) -> crate::Result<Vec<ProjectionItem>> {
         let mut columns = Vec::new();
+        let mut column_counter = 1;
 
         for item in &select.projection {
             match item {
-                SelectItem::UnnamedExpr(Expr::Identifier(ident)) => {
-                    let col_name = &ident.value;
-                    let col_idx = table.get_column_index(col_name).ok_or_else(|| {
-                        YamlBaseError::Database {
-                            message: format!("Column '{}' not found", col_name),
+                SelectItem::UnnamedExpr(expr) => {
+                    match expr {
+                        Expr::Identifier(ident) => {
+                            // This is a table column reference
+                            let col_name = &ident.value;
+                            let col_idx = table.get_column_index(col_name).ok_or_else(|| {
+                                YamlBaseError::Database {
+                                    message: format!("Column '{}' not found", col_name),
+                                }
+                            })?;
+                            columns.push(ProjectionItem::TableColumn(col_name.clone(), col_idx));
                         }
-                    })?;
-                    columns.push((col_name.clone(), col_idx));
+                        _ => {
+                            // This is a constant expression (like SELECT 1, SELECT 'hello', etc.)
+                            let value = self.evaluate_constant_expr(expr)?;
+                            let col_name = format!("column_{}", column_counter);
+                            column_counter += 1;
+                            columns.push(ProjectionItem::Constant(col_name, value));
+                        }
+                    }
+                }
+                SelectItem::ExprWithAlias { expr, alias } => {
+                    match expr {
+                        Expr::Identifier(ident) => {
+                            // Table column with alias
+                            let col_idx = table.get_column_index(&ident.value).ok_or_else(|| {
+                                YamlBaseError::Database {
+                                    message: format!("Column '{}' not found", ident.value),
+                                }
+                            })?;
+                            columns.push(ProjectionItem::TableColumn(alias.value.clone(), col_idx));
+                        }
+                        _ => {
+                            // Constant expression with alias
+                            let value = self.evaluate_constant_expr(expr)?;
+                            columns.push(ProjectionItem::Constant(alias.value.clone(), value));
+                        }
+                    }
                 }
                 SelectItem::Wildcard(_) => {
                     for (idx, col) in table.columns.iter().enumerate() {
-                        columns.push((col.name.clone(), idx));
+                        columns.push(ProjectionItem::TableColumn(col.name.clone(), idx));
                     }
                 }
                 _ => {
@@ -340,6 +420,7 @@ impl QueryExecutor {
         table_name: &str,
         selection: &Option<Expr>,
     ) -> crate::Result<Vec<&'a Vec<Value>>> {
+        
         // Check if this is a simple primary key lookup
         if let Some(pk_value) = self.extract_primary_key_lookup(selection, table) {
             debug!("Using primary key index for lookup: {:?}", pk_value);
@@ -353,6 +434,7 @@ impl QueryExecutor {
                         return Ok(vec![table_row]);
                     }
                 }
+            } else {
             }
             return Ok(vec![]);
         }
@@ -360,9 +442,10 @@ impl QueryExecutor {
         // Fall back to full table scan
         let mut result = Vec::new();
 
-        for row in &table.rows {
+        for (idx, row) in table.rows.iter().enumerate() {
             if let Some(where_expr) = selection {
-                if self.evaluate_expr(where_expr, row, table)? {
+                let matches = self.evaluate_expr(where_expr, row, table)?;
+                if matches {
                     result.push(row);
                 }
             } else {
@@ -685,15 +768,22 @@ impl QueryExecutor {
     fn project_columns(
         &self,
         rows: &[&Vec<Value>],
-        columns: &[(String, usize)],
+        columns: &[ProjectionItem],
         _table: &Table,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut result = Vec::new();
 
         for row in rows {
             let mut projected_row = Vec::new();
-            for (_, idx) in columns {
-                projected_row.push(row[*idx].clone());
+            for item in columns {
+                match item {
+                    ProjectionItem::TableColumn(_, idx) => {
+                        projected_row.push(row[*idx].clone());
+                    }
+                    ProjectionItem::Constant(_, value) => {
+                        projected_row.push(value.clone());
+                    }
+                }
             }
             result.push(projected_row);
         }
@@ -1785,5 +1875,99 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1); // Should match 100%
         assert_eq!(result.rows[0][0], Value::Integer(10));
+    }
+
+    #[tokio::test]
+    async fn test_select_constant_from_table() {
+        // Create database with test table already included
+        let mut db = Database::new("test_db".to_string());
+        
+        let columns = vec![
+            create_column("id", crate::yaml::schema::SqlType::Integer, true),
+            create_column("name", crate::yaml::schema::SqlType::Varchar(100), false),
+        ];
+
+        let mut table = Table::new("test_table".to_string(), columns);
+
+        table
+            .insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+            .unwrap();
+        table
+            .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+            .unwrap();
+        table
+            .insert_row(vec![Value::Integer(3), Value::Text("Charlie".to_string())])
+            .unwrap();
+
+        db.add_table(table).unwrap();
+        
+        // Now create Storage with the complete database
+        let storage = Arc::new(DbStorage::new(db));
+        
+        // Wait a bit for the async index building to complete
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let executor = QueryExecutor::new(storage);
+
+        // Test 1: SELECT 1 FROM test_table
+        let stmt = parse_statement("SELECT 1 FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns.len(), 1);
+        assert_eq!(result.columns[0], "column_1");
+        assert_eq!(result.rows.len(), 3); // Should have 3 rows
+        for row in &result.rows {
+            assert_eq!(row[0], Value::Integer(1));
+        }
+
+        // Test 2: SELECT 1 AS constant_value FROM test_table
+        let stmt = parse_statement("SELECT 1 AS constant_value FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns.len(), 1);
+        assert_eq!(result.columns[0], "constant_value");
+        assert_eq!(result.rows.len(), 3);
+        for row in &result.rows {
+            assert_eq!(row[0], Value::Integer(1));
+        }
+
+        // Test 3: SELECT id, 1 AS flag, name FROM test_table
+        let stmt = parse_statement("SELECT id, 1 AS flag, name FROM test_table ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns.len(), 3);
+        assert_eq!(result.columns[0], "id");
+        assert_eq!(result.columns[1], "flag");
+        assert_eq!(result.columns[2], "name");
+        assert_eq!(result.rows.len(), 3);
+
+        // Check first row
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Integer(1)); // constant
+        assert_eq!(result.rows[0][2], Value::Text("Alice".to_string()));
+
+        // Test 4: SELECT 'hello' FROM test_table
+        let stmt = parse_statement("SELECT 'hello' FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 3);
+        for row in &result.rows {
+            assert_eq!(row[0], Value::Text("hello".to_string()));
+        }
+
+        // Test 5: SELECT 1 FROM test_table WHERE id = 2
+        let stmt = parse_statement("SELECT 1 FROM test_table WHERE id = 2");
+        
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1); // Only one row should match
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+
+        // Test 6: SELECT 1 FROM test_table LIMIT 1
+        let stmt = parse_statement("SELECT 1 FROM test_table LIMIT 1");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1); // Limited to 1 row
+        assert_eq!(result.rows[0][0], Value::Integer(1));
     }
 }
