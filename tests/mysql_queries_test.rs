@@ -1,6 +1,6 @@
 mod common;
 
-use common::{mysql_connect_and_auth, mysql_test_query, TestServer};
+use common::{TestServer, mysql_connect_and_auth, mysql_test_query};
 
 #[test]
 fn test_mysql_various_queries() {

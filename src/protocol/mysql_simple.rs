@@ -5,11 +5,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info};
 
+use crate::YamlBaseError;
 use crate::config::Config;
 use crate::database::Storage;
-use crate::protocol::mysql_caching_sha2::{CachingSha2Auth, CACHING_SHA2_PLUGIN_NAME};
-use crate::sql::{parse_sql, QueryExecutor};
-use crate::YamlBaseError;
+use crate::protocol::mysql_caching_sha2::{CACHING_SHA2_PLUGIN_NAME, CachingSha2Auth};
+use crate::sql::{QueryExecutor, parse_sql};
 
 // MySQL Protocol Constants
 const PROTOCOL_VERSION: u8 = 10;

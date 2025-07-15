@@ -5,11 +5,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info};
 
+use crate::YamlBaseError;
 use crate::config::Config;
 use crate::database::{Storage, Value};
 use crate::protocol::postgres_extended::ExtendedProtocol;
-use crate::sql::{parse_sql, QueryExecutor};
-use crate::YamlBaseError;
+use crate::sql::{QueryExecutor, parse_sql};
 
 pub struct PostgresProtocol {
     config: Arc<Config>,

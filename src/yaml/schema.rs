@@ -134,7 +134,7 @@ impl YamlColumn {
                 return Err(crate::YamlBaseError::TypeConversion(format!(
                     "Unknown SQL type: {}",
                     base_type
-                )))
+                )));
             }
         })
     }

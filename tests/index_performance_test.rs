@@ -1,7 +1,7 @@
 use std::time::Instant;
+use yamlbase::Database;
 use yamlbase::database::{Column, Storage, Table, Value};
 use yamlbase::yaml::schema::SqlType;
-use yamlbase::Database;
 
 #[tokio::test]
 async fn test_primary_key_index_performance() {
@@ -45,7 +45,7 @@ async fn test_primary_key_index_performance() {
 
     // Create storage and executor
     use std::sync::Arc;
-    use yamlbase::sql::{parse_sql, QueryExecutor};
+    use yamlbase::sql::{QueryExecutor, parse_sql};
 
     let storage = Arc::new(Storage::new(db));
     let executor = QueryExecutor::new(storage.clone());
@@ -128,7 +128,7 @@ async fn test_index_with_different_types() {
     db.add_table(table).unwrap();
 
     use std::sync::Arc;
-    use yamlbase::sql::{parse_sql, QueryExecutor};
+    use yamlbase::sql::{QueryExecutor, parse_sql};
 
     let storage = Arc::new(Storage::new(db));
     let executor = QueryExecutor::new(storage.clone());
