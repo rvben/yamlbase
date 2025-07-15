@@ -1,6 +1,31 @@
 use bytes::{BufMut, BytesMut};
+use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// Get the path to the yamlbase binary, preferring pre-built binaries over cargo run
+fn get_yamlbase_command() -> (String, Vec<String>) {
+    // Check if YAMLBASE_TEST_BINARY env var is set (for CI)
+    if let Ok(binary_path) = std::env::var("YAMLBASE_TEST_BINARY") {
+        return (binary_path, vec![]);
+    }
+    
+    // Check for pre-built binaries
+    let release_binary = "target/release/yamlbase";
+    let debug_binary = "target/debug/yamlbase";
+    
+    if Path::new(release_binary).exists() {
+        return (release_binary.to_string(), vec![]);
+    }
+    
+    if Path::new(debug_binary).exists() {
+        return (debug_binary.to_string(), vec![]);
+    }
+    
+    // Fall back to cargo run
+    let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    (cargo_path, vec!["run".to_string(), "--".to_string()])
+}
 
 #[tokio::test]
 async fn test_postgres_extended_protocol_flow() {
@@ -37,20 +62,22 @@ tables:
     drop(listener);
 
     // Start the server
+    let temp_path = temp_file.path().to_str().unwrap().to_string();
     let server = tokio::spawn(async move {
-        let _ = tokio::process::Command::new("cargo")
-            .args(&[
-                "run",
-                "--",
-                "-f",
-                temp_file.path().to_str().unwrap(),
-                "--protocol",
-                "postgres",
-                "-p",
-                &port.to_string(),
-                "--log-level",
-                "debug",
-            ])
+        let (cmd, mut args) = get_yamlbase_command();
+        args.extend(vec![
+            "-f".to_string(),
+            temp_path,
+            "--protocol".to_string(),
+            "postgres".to_string(),
+            "-p".to_string(),
+            port.to_string(),
+            "--log-level".to_string(),
+            "debug".to_string(),
+        ]);
+        
+        let _ = tokio::process::Command::new(&cmd)
+            .args(&args)
             .kill_on_drop(true)
             .spawn()
             .unwrap()

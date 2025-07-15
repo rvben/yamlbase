@@ -1,21 +1,47 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::time::Duration;
+
+/// Get the path to the yamlbase binary, preferring pre-built binaries over cargo run
+fn get_yamlbase_command() -> (String, Vec<String>) {
+    // Check if YAMLBASE_TEST_BINARY env var is set (for CI)
+    if let Ok(binary_path) = std::env::var("YAMLBASE_TEST_BINARY") {
+        return (binary_path, vec![]);
+    }
+    
+    // Check for pre-built binaries
+    let release_binary = "target/release/yamlbase";
+    let debug_binary = "target/debug/yamlbase";
+    
+    if Path::new(release_binary).exists() {
+        return (release_binary.to_string(), vec![]);
+    }
+    
+    if Path::new(debug_binary).exists() {
+        return (debug_binary.to_string(), vec![]);
+    }
+    
+    // Fall back to cargo run
+    let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    (cargo_path, vec!["run".to_string(), "--".to_string()])
+}
 
 #[test]
 fn test_mysql_connection_and_simple_query() {
     // Start server in background
-    let mut server = std::process::Command::new("cargo")
-        .args(&[
-            "run",
-            "--",
-            "-f",
-            "examples/database_with_auth.yaml",
-            "--protocol",
-            "mysql",
-            "-p",
-            "13306",
-        ])
+    let (cmd, mut args) = get_yamlbase_command();
+    args.extend(vec![
+        "-f".to_string(),
+        "examples/database_with_auth.yaml".to_string(),
+        "--protocol".to_string(),
+        "mysql".to_string(),
+        "-p".to_string(),
+        "13306".to_string(),
+    ]);
+    
+    let mut server = std::process::Command::new(&cmd)
+        .args(&args)
         .spawn()
         .expect("Failed to start server");
 

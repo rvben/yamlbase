@@ -1,9 +1,33 @@
 use postgres::{Client, NoTls};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::thread;
 use std::time::Duration;
 use tempfile::NamedTempFile;
+
+/// Get the path to the yamlbase binary, preferring pre-built binaries over cargo run
+fn get_yamlbase_command() -> (String, Vec<String>) {
+    // Check if YAMLBASE_TEST_BINARY env var is set (for CI)
+    if let Ok(binary_path) = std::env::var("YAMLBASE_TEST_BINARY") {
+        return (binary_path, vec![]);
+    }
+    
+    // Check for pre-built binaries
+    let release_binary = "target/release/yamlbase";
+    let debug_binary = "target/debug/yamlbase";
+    
+    if Path::new(release_binary).exists() {
+        return (release_binary.to_string(), vec![]);
+    }
+    
+    if Path::new(debug_binary).exists() {
+        return (debug_binary.to_string(), vec![]);
+    }
+    
+    // Fall back to cargo run
+    let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    (cargo_path, vec!["run".to_string(), "--".to_string()])
+}
 
 struct TestServer {
     process: Child,
@@ -21,17 +45,18 @@ impl TestServer {
         let port = 15432; // Use non-standard port for testing
         
         // Start the server
-        let process = Command::new("cargo")
-            .args(&[
-                "run",
-                "--",
-                "-f",
-                &yaml_path,
-                "-p",
-                &port.to_string(),
-                "--log-level",
-                "error",
-            ])
+        let (cmd, mut args) = get_yamlbase_command();
+        args.extend(vec![
+            "-f".to_string(),
+            yaml_path,
+            "-p".to_string(),
+            port.to_string(),
+            "--log-level".to_string(),
+            "error".to_string(),
+        ]);
+        
+        let process = Command::new(&cmd)
+            .args(&args)
             .spawn()
             .expect("Failed to start yamlbase server");
         
