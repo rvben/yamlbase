@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use std::time::Instant;
 use yamlbase::Database;
 use yamlbase::database::{Column, Storage, Table, Value};

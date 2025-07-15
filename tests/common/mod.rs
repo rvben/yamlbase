@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};

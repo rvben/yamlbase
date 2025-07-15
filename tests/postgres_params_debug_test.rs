@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use bytes::{BufMut, BytesMut};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

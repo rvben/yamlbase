@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use mysql::prelude::*;
 use mysql::{Conn, OptsBuilder};
 use std::path::Path;

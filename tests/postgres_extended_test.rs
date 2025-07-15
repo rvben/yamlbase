@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use tokio_postgres::{Config, NoTls};
 use yamlbase::database::{Column, Database, Table, Value};
 use yamlbase::yaml::schema::SqlType;
