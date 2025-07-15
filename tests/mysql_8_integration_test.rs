@@ -31,9 +31,9 @@ impl TestServer {
                 "mysql",
                 "-p",
                 &port.to_string(),
-                "--log-level",
-                "debug",
             ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .expect("Failed to start yamlbase server");
 

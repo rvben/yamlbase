@@ -1,5 +1,6 @@
 use chrono::{self, Datelike};
 use regex::Regex;
+use rust_decimal::prelude::*;
 use sqlparser::ast::*;
 use std::sync::Arc;
 use tracing::debug;
@@ -41,7 +42,7 @@ impl JoinedColumn {
             JoinedColumn::Constant(name, _) => name.clone(),
         }
     }
-    
+
     fn get_type(&self, tables: &[(String, &Table)]) -> crate::yaml::schema::SqlType {
         match self {
             JoinedColumn::TableColumn(_, table_idx, col_idx) => {
@@ -85,7 +86,9 @@ impl QueryExecutor {
     pub async fn execute(&self, statement: &Statement) -> crate::Result<QueryResult> {
         match statement {
             Statement::Query(query) => self.execute_query(query).await,
-            Statement::StartTransaction { .. } | Statement::Commit { .. } | Statement::Rollback { .. } => {
+            Statement::StartTransaction { .. }
+            | Statement::Commit { .. }
+            | Statement::Rollback { .. } => {
                 // Return empty result for transaction commands (no-op in read-only mode)
                 Ok(QueryResult {
                     columns: vec![],
@@ -102,6 +105,11 @@ impl QueryExecutor {
     async fn execute_query(&self, query: &Query) -> crate::Result<QueryResult> {
         let db_arc = self.storage.database();
         let db = db_arc.read().await;
+
+        // Handle CTEs if present
+        if let Some(with) = &query.with {
+            return self.execute_query_with_ctes(&db, query, with).await;
+        }
 
         match &query.body.as_ref() {
             SetExpr::Select(select) => self.execute_select(&db, select, query).await,
@@ -341,7 +349,7 @@ impl QueryExecutor {
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT expression
                 let date_val = self.evaluate_constant_expr(expr)?;
-                
+
                 let date_str = match &date_val {
                     Value::Text(s) => s,
                     Value::Date(d) => {
@@ -349,11 +357,13 @@ impl QueryExecutor {
                         let formatted = d.format("%Y-%m-%d").to_string();
                         return self.evaluate_extract_from_date(field, &formatted);
                     }
-                    _ => return Err(YamlBaseError::Database {
-                        message: "EXTRACT requires date argument".to_string(),
-                    }),
+                    _ => {
+                        return Err(YamlBaseError::Database {
+                            message: "EXTRACT requires date argument".to_string(),
+                        })
+                    }
                 };
-                
+
                 self.evaluate_extract_from_date(field, date_str)
             }
             Expr::TypedString { data_type, value } => {
@@ -466,79 +476,85 @@ impl QueryExecutor {
         query: &Query,
     ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT with JOINs");
-        
+
         // Extract all tables involved in the query
         let mut all_tables = Vec::new();
         let mut table_aliases = std::collections::HashMap::new();
-        
+
         for table_with_joins in &select.from {
             // Add the main table
             let (table_name, alias) = self.extract_table_info(&table_with_joins.relation)?;
-            let table = db.get_table(&table_name)
+            let table = db
+                .get_table(&table_name)
                 .ok_or_else(|| YamlBaseError::Database {
                     message: format!("Table '{}' not found", table_name),
                 })?;
-            
+
             if let Some(alias_name) = alias {
                 table_aliases.insert(alias_name.clone(), table_name.clone());
             }
             all_tables.push((table_name.clone(), table));
-            
+
             // Add joined tables
             for join in &table_with_joins.joins {
                 let (join_table_name, join_alias) = self.extract_table_info(&join.relation)?;
-                let join_table = db.get_table(&join_table_name)
-                    .ok_or_else(|| YamlBaseError::Database {
-                        message: format!("Table '{}' not found", join_table_name),
-                    })?;
-                
+                let join_table =
+                    db.get_table(&join_table_name)
+                        .ok_or_else(|| YamlBaseError::Database {
+                            message: format!("Table '{}' not found", join_table_name),
+                        })?;
+
                 if let Some(alias_name) = join_alias {
                     table_aliases.insert(alias_name.clone(), join_table_name.clone());
                 }
                 all_tables.push((join_table_name.clone(), join_table));
             }
         }
-        
+
         // Perform the join operation
-        let joined_rows = self.perform_join(&select.from, &all_tables, &table_aliases).await?;
-        
+        let joined_rows = self
+            .perform_join(&select.from, &all_tables, &table_aliases)
+            .await?;
+
         // Check if this is an aggregate query
         if self.is_aggregate_query(select) {
-            return self.execute_aggregate_with_joined_rows(db, select, query, &joined_rows, &all_tables).await;
+            return self
+                .execute_aggregate_with_joined_rows(db, select, query, &joined_rows, &all_tables)
+                .await;
         }
-        
+
         // Extract columns with table qualifiers
         let columns = self.extract_columns_for_join(select, &all_tables, &table_aliases)?;
-        
+
         // Filter rows based on WHERE clause
-        let filtered_rows = self.filter_joined_rows(&joined_rows, &select.selection, &all_tables, &table_aliases)?;
-        
+        let filtered_rows =
+            self.filter_joined_rows(&joined_rows, &select.selection, &all_tables, &table_aliases)?;
+
         // Project columns
         let projected_rows = self.project_joined_columns(&filtered_rows, &columns)?;
-        
+
         // Apply ORDER BY
         let sorted_rows = if let Some(order_by) = &query.order_by {
             self.sort_joined_rows(projected_rows, &order_by.exprs, &columns)?
         } else {
             projected_rows
         };
-        
+
         // Apply LIMIT and OFFSET
         let final_rows = if let Some(limit_expr) = &query.limit {
             self.apply_limit(sorted_rows, limit_expr)?
         } else {
             sorted_rows
         };
-        
+
         // Get column types
-        let column_types = columns.iter()
+        let column_types = columns
+            .iter()
             .map(|col| col.get_type(&all_tables))
             .collect();
-        
-        let column_names = columns.iter()
-            .map(|col| col.get_name())
-            .collect();
-        
+
+        let column_names = columns.iter().map(|col| col.get_name()).collect();
+
         Ok(QueryResult {
             columns: column_names,
             column_types,
@@ -546,18 +562,23 @@ impl QueryExecutor {
         })
     }
 
-    fn extract_table_info(&self, table_factor: &TableFactor) -> crate::Result<(String, Option<String>)> {
+    fn extract_table_info(
+        &self,
+        table_factor: &TableFactor,
+    ) -> crate::Result<(String, Option<String>)> {
         match table_factor {
             TableFactor::Table { name, alias, .. } => {
-                let table_name = name.0.first()
+                let table_name = name
+                    .0
+                    .first()
                     .ok_or_else(|| YamlBaseError::Database {
                         message: "Invalid table name".to_string(),
                     })?
                     .value
                     .clone();
-                
+
                 let alias_name = alias.as_ref().map(|a| a.name.value.clone());
-                
+
                 Ok((table_name, alias_name))
             }
             _ => Err(YamlBaseError::NotImplemented(
@@ -962,24 +983,28 @@ impl QueryExecutor {
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT expression
                 let date_val = self.get_expr_value(expr, row, table)?;
-                
+
                 let date_str = match &date_val {
                     Value::Text(s) => s,
                     Value::Date(d) => &d.format("%Y-%m-%d").to_string(),
-                    _ => return Err(YamlBaseError::Database {
-                        message: "EXTRACT requires date argument".to_string(),
-                    }),
+                    _ => {
+                        return Err(YamlBaseError::Database {
+                            message: "EXTRACT requires date argument".to_string(),
+                        })
+                    }
                 };
-                
+
                 if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                     use sqlparser::ast::DateTimeField;
                     let result = match field {
                         DateTimeField::Day => date.day() as i64,
                         DateTimeField::Month => date.month() as i64,
                         DateTimeField::Year => date.year() as i64,
-                        _ => return Err(YamlBaseError::Database {
-                            message: format!("EXTRACT field '{:?}' not supported", field),
-                        }),
+                        _ => {
+                            return Err(YamlBaseError::Database {
+                                message: format!("EXTRACT field '{:?}' not supported", field),
+                            })
+                        }
                     };
                     Ok(Value::Integer(result))
                 } else {
@@ -1115,15 +1140,21 @@ impl QueryExecutor {
         }
     }
 
-    fn evaluate_extract_from_date(&self, field: &DateTimeField, date_str: &str) -> crate::Result<Value> {
+    fn evaluate_extract_from_date(
+        &self,
+        field: &DateTimeField,
+        date_str: &str,
+    ) -> crate::Result<Value> {
         if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
             let result = match field {
                 DateTimeField::Day => date.day() as i64,
                 DateTimeField::Month => date.month() as i64,
                 DateTimeField::Year => date.year() as i64,
-                _ => return Err(YamlBaseError::Database {
-                    message: format!("EXTRACT field '{:?}' not supported", field),
-                }),
+                _ => {
+                    return Err(YamlBaseError::Database {
+                        message: format!("EXTRACT field '{:?}' not supported", field),
+                    })
+                }
             };
             Ok(Value::Integer(result))
         } else {
@@ -1162,29 +1193,38 @@ impl QueryExecutor {
                     if args.args.len() == 2 {
                         if let (
                             FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(months_expr))
-                        ) = (&args.args[0], &args.args[1]) {
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(months_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
                             let months_val = self.evaluate_constant_expr(months_expr)?;
-                            
+
                             // Parse date
                             let date_str = match &date_val {
                                 Value::Text(s) => s,
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "ADD_MONTHS requires date as first argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "ADD_MONTHS requires date as first argument"
+                                            .to_string(),
+                                    })
+                                }
                             };
-                            
+
                             // Get months to add
                             let months = match &months_val {
                                 Value::Integer(n) => *n,
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "ADD_MONTHS requires integer as second argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "ADD_MONTHS requires integer as second argument"
+                                            .to_string(),
+                                    })
+                                }
                             };
-                            
+
                             // Parse and manipulate date
-                            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                            if let Ok(date) =
+                                chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                            {
                                 let result = if months >= 0 {
                                     date + chrono::Months::new(months as u32)
                                 } else {
@@ -1216,22 +1256,33 @@ impl QueryExecutor {
                 // LAST_DAY(date) - returns last day of month
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
-                            
+
                             let date_str = match &date_val {
                                 Value::Text(s) => s,
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "LAST_DAY requires date argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "LAST_DAY requires date argument".to_string(),
+                                    })
+                                }
                             };
-                            
-                            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+
+                            if let Ok(date) =
+                                chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                            {
                                 // Get first day of next month
                                 let next_month = if date.month() == 12 {
                                     chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
                                 } else {
-                                    chrono::NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1).unwrap()
+                                    chrono::NaiveDate::from_ymd_opt(
+                                        date.year(),
+                                        date.month() + 1,
+                                        1,
+                                    )
+                                    .unwrap()
                                 };
                                 // Subtract one day to get last day of current month
                                 let last_day = next_month - chrono::Duration::days(1);
@@ -1412,26 +1463,48 @@ impl QueryExecutor {
                                 rows.len() as i64
                             }
                             FunctionArguments::List(args) => {
+                                // Check for DISTINCT
+                                let is_distinct = args
+                                    .duplicate_treatment
+                                    .as_ref()
+                                    .map(|dt| matches!(dt, DuplicateTreatment::Distinct))
+                                    .unwrap_or(false);
+
                                 if args.args.is_empty() {
                                     // COUNT() - should be an error but treat as COUNT(*)
                                     rows.len() as i64
                                 } else if args.args.len() == 1 {
                                     match &args.args[0] {
                                         FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                                            // COUNT(*)
+                                            // COUNT(*) - DISTINCT is not allowed with *
                                             rows.len() as i64
                                         }
                                         FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
-                                            // COUNT(column)
-                                            let mut count = 0i64;
-                                            for row in rows {
-                                                let value =
-                                                    self.get_expr_value(expr, row, table)?;
-                                                if !matches!(value, Value::Null) {
-                                                    count += 1;
+                                            // COUNT(column) or COUNT(DISTINCT column)
+                                            if is_distinct {
+                                                // COUNT(DISTINCT column)
+                                                let mut unique_values =
+                                                    std::collections::HashSet::new();
+                                                for row in rows {
+                                                    let value =
+                                                        self.get_expr_value(expr, row, table)?;
+                                                    if !matches!(value, Value::Null) {
+                                                        unique_values.insert(value);
+                                                    }
                                                 }
+                                                unique_values.len() as i64
+                                            } else {
+                                                // COUNT(column)
+                                                let mut count = 0i64;
+                                                for row in rows {
+                                                    let value =
+                                                        self.get_expr_value(expr, row, table)?;
+                                                    if !matches!(value, Value::Null) {
+                                                        count += 1;
+                                                    }
+                                                }
+                                                count
                                             }
-                                            count
                                         }
                                         _ => {
                                             return Err(YamlBaseError::NotImplemented(
@@ -1491,6 +1564,145 @@ impl QueryExecutor {
                             }),
                         }
                     }
+                    "AVG" => {
+                        if let FunctionArguments::List(args) = &func.args {
+                            if args.args.len() == 1 {
+                                match &args.args[0] {
+                                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                        let mut sum = 0.0;
+                                        let mut count = 0;
+
+                                        for row in rows {
+                                            let value = self.get_expr_value(expr, row, table)?;
+                                            match value {
+                                                Value::Integer(i) => {
+                                                    sum += i as f64;
+                                                    count += 1;
+                                                }
+                                                Value::Double(d) => {
+                                                    sum += d;
+                                                    count += 1;
+                                                }
+                                                Value::Float(f) => {
+                                                    sum += f as f64;
+                                                    count += 1;
+                                                }
+                                                Value::Decimal(d) => {
+                                                    sum += d.to_f64().unwrap_or(0.0);
+                                                    count += 1;
+                                                }
+                                                Value::Null => {} // Skip NULL values
+                                                _ => {
+                                                    return Err(YamlBaseError::Database {
+                                                        message: "AVG requires numeric values"
+                                                            .to_string(),
+                                                    });
+                                                }
+                                            }
+                                        }
+
+                                        let avg = if count > 0 { sum / count as f64 } else { 0.0 };
+                                        Ok((func_name.clone(), Value::Double(avg)))
+                                    }
+                                    _ => Err(YamlBaseError::NotImplemented(
+                                        "Unsupported AVG argument".to_string(),
+                                    )),
+                                }
+                            } else {
+                                Err(YamlBaseError::Database {
+                                    message: "AVG requires exactly one argument".to_string(),
+                                })
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Unsupported function arguments".to_string(),
+                            ))
+                        }
+                    }
+                    "MIN" => {
+                        if let FunctionArguments::List(args) = &func.args {
+                            if args.args.len() == 1 {
+                                match &args.args[0] {
+                                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                        let mut min_value: Option<Value> = None;
+
+                                        for row in rows {
+                                            let value = self.get_expr_value(expr, row, table)?;
+                                            if !matches!(value, Value::Null) {
+                                                match &min_value {
+                                                    None => min_value = Some(value),
+                                                    Some(current_min) => {
+                                                        if let Some(ord) =
+                                                            value.compare(current_min)
+                                                        {
+                                                            if ord.is_lt() {
+                                                                min_value = Some(value);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Ok((func_name.clone(), min_value.unwrap_or(Value::Null)))
+                                    }
+                                    _ => Err(YamlBaseError::NotImplemented(
+                                        "Unsupported MIN argument".to_string(),
+                                    )),
+                                }
+                            } else {
+                                Err(YamlBaseError::Database {
+                                    message: "MIN requires exactly one argument".to_string(),
+                                })
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Unsupported function arguments".to_string(),
+                            ))
+                        }
+                    }
+                    "MAX" => {
+                        if let FunctionArguments::List(args) = &func.args {
+                            if args.args.len() == 1 {
+                                match &args.args[0] {
+                                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                        let mut max_value: Option<Value> = None;
+
+                                        for row in rows {
+                                            let value = self.get_expr_value(expr, row, table)?;
+                                            if !matches!(value, Value::Null) {
+                                                match &max_value {
+                                                    None => max_value = Some(value),
+                                                    Some(current_max) => {
+                                                        if let Some(ord) =
+                                                            value.compare(current_max)
+                                                        {
+                                                            if ord.is_gt() {
+                                                                max_value = Some(value);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Ok((func_name.clone(), max_value.unwrap_or(Value::Null)))
+                                    }
+                                    _ => Err(YamlBaseError::NotImplemented(
+                                        "Unsupported MAX argument".to_string(),
+                                    )),
+                                }
+                            } else {
+                                Err(YamlBaseError::Database {
+                                    message: "MAX requires exactly one argument".to_string(),
+                                })
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Unsupported function arguments".to_string(),
+                            ))
+                        }
+                    }
                     _ => Err(YamlBaseError::NotImplemented(format!(
                         "Aggregate function {} not supported",
                         func_name
@@ -1512,16 +1724,16 @@ impl QueryExecutor {
     ) -> crate::Result<Vec<Vec<Value>>> {
         // Start with the first table
         let mut result_rows = Vec::new();
-        
+
         if tables.is_empty() {
             return Ok(result_rows);
         }
-        
+
         // Initialize with rows from the first table
         for row in &tables[0].1.rows {
             result_rows.push(row.clone());
         }
-        
+
         // Process joins
         let mut table_idx = 1;
         for table_with_joins in from {
@@ -1531,7 +1743,7 @@ impl QueryExecutor {
                         message: "Invalid join structure".to_string(),
                     });
                 }
-                
+
                 let join_table = tables[table_idx].1;
                 result_rows = self.apply_join(
                     result_rows,
@@ -1541,14 +1753,14 @@ impl QueryExecutor {
                     table_aliases,
                     table_idx,
                 )?;
-                
+
                 table_idx += 1;
             }
         }
-        
+
         Ok(result_rows)
     }
-    
+
     fn apply_join(
         &self,
         left_rows: Vec<Vec<Value>>,
@@ -1559,25 +1771,28 @@ impl QueryExecutor {
         _right_table_idx: usize,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut result = Vec::new();
-        
+
         match join_type {
             JoinOperator::Inner(constraint) | JoinOperator::LeftOuter(constraint) => {
                 // For INNER and LEFT JOIN
                 let is_left_join = matches!(join_type, JoinOperator::LeftOuter(_));
-                
+
                 for left_row in &left_rows {
                     let mut matched = false;
-                    
+
                     for right_row in &right_table.rows {
                         // Combine rows for evaluation
                         let mut combined_row = left_row.clone();
                         combined_row.extend(right_row.clone());
-                        
+
                         // Evaluate ON condition
                         let matches = match constraint {
-                            JoinConstraint::On(expr) => {
-                                self.evaluate_join_condition(expr, &combined_row, all_tables, table_aliases)?
-                            }
+                            JoinConstraint::On(expr) => self.evaluate_join_condition(
+                                expr,
+                                &combined_row,
+                                all_tables,
+                                table_aliases,
+                            )?,
                             JoinConstraint::Using(_) => {
                                 return Err(YamlBaseError::NotImplemented(
                                     "JOIN USING is not yet supported".to_string(),
@@ -1590,13 +1805,13 @@ impl QueryExecutor {
                             }
                             JoinConstraint::None => true,
                         };
-                        
+
                         if matches {
                             result.push(combined_row);
                             matched = true;
                         }
                     }
-                    
+
                     // For LEFT JOIN, include unmatched left rows with NULLs
                     if is_left_join && !matched {
                         let mut combined_row = left_row.clone();
@@ -1624,10 +1839,10 @@ impl QueryExecutor {
                 ))
             }
         }
-        
+
         Ok(result)
     }
-    
+
     fn evaluate_join_condition(
         &self,
         expr: &Expr,
@@ -1639,7 +1854,7 @@ impl QueryExecutor {
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.get_join_expr_value(left, row, tables, table_aliases)?;
                 let right_val = self.get_join_expr_value(right, row, tables, table_aliases)?;
-                
+
                 match op {
                     BinaryOperator::Eq => Ok(left_val == right_val),
                     BinaryOperator::NotEq => Ok(left_val != right_val),
@@ -1672,13 +1887,17 @@ impl QueryExecutor {
                         }
                     }
                     BinaryOperator::And => {
-                        let left_bool = self.evaluate_join_condition(left, row, tables, table_aliases)?;
-                        let right_bool = self.evaluate_join_condition(right, row, tables, table_aliases)?;
+                        let left_bool =
+                            self.evaluate_join_condition(left, row, tables, table_aliases)?;
+                        let right_bool =
+                            self.evaluate_join_condition(right, row, tables, table_aliases)?;
                         Ok(left_bool && right_bool)
                     }
                     BinaryOperator::Or => {
-                        let left_bool = self.evaluate_join_condition(left, row, tables, table_aliases)?;
-                        let right_bool = self.evaluate_join_condition(right, row, tables, table_aliases)?;
+                        let left_bool =
+                            self.evaluate_join_condition(left, row, tables, table_aliases)?;
+                        let right_bool =
+                            self.evaluate_join_condition(right, row, tables, table_aliases)?;
                         Ok(left_bool || right_bool)
                     }
                     _ => Err(YamlBaseError::NotImplemented(
@@ -1691,7 +1910,7 @@ impl QueryExecutor {
             )),
         }
     }
-    
+
     fn get_join_expr_value(
         &self,
         expr: &Expr,
@@ -1704,25 +1923,28 @@ impl QueryExecutor {
                 if parts.len() == 2 {
                     let table_ref = &parts[0].value;
                     let column_name = &parts[1].value;
-                    
+
                     // Resolve table alias if needed
                     let actual_table_name = table_aliases.get(table_ref).unwrap_or(table_ref);
-                    
+
                     // Find table index
                     let mut col_offset = 0;
-                    for (_idx, (table_name, table)) in tables.iter().enumerate() {
+                    for (table_name, table) in tables.iter() {
                         if table_name == actual_table_name || table_ref == table_name {
                             // Find column in this table
                             if let Some(col_idx) = table.get_column_index(column_name) {
                                 return Ok(row[col_offset + col_idx].clone());
                             }
                             return Err(YamlBaseError::Database {
-                                message: format!("Column '{}.{}' not found", table_ref, column_name),
+                                message: format!(
+                                    "Column '{}.{}' not found",
+                                    table_ref, column_name
+                                ),
                             });
                         }
                         col_offset += table.columns.len();
                     }
-                    
+
                     Err(YamlBaseError::Database {
                         message: format!("Table '{}' not found in join", table_ref),
                     })
@@ -1741,18 +1963,41 @@ impl QueryExecutor {
                     }
                     col_offset += table.columns.len();
                 }
-                
+
                 Err(YamlBaseError::Database {
                     message: format!("Column '{}' not found in any table", ident.value),
                 })
             }
             Expr::Value(val) => self.sql_value_to_db_value(val),
+            Expr::Function(func) => {
+                // Evaluate functions in JOIN conditions
+                self.evaluate_constant_function(func)
+            }
+            Expr::Extract { field, expr, .. } => {
+                // Handle EXTRACT in JOIN conditions
+                let date_val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+
+                let date_str = match &date_val {
+                    Value::Text(s) => s,
+                    Value::Date(d) => {
+                        let formatted = d.format("%Y-%m-%d").to_string();
+                        return self.evaluate_extract_from_date(field, &formatted);
+                    }
+                    _ => {
+                        return Err(YamlBaseError::Database {
+                            message: "EXTRACT requires date argument".to_string(),
+                        })
+                    }
+                };
+
+                self.evaluate_extract_from_date(field, date_str)
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Expression type not supported in JOIN conditions".to_string(),
             )),
         }
     }
-    
+
     fn extract_columns_for_join(
         &self,
         select: &Select,
@@ -1761,7 +2006,7 @@ impl QueryExecutor {
     ) -> crate::Result<Vec<JoinedColumn>> {
         let mut columns = Vec::new();
         let mut column_counter = 1;
-        
+
         for item in &select.projection {
             match item {
                 SelectItem::UnnamedExpr(expr) => {
@@ -1769,16 +2014,21 @@ impl QueryExecutor {
                         Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
                             let table_ref = &parts[0].value;
                             let column_name = &parts[1].value;
-                            
+
                             // Resolve table alias if needed
-                            let actual_table_name = table_aliases.get(table_ref).unwrap_or(table_ref);
-                            
+                            let actual_table_name =
+                                table_aliases.get(table_ref).unwrap_or(table_ref);
+
                             // Find table and column indices
                             for (table_idx, (table_name, table)) in tables.iter().enumerate() {
                                 if table_name == actual_table_name || table_ref == table_name {
                                     if let Some(col_idx) = table.get_column_index(column_name) {
                                         let display_name = format!("{}.{}", table_ref, column_name);
-                                        columns.push(JoinedColumn::TableColumn(display_name, table_idx, col_idx));
+                                        columns.push(JoinedColumn::TableColumn(
+                                            display_name,
+                                            table_idx,
+                                            col_idx,
+                                        ));
                                         break;
                                     }
                                 }
@@ -1789,7 +2039,11 @@ impl QueryExecutor {
                             let mut found = false;
                             for (table_idx, (_, table)) in tables.iter().enumerate() {
                                 if let Some(col_idx) = table.get_column_index(&ident.value) {
-                                    columns.push(JoinedColumn::TableColumn(ident.value.clone(), table_idx, col_idx));
+                                    columns.push(JoinedColumn::TableColumn(
+                                        ident.value.clone(),
+                                        table_idx,
+                                        col_idx,
+                                    ));
                                     found = true;
                                     break;
                                 }
@@ -1814,15 +2068,20 @@ impl QueryExecutor {
                         Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
                             let table_ref = &parts[0].value;
                             let column_name = &parts[1].value;
-                            
+
                             // Resolve table alias if needed
-                            let actual_table_name = table_aliases.get(table_ref).unwrap_or(table_ref);
-                            
+                            let actual_table_name =
+                                table_aliases.get(table_ref).unwrap_or(table_ref);
+
                             // Find table and column indices
                             for (table_idx, (table_name, table)) in tables.iter().enumerate() {
                                 if table_name == actual_table_name || table_ref == table_name {
                                     if let Some(col_idx) = table.get_column_index(column_name) {
-                                        columns.push(JoinedColumn::TableColumn(alias.value.clone(), table_idx, col_idx));
+                                        columns.push(JoinedColumn::TableColumn(
+                                            alias.value.clone(),
+                                            table_idx,
+                                            col_idx,
+                                        ));
                                         break;
                                     }
                                 }
@@ -1833,7 +2092,11 @@ impl QueryExecutor {
                             let mut found = false;
                             for (table_idx, (_, table)) in tables.iter().enumerate() {
                                 if let Some(col_idx) = table.get_column_index(&ident.value) {
-                                    columns.push(JoinedColumn::TableColumn(alias.value.clone(), table_idx, col_idx));
+                                    columns.push(JoinedColumn::TableColumn(
+                                        alias.value.clone(),
+                                        table_idx,
+                                        col_idx,
+                                    ));
                                     found = true;
                                     break;
                                 }
@@ -1859,7 +2122,11 @@ impl QueryExecutor {
                             } else {
                                 col.name.clone()
                             };
-                            columns.push(JoinedColumn::TableColumn(display_name, table_idx, col_idx));
+                            columns.push(JoinedColumn::TableColumn(
+                                display_name,
+                                table_idx,
+                                col_idx,
+                            ));
                         }
                     }
                 }
@@ -1870,10 +2137,10 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         Ok(columns)
     }
-    
+
     fn filter_joined_rows(
         &self,
         rows: &[Vec<Value>],
@@ -1893,7 +2160,7 @@ impl QueryExecutor {
             Ok(rows.to_vec())
         }
     }
-    
+
     fn project_joined_columns(
         &self,
         rows: &[Vec<Value>],
@@ -1904,7 +2171,7 @@ impl QueryExecutor {
         // A proper implementation would track column offsets during join construction
         Ok(rows.to_vec())
     }
-    
+
     fn sort_joined_rows(
         &self,
         rows: Vec<Vec<Value>>,
@@ -1915,7 +2182,7 @@ impl QueryExecutor {
         // Full implementation would require mapping order expressions to column indices
         Ok(rows)
     }
-    
+
     async fn execute_aggregate_with_joined_rows(
         &self,
         _db: &Database,
@@ -1929,6 +2196,61 @@ impl QueryExecutor {
         Err(YamlBaseError::NotImplemented(
             "Aggregate queries with JOINs are not yet fully implemented".to_string(),
         ))
+    }
+
+    // CTE (Common Table Expression) support
+    async fn execute_query_with_ctes(
+        &self,
+        db: &Database,
+        query: &Query,
+        with: &With,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing query with CTEs");
+
+        // Store CTE results in a temporary map
+        let cte_results: std::collections::HashMap<String, QueryResult> =
+            std::collections::HashMap::new();
+
+        // Check if there are any CTEs to execute
+        if !with.cte_tables.is_empty() {
+            // For now, we don't support CTEs
+            // This would require boxing the future to avoid infinite size for recursive CTEs
+            return Err(YamlBaseError::NotImplemented(
+                "CTE execution is not yet fully implemented".to_string(),
+            ));
+        }
+
+        // Now execute the main query with CTE results available
+        // For now, we'll return an error as full CTE support requires
+        // modifying the entire execution pipeline to handle CTE references
+        match &query.body.as_ref() {
+            SetExpr::Select(select) => {
+                // Check if the SELECT references any CTEs
+                for table_with_joins in &select.from {
+                    if let TableFactor::Table { name, .. } = &table_with_joins.relation {
+                        let table_name = name
+                            .0
+                            .first()
+                            .map(|ident| ident.value.clone())
+                            .unwrap_or_else(String::new);
+
+                        if cte_results.contains_key(&table_name) {
+                            // This table is a CTE reference
+                            return Err(YamlBaseError::NotImplemented(
+                                "CTE references in FROM clause are not yet fully implemented"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+
+                // If no CTE references, execute normally
+                self.execute_select(db, select, query).await
+            }
+            _ => Err(YamlBaseError::NotImplemented(
+                "Only SELECT queries are supported in CTEs".to_string(),
+            )),
+        }
     }
 }
 
@@ -2832,7 +3154,7 @@ mod tests {
         // Test 1: SELECT VERSION()
         let stmt = parse_statement("SELECT VERSION()");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
         assert!(matches!(result.rows[0][0], Value::Text(ref s) if s.contains("8.0.35-yamlbase")));
@@ -2840,7 +3162,7 @@ mod tests {
         // Test 2: SELECT CURRENT_DATE
         let stmt = parse_statement("SELECT CURRENT_DATE");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
         // Check format YYYY-MM-DD
@@ -2855,7 +3177,7 @@ mod tests {
         // Test 3: SELECT NOW()
         let stmt = parse_statement("SELECT NOW()");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
         // Check format YYYY-MM-DD HH:MM:SS
@@ -2875,21 +3197,21 @@ mod tests {
         // Test 1: START TRANSACTION
         let stmt = parse_statement("START TRANSACTION");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 0);
         assert_eq!(result.rows.len(), 0);
 
         // Test 2: COMMIT
         let stmt = parse_statement("COMMIT");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 0);
         assert_eq!(result.rows.len(), 0);
 
         // Test 3: ROLLBACK
         let stmt = parse_statement("ROLLBACK");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 0);
         assert_eq!(result.rows.len(), 0);
     }
@@ -2897,7 +3219,7 @@ mod tests {
     #[tokio::test]
     async fn test_join_queries() {
         let mut db = Database::new("test_db".to_string());
-        
+
         // Create first table
         let columns1 = vec![
             Column {
@@ -2920,10 +3242,14 @@ mod tests {
             },
         ];
         let mut users = Table::new("users".to_string(), columns1);
-        users.insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())]).unwrap();
-        users.insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())]).unwrap();
+        users
+            .insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+            .unwrap();
+        users
+            .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+            .unwrap();
         db.add_table(users).unwrap();
-        
+
         // Create second table
         let columns2 = vec![
             Column {
@@ -2955,46 +3281,52 @@ mod tests {
             },
         ];
         let mut orders = Table::new("orders".to_string(), columns2);
-        orders.insert_row(vec![
-            Value::Integer(1),
-            Value::Integer(1),
-            Value::Decimal(Decimal::from_str("100.50").unwrap()),
-        ]).unwrap();
-        orders.insert_row(vec![
-            Value::Integer(2),
-            Value::Integer(1),
-            Value::Decimal(Decimal::from_str("200.75").unwrap()),
-        ]).unwrap();
-        orders.insert_row(vec![
-            Value::Integer(3),
-            Value::Integer(2),
-            Value::Decimal(Decimal::from_str("50.25").unwrap()),
-        ]).unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Decimal(Decimal::from_str("100.50").unwrap()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Integer(1),
+                Value::Decimal(Decimal::from_str("200.75").unwrap()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Integer(2),
+                Value::Decimal(Decimal::from_str("50.25").unwrap()),
+            ])
+            .unwrap();
         db.add_table(orders).unwrap();
-        
+
         let db_arc = Arc::new(RwLock::new(db));
         let executor = create_test_executor_from_arc(db_arc).await;
-        
+
         // Test 1: INNER JOIN
         let stmt = parse_statement(
             "SELECT users.name, orders.amount FROM users INNER JOIN orders ON users.id = orders.user_id"
         );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows.len(), 3); // Alice has 2 orders, Bob has 1
-        
+
         // Test 2: LEFT JOIN
         let stmt = parse_statement(
             "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id = 2"
         );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows.len(), 1); // Bob has 1 order
-        
+
         // Test 3: CROSS JOIN
         let stmt = parse_statement("SELECT * FROM users CROSS JOIN orders");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows.len(), 6); // 2 users × 3 orders = 6 rows
     }
 
@@ -3006,7 +3338,7 @@ mod tests {
         // Test 1: ADD_MONTHS
         let stmt = parse_statement("SELECT ADD_MONTHS(CURRENT_DATE, 3)");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
         // Result should be a date string 3 months from now
@@ -3019,7 +3351,7 @@ mod tests {
         // Test 2: EXTRACT from literal date
         let stmt = parse_statement("SELECT EXTRACT(MONTH FROM DATE '2025-07-15')");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(7));
@@ -3027,16 +3359,300 @@ mod tests {
         // Test 3: LAST_DAY
         let stmt = parse_statement("SELECT LAST_DAY(DATE '2025-02-15')");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("2025-02-28".to_string()));
 
         // Test 4: Complex date expression
         let _stmt = parse_statement(
-            "SELECT ADD_MONTHS(CURRENT_DATE, 0) - EXTRACT(DAY FROM CURRENT_DATE) + 1"
+            "SELECT ADD_MONTHS(CURRENT_DATE, 0) - EXTRACT(DAY FROM CURRENT_DATE) + 1",
         );
         // This should give us the first day of the current month
         // Note: This complex arithmetic isn't fully implemented, but the individual functions work
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_functions_enhanced() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create a table with numeric data
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "department".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "salary".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Decimal(10, 2),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "bonus".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut employees = Table::new("employees".to_string(), columns);
+        employees
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Engineering".to_string()),
+                Value::Decimal(Decimal::from_str("75000.00").unwrap()),
+                Value::Integer(5000),
+            ])
+            .unwrap();
+        employees
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Engineering".to_string()),
+                Value::Decimal(Decimal::from_str("85000.00").unwrap()),
+                Value::Integer(7000),
+            ])
+            .unwrap();
+        employees
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Text("Sales".to_string()),
+                Value::Decimal(Decimal::from_str("65000.00").unwrap()),
+                Value::Integer(10000),
+            ])
+            .unwrap();
+        employees
+            .insert_row(vec![
+                Value::Integer(4),
+                Value::Text("Sales".to_string()),
+                Value::Decimal(Decimal::from_str("70000.00").unwrap()),
+                Value::Null,
+            ])
+            .unwrap();
+        db.add_table(employees).unwrap();
+
+        let db_arc = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db_arc).await;
+
+        // Test 1: COUNT DISTINCT
+        let stmt = parse_statement("SELECT COUNT(DISTINCT department) FROM employees");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(2)); // 2 unique departments
+
+        // Test 2: AVG with NULL handling
+        let stmt = parse_statement("SELECT AVG(bonus) FROM employees");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        if let Value::Double(avg) = &result.rows[0][0] {
+            assert_eq!(*avg, 7333.333333333333); // (5000 + 7000 + 10000) / 3
+        } else {
+            panic!("Expected Double value for AVG");
+        }
+
+        // Test 3: MIN
+        let stmt = parse_statement("SELECT MIN(salary) FROM employees");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0][0],
+            Value::Decimal(Decimal::from_str("65000.00").unwrap())
+        );
+
+        // Test 4: MAX
+        let stmt = parse_statement("SELECT MAX(salary) FROM employees");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0][0],
+            Value::Decimal(Decimal::from_str("85000.00").unwrap())
+        );
+
+        // Test 5: Multiple aggregates in one query
+        let stmt =
+            parse_statement("SELECT COUNT(*), AVG(salary), MIN(bonus), MAX(bonus) FROM employees");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(4)); // COUNT(*)
+                                                          // AVG(salary) should be (75000 + 85000 + 65000 + 70000) / 4 = 73750
+        if let Value::Double(avg) = &result.rows[0][1] {
+            assert_eq!(*avg, 73750.0);
+        }
+        assert_eq!(result.rows[0][2], Value::Integer(5000)); // MIN(bonus)
+        assert_eq!(result.rows[0][3], Value::Integer(10000)); // MAX(bonus)
+    }
+
+    #[tokio::test]
+    async fn test_cte_basic() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test basic CTE parsing (execution not fully implemented)
+        let stmt = parse_statement(
+            "WITH user_cte AS (
+                SELECT id, name FROM users WHERE id = 1
+            )
+            SELECT * FROM users",
+        );
+        let result = executor.execute(&stmt).await;
+
+        // CTE execution is not fully implemented
+        assert!(result.is_err());
+        if let Err(YamlBaseError::NotImplemented(msg)) = result {
+            assert!(msg.contains("CTE execution"));
+        }
+
+        // Test CTE reference (will also fail with CTE execution not implemented)
+        let stmt = parse_statement(
+            "WITH user_cte AS (
+                SELECT id, name FROM users WHERE id = 1
+            )
+            SELECT * FROM user_cte",
+        );
+        let result = executor.execute(&stmt).await;
+
+        assert!(result.is_err());
+        if let Err(YamlBaseError::NotImplemented(msg)) = result {
+            assert!(msg.contains("CTE execution"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_complex_joins_with_functions() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create tables
+        let user_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "created_date".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Date,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut users = Table::new("users".to_string(), user_columns);
+        users
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Alice".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
+            ])
+            .unwrap();
+        users
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Bob".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 2, 20).unwrap()),
+            ])
+            .unwrap();
+        db.add_table(users).unwrap();
+
+        let activity_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "user_id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "activity_date".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Date,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut activities = Table::new("activities".to_string(), activity_columns);
+        activities
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+            ])
+            .unwrap();
+        activities
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Integer(1),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()),
+            ])
+            .unwrap();
+        db.add_table(activities).unwrap();
+
+        let db_arc = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db_arc).await;
+
+        // Test JOIN with date functions in WHERE
+        let stmt = parse_statement(
+            "SELECT u.name, a.activity_date 
+             FROM users u 
+             INNER JOIN activities a ON u.id = a.user_id 
+             WHERE EXTRACT(MONTH FROM a.activity_date) = 3",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 2); // Both activities are in March
     }
 }
