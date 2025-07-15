@@ -78,7 +78,7 @@ docker-setup:
 
 # Build multi-platform Docker image using buildx
 docker-buildx: docker-setup
-	docker buildx build --platform linux/amd64,linux/arm64 -t yamlbase:latest .
+	docker buildx build --platform linux/amd64 -t yamlbase:latest .
 
 
 # Login to GitHub Container Registry
