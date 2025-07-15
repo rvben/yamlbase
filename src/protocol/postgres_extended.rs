@@ -4,11 +4,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tracing::debug;
 
+use crate::YamlBaseError;
 use crate::database::Value;
 use crate::sql::executor::QueryResult;
-use crate::sql::{parse_sql, QueryExecutor};
+use crate::sql::{QueryExecutor, parse_sql};
 use crate::yaml::schema::SqlType;
-use crate::YamlBaseError;
 use sqlparser::ast::{
     Expr, FunctionArg, FunctionArgExpr, FunctionArguments, SelectItem, Statement, Value as SqlValue,
 };

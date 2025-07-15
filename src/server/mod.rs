@@ -5,7 +5,7 @@ use tracing::{error, info};
 use crate::config::Config;
 use crate::database::Storage;
 use crate::protocol::Connection;
-use crate::yaml::{parse_yaml_database, FileWatcher};
+use crate::yaml::{FileWatcher, parse_yaml_database};
 
 #[cfg(test)]
 mod tests;

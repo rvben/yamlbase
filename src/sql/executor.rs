@@ -5,8 +5,8 @@ use sqlparser::ast::*;
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::database::{Database, Storage, Table, Value};
 use crate::YamlBaseError;
+use crate::database::{Database, Storage, Table, Value};
 
 pub struct QueryExecutor {
     storage: Arc<Storage>,
@@ -259,7 +259,7 @@ impl QueryExecutor {
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
                         "Complex projections in SELECT without FROM are not supported".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -360,7 +360,7 @@ impl QueryExecutor {
                     _ => {
                         return Err(YamlBaseError::Database {
                             message: "EXTRACT requires date argument".to_string(),
-                        })
+                        });
                     }
                 };
 
@@ -645,7 +645,7 @@ impl QueryExecutor {
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
                         "Complex projections are not yet supported".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -824,7 +824,7 @@ impl QueryExecutor {
             _ => {
                 return Err(YamlBaseError::Database {
                     message: "LIKE pattern must be a string".to_string(),
-                })
+                });
             }
         };
 
@@ -877,7 +877,7 @@ impl QueryExecutor {
             Err(_) => {
                 return Err(YamlBaseError::Database {
                     message: format!("Invalid LIKE pattern: {}", pattern_str),
-                })
+                });
             }
         };
 
@@ -990,7 +990,7 @@ impl QueryExecutor {
                     _ => {
                         return Err(YamlBaseError::Database {
                             message: "EXTRACT requires date argument".to_string(),
-                        })
+                        });
                     }
                 };
 
@@ -1003,7 +1003,7 @@ impl QueryExecutor {
                         _ => {
                             return Err(YamlBaseError::Database {
                                 message: format!("EXTRACT field '{:?}' not supported", field),
-                            })
+                            });
                         }
                     };
                     Ok(Value::Integer(result))
@@ -1153,7 +1153,7 @@ impl QueryExecutor {
                 _ => {
                     return Err(YamlBaseError::Database {
                         message: format!("EXTRACT field '{:?}' not supported", field),
-                    })
+                    });
                 }
             };
             Ok(Value::Integer(result))
@@ -1206,7 +1206,7 @@ impl QueryExecutor {
                                     return Err(YamlBaseError::Database {
                                         message: "ADD_MONTHS requires date as first argument"
                                             .to_string(),
-                                    })
+                                    });
                                 }
                             };
 
@@ -1217,7 +1217,7 @@ impl QueryExecutor {
                                     return Err(YamlBaseError::Database {
                                         message: "ADD_MONTHS requires integer as second argument"
                                             .to_string(),
-                                    })
+                                    });
                                 }
                             };
 
@@ -1266,7 +1266,7 @@ impl QueryExecutor {
                                 _ => {
                                     return Err(YamlBaseError::Database {
                                         message: "LAST_DAY requires date argument".to_string(),
-                                    })
+                                    });
                                 }
                             };
 
@@ -1393,7 +1393,7 @@ impl QueryExecutor {
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
                         "Complex projections in aggregate queries are not supported".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -1509,7 +1509,7 @@ impl QueryExecutor {
                                         _ => {
                                             return Err(YamlBaseError::NotImplemented(
                                                 "Unsupported COUNT argument".to_string(),
-                                            ))
+                                            ));
                                         }
                                     }
                                 } else {
@@ -1521,7 +1521,7 @@ impl QueryExecutor {
                             _ => {
                                 return Err(YamlBaseError::NotImplemented(
                                     "Unsupported function arguments".to_string(),
-                                ))
+                                ));
                             }
                         };
                         Ok((func_name.clone(), Value::Integer(count)))
@@ -1547,7 +1547,7 @@ impl QueryExecutor {
                                                     return Err(YamlBaseError::Database {
                                                         message: "Cannot sum non-numeric values"
                                                             .to_string(),
-                                                    })
+                                                    });
                                                 }
                                             }
                                         }
@@ -1796,12 +1796,12 @@ impl QueryExecutor {
                             JoinConstraint::Using(_) => {
                                 return Err(YamlBaseError::NotImplemented(
                                     "JOIN USING is not yet supported".to_string(),
-                                ))
+                                ));
                             }
                             JoinConstraint::Natural => {
                                 return Err(YamlBaseError::NotImplemented(
                                     "NATURAL JOIN is not yet supported".to_string(),
-                                ))
+                                ));
                             }
                             JoinConstraint::None => true,
                         };
@@ -1836,7 +1836,7 @@ impl QueryExecutor {
             _ => {
                 return Err(YamlBaseError::NotImplemented(
                     "This JOIN type is not yet supported".to_string(),
-                ))
+                ));
             }
         }
 
@@ -1986,7 +1986,7 @@ impl QueryExecutor {
                     _ => {
                         return Err(YamlBaseError::Database {
                             message: "EXTRACT requires date argument".to_string(),
-                        })
+                        });
                     }
                 };
 
@@ -2133,7 +2133,7 @@ impl QueryExecutor {
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
                         "Complex projections are not yet supported".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -2769,7 +2769,7 @@ mod tests {
 
         let executor = create_test_executor_from_arc(db).await;
         let stmt = parse_statement(
-            "SELECT id FROM items WHERE (status = 'Active' OR status = 'Pending') AND type IN ('Development', 'Research') AND priority < 3"
+            "SELECT id FROM items WHERE (status = 'Active' OR status = 'Pending') AND type IN ('Development', 'Research') AND priority < 3",
         );
         let result = executor.execute(&stmt).await.unwrap();
 
@@ -2975,7 +2975,7 @@ mod tests {
              AND PROJECT_STRUCTURE = 'Project' AND START_DATE > DATE '2025-01-01' \
              AND PF_PRODUCT_GROUP_NAME NOT IN ('Support IT', 'The Support IT', 'The Demo Portfolio', 'The Archive') \
              AND PROJECT_CLASS IN ('Product Development', 'Technology & Research Development') \
-             AND IFRS_TYPE IN ('PROD DEV', 'TECH & RESEARCH DEV')"
+             AND IFRS_TYPE IN ('PROD DEV', 'TECH & RESEARCH DEV')",
         );
         let result = executor.execute(&stmt).await.unwrap();
 
@@ -3309,7 +3309,7 @@ mod tests {
 
         // Test 1: INNER JOIN
         let stmt = parse_statement(
-            "SELECT users.name, orders.amount FROM users INNER JOIN orders ON users.id = orders.user_id"
+            "SELECT users.name, orders.amount FROM users INNER JOIN orders ON users.id = orders.user_id",
         );
         let result = executor.execute(&stmt).await.unwrap();
 
@@ -3317,7 +3317,7 @@ mod tests {
 
         // Test 2: LEFT JOIN
         let stmt = parse_statement(
-            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id = 2"
+            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id = 2",
         );
         let result = executor.execute(&stmt).await.unwrap();
 
@@ -3499,7 +3499,7 @@ mod tests {
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(4)); // COUNT(*)
-                                                          // AVG(salary) should be (75000 + 85000 + 65000 + 70000) / 4 = 73750
+        // AVG(salary) should be (75000 + 85000 + 65000 + 70000) / 4 = 73750
         if let Value::Double(avg) = &result.rows[0][1] {
             assert_eq!(*avg, 73750.0);
         }
