@@ -128,7 +128,7 @@ check:
 	cargo check --all-features
 
 # Run all CI checks (format, lint, type check, test)
-ci: fmt-check check lint test
+ci: fmt-check check lint build test
 
 # Run security audit
 audit:

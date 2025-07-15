@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -11,6 +11,30 @@ use yamlbase::database::Database;
 
 // Start from a high port to avoid conflicts with common services
 static NEXT_PORT: AtomicU16 = AtomicU16::new(40000);
+
+/// Get the path to the yamlbase binary, preferring pre-built binaries over cargo run
+fn get_yamlbase_command() -> (String, Vec<String>) {
+    // Check if YAMLBASE_TEST_BINARY env var is set (for CI)
+    if let Ok(binary_path) = std::env::var("YAMLBASE_TEST_BINARY") {
+        return (binary_path, vec![]);
+    }
+    
+    // Check for pre-built binaries
+    let release_binary = "target/release/yamlbase";
+    let debug_binary = "target/debug/yamlbase";
+    
+    if Path::new(release_binary).exists() {
+        return (release_binary.to_string(), vec![]);
+    }
+    
+    if Path::new(debug_binary).exists() {
+        return (debug_binary.to_string(), vec![]);
+    }
+    
+    // Fall back to cargo run
+    let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    (cargo_path, vec!["run".to_string(), "--".to_string()])
+}
 
 /// Get a free port for testing by binding to port 0 and letting the OS assign
 fn get_free_port() -> u16 {
@@ -54,18 +78,18 @@ impl TestServer {
     pub fn start_mysql(yaml_file: &str) -> Self {
         let port = get_free_port();
 
-        let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let process = Command::new(&cargo_path)
-            .args(&[
-                "run",
-                "--",
-                "-f",
-                yaml_file,
-                "--protocol",
-                "mysql",
-                "-p",
-                &port.to_string(),
-            ])
+        let (cmd, mut args) = get_yamlbase_command();
+        args.extend(vec![
+            "-f".to_string(),
+            yaml_file.to_string(),
+            "--protocol".to_string(),
+            "mysql".to_string(),
+            "-p".to_string(),
+            port.to_string(),
+        ]);
+        
+        let process = Command::new(&cmd)
+            .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -98,18 +122,18 @@ impl TestServer {
     pub fn start_postgres(yaml_file: &str) -> Self {
         let port = get_free_port();
 
-        let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let process = Command::new(&cargo_path)
-            .args(&[
-                "run",
-                "--",
-                "-f",
-                yaml_file,
-                "--protocol",
-                "postgres",
-                "-p",
-                &port.to_string(),
-            ])
+        let (cmd, mut args) = get_yamlbase_command();
+        args.extend(vec![
+            "-f".to_string(),
+            yaml_file.to_string(),
+            "--protocol".to_string(),
+            "postgres".to_string(),
+            "-p".to_string(),
+            port.to_string(),
+        ]);
+        
+        let process = Command::new(&cmd)
+            .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -220,18 +244,18 @@ impl TestServer {
 
             let yaml_path = temp_file.path().to_str().unwrap().to_string();
 
-            let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-            let process = Command::new(&cargo_path)
-                .args(&[
-                    "run",
-                    "--",
-                    "-f",
-                    &yaml_path,
-                    "--protocol",
-                    "postgres",
-                    "-p",
-                    &port.to_string(),
-                ])
+            let (cmd, mut args) = get_yamlbase_command();
+            args.extend(vec![
+                "-f".to_string(),
+                yaml_path.clone(),
+                "--protocol".to_string(),
+                "postgres".to_string(),
+                "-p".to_string(),
+                port.to_string(),
+            ]);
+            
+            let process = Command::new(&cmd)
+                .args(&args)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
