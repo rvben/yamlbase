@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-07-15
+
+### Added
+- **Enhanced SQL Support** for enterprise applications:
+  - SQLAlchemy compatibility with `SELECT VERSION()` and transaction command support (START TRANSACTION, COMMIT, ROLLBACK)
+  - Full JOIN support including INNER, LEFT, and CROSS JOINs with proper table aliasing
+  - Comprehensive date function support:
+    - Basic: `CURRENT_DATE`, `NOW()`
+    - Advanced: `ADD_MONTHS()`, `EXTRACT()`, `LAST_DAY()`
+  - Enhanced aggregate functions:
+    - `COUNT(DISTINCT column)` for unique value counting
+    - `AVG()`, `MIN()`, `MAX()` with proper NULL handling
+  - Complex WHERE clause operators including `NOT IN` and nested conditions
+  - Partial CTE/WITH clause support (parsing implemented, execution pending)
+- Comprehensive test coverage for all new SQL features
+- Upgraded to **Rust 2024 edition** with minimum Rust version 1.85
+
+### Fixed
+- Clippy warnings in SQL executor code
+- Excessive debug output in integration tests
+
+### Changed
+- Improved SQL query execution performance with optimized expression evaluation
+- Better error messages for unsupported SQL features
+
 ## [0.1.0] - 2025-06-17
 
 ### Added
@@ -179,6 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.2.0]: https://github.com/rvben/yamlbase/releases/tag/v0.2.0
 [0.1.0]: https://github.com/rvben/yamlbase/releases/tag/v0.1.0
 [0.0.6]: https://github.com/rvben/yamlbase/releases/tag/v0.0.6
 [0.0.5]: https://github.com/rvben/yamlbase/releases/tag/v0.0.5
