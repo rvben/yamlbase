@@ -1,9 +1,8 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use tokio::sync::RwLock;
 
-use yamlbase::database::{Column, Database, Table, Value};
+use yamlbase::database::{Column, Database, Storage, Table, Value};
 use yamlbase::sql::{QueryExecutor, parse_sql};
 use yamlbase::yaml::schema::SqlType;
 
@@ -69,8 +68,9 @@ fn create_test_database() -> Database {
 
 fn benchmark_simple_select(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let db = Arc::new(RwLock::new(create_test_database()));
-    let executor = QueryExecutor::new(db);
+    let db = create_test_database();
+    let storage = Arc::new(Storage::new(db));
+    let executor = QueryExecutor::new(storage);
 
     c.bench_function("simple_select", |b| {
         b.iter(|| {
@@ -86,8 +86,9 @@ fn benchmark_simple_select(c: &mut Criterion) {
 
 fn benchmark_where_clause(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let db = Arc::new(RwLock::new(create_test_database()));
-    let executor = QueryExecutor::new(db);
+    let db = create_test_database();
+    let storage = Arc::new(Storage::new(db));
+    let executor = QueryExecutor::new(storage);
 
     c.bench_function("where_clause", |b| {
         b.iter(|| {
@@ -103,8 +104,9 @@ fn benchmark_where_clause(c: &mut Criterion) {
 
 fn benchmark_order_by(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let db = Arc::new(RwLock::new(create_test_database()));
-    let executor = QueryExecutor::new(db);
+    let db = create_test_database();
+    let storage = Arc::new(Storage::new(db));
+    let executor = QueryExecutor::new(storage);
 
     c.bench_function("order_by", |b| {
         b.iter(|| {
@@ -120,8 +122,9 @@ fn benchmark_order_by(c: &mut Criterion) {
 
 fn benchmark_limit(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let db = Arc::new(RwLock::new(create_test_database()));
-    let executor = QueryExecutor::new(db);
+    let db = create_test_database();
+    let storage = Arc::new(Storage::new(db));
+    let executor = QueryExecutor::new(storage);
 
     c.bench_function("limit", |b| {
         b.iter(|| {
