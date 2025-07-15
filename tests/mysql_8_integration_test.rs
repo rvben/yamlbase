@@ -21,7 +21,8 @@ impl TestServer {
         let port = get_free_port();
 
         // Start the server
-        let process = Command::new("cargo")
+        let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let process = Command::new(&cargo_path)
             .args(&[
                 "run",
                 "--",

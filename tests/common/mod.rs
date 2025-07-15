@@ -54,7 +54,8 @@ impl TestServer {
     pub fn start_mysql(yaml_file: &str) -> Self {
         let port = get_free_port();
 
-        let process = Command::new("cargo")
+        let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let process = Command::new(&cargo_path)
             .args(&[
                 "run",
                 "--",
@@ -97,7 +98,8 @@ impl TestServer {
     pub fn start_postgres(yaml_file: &str) -> Self {
         let port = get_free_port();
 
-        let process = Command::new("cargo")
+        let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let process = Command::new(&cargo_path)
             .args(&[
                 "run",
                 "--",
@@ -218,7 +220,8 @@ impl TestServer {
 
             let yaml_path = temp_file.path().to_str().unwrap().to_string();
 
-            let process = Command::new("cargo")
+            let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            let process = Command::new(&cargo_path)
                 .args(&[
                     "run",
                     "--",
