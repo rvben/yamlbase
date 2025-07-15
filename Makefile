@@ -94,6 +94,14 @@ docker-push: docker-login docker-buildx
 		-t ghcr.io/rvben/yamlbase:latest \
 		--push .
 
+# Push multi-platform image to Docker Hub
+docker-push-dockerhub: docker-login docker-buildx
+	# @if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push VERSION=0.1.0"; exit 1; fi
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-t docker.io/rvben/yamlbase:$(VERSION) \
+		-t docker.io/rvben/yamlbase:latest \
+		--push .
+
 
 # Run with Docker
 docker-run:

@@ -41,7 +41,15 @@ impl ExtendedProtocol {
             portals: HashMap::new(),
         }
     }
+}
 
+impl Default for ExtendedProtocol {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExtendedProtocol {
     pub async fn handle_parse(&mut self, stream: &mut TcpStream, data: &[u8]) -> crate::Result<()> {
         debug!("Handling Parse message");
 
@@ -660,11 +668,7 @@ fn infer_type_from_column_name(name: &str) -> SqlType {
 fn get_table_name_from_relation(relation: &sqlparser::ast::TableFactor) -> Option<String> {
     match relation {
         sqlparser::ast::TableFactor::Table { name, .. } => {
-            if let Some(ident) = name.0.first() {
-                Some(ident.value.clone())
-            } else {
-                None
-            }
+            name.0.first().map(|ident| ident.value.clone())
         }
         _ => None,
     }
@@ -1148,15 +1152,12 @@ fn infer_types_in_projection_expr(
     match expr {
         Expr::Function(func) => {
             // Check function arguments for parameters
-            match &func.args {
-                FunctionArguments::List(args) => {
-                    for arg in &args.args {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) = arg {
-                            infer_types_in_expr(arg_expr, parameter_types);
-                        }
+            if let FunctionArguments::List(args) = &func.args {
+                for arg in &args.args {
+                    if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) = arg {
+                        infer_types_in_expr(arg_expr, parameter_types);
                     }
                 }
-                _ => {}
             }
         }
         _ => {
