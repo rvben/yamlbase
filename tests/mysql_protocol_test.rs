@@ -180,6 +180,9 @@ fn test_mysql_connection_and_simple_query() {
 
     // Kill server
     server.kill().expect("Failed to kill server");
+    
+    // Wait for the child process to finish
+    let _ = server.wait();
 
     // Re-panic if test failed
     if let Err(e) = result {
@@ -201,13 +204,13 @@ fn compute_auth_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
 
     // SHA1(SHA1(password))
     let mut hasher = Sha1::new();
-    hasher.update(&stage1);
+    hasher.update(stage1);
     let stage2 = hasher.finalize();
 
     // SHA1(auth_data + SHA1(SHA1(password)))
     let mut hasher = Sha1::new();
     hasher.update(auth_data);
-    hasher.update(&stage2);
+    hasher.update(stage2);
     let result = hasher.finalize();
 
     // XOR with SHA1(password)

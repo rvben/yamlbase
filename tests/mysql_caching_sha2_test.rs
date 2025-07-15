@@ -134,7 +134,7 @@ fn test_mysql_caching_sha2_authentication() {
     assert!(n > 0);
 
     // Extract auth data from handshake
-    let auth_data = extract_auth_data(&buf[..n]);
+    let _auth_data = extract_auth_data(&buf[..n]);
 
     // Build handshake response with caching_sha2_password plugin
     let mut response = Vec::new();
@@ -271,12 +271,12 @@ fn compute_caching_sha2_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
 
     // SHA256(SHA256(password))
     let mut hasher = Sha256::new();
-    hasher.update(&stage1);
+    hasher.update(stage1);
     let stage2 = hasher.finalize();
 
     // SHA256(SHA256(SHA256(password)) + auth_data)
     let mut hasher = Sha256::new();
-    hasher.update(&stage2);
+    hasher.update(stage2);
     hasher.update(auth_data);
     let stage3 = hasher.finalize();
 
@@ -289,15 +289,12 @@ fn compute_caching_sha2_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
 }
 
 fn write_packet(stream: &mut TcpStream, seq_id: u8, data: &[u8]) {
-    let mut packet = Vec::new();
-
-    // Length (3 bytes, little-endian)
-    packet.push((data.len() & 0xff) as u8);
-    packet.push(((data.len() >> 8) & 0xff) as u8);
-    packet.push(((data.len() >> 16) & 0xff) as u8);
-
-    // Sequence ID
-    packet.push(seq_id);
+    let mut packet = vec![
+        (data.len() & 0xff) as u8,
+        ((data.len() >> 8) & 0xff) as u8,
+        ((data.len() >> 16) & 0xff) as u8,
+        seq_id,
+    ];
 
     // Payload
     packet.extend_from_slice(data);
