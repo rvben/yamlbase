@@ -18,19 +18,19 @@ fn get_yamlbase_command() -> (String, Vec<String>) {
     if let Ok(binary_path) = std::env::var("YAMLBASE_TEST_BINARY") {
         return (binary_path, vec![]);
     }
-    
+
     // Check for pre-built binaries
     let release_binary = "target/release/yamlbase";
     let debug_binary = "target/debug/yamlbase";
-    
+
     if Path::new(release_binary).exists() {
         return (release_binary.to_string(), vec![]);
     }
-    
+
     if Path::new(debug_binary).exists() {
         return (debug_binary.to_string(), vec![]);
     }
-    
+
     // Fall back to cargo run
     let cargo_path = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     (cargo_path, vec!["run".to_string(), "--".to_string()])
@@ -87,7 +87,7 @@ impl TestServer {
             "-p".to_string(),
             port.to_string(),
         ]);
-        
+
         let process = Command::new(&cmd)
             .args(&args)
             .stdout(std::process::Stdio::null())
@@ -131,7 +131,7 @@ impl TestServer {
             "-p".to_string(),
             port.to_string(),
         ]);
-        
+
         let process = Command::new(&cmd)
             .args(&args)
             .stdout(std::process::Stdio::null())
@@ -253,7 +253,7 @@ impl TestServer {
                 "-p".to_string(),
                 port.to_string(),
             ]);
-            
+
             let process = Command::new(&cmd)
                 .args(&args)
                 .stdout(std::process::Stdio::null())
