@@ -69,6 +69,7 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
     );
 }
 
+#[allow(dead_code)]
 pub struct TestServer {
     pub port: u16,
     pub config: Arc<Config>,
@@ -76,6 +77,7 @@ pub struct TestServer {
     _temp_file: Option<NamedTempFile>,
 }
 
+#[allow(dead_code)]
 impl TestServer {
     pub fn start_mysql(yaml_file: &str) -> Self {
         let port = get_free_port();
@@ -302,7 +304,7 @@ impl Drop for TestServer {
 
 // MySQL specific helpers
 
-pub fn mysql_connect_and_auth(server: &TestServer, username: &str, password: &str) -> TcpStream {
+pub fn _mysql_connect_and_auth(server: &TestServer, username: &str, password: &str) -> TcpStream {
     let mut stream = server.connect();
 
     // Read handshake
@@ -336,7 +338,7 @@ pub fn mysql_connect_and_auth(server: &TestServer, username: &str, password: &st
     response.push(0);
 
     // Calculate auth response
-    let auth_response = mysql_native_password_auth(&auth_data, password);
+    let auth_response = _mysql_native_password_auth(&auth_data, password);
     response.push(auth_response.len() as u8);
     response.extend(&auth_response);
 
@@ -392,7 +394,7 @@ pub fn mysql_connect_and_auth(server: &TestServer, username: &str, password: &st
     stream
 }
 
-fn mysql_native_password_auth(auth_data: &[u8], password: &str) -> Vec<u8> {
+fn _mysql_native_password_auth(auth_data: &[u8], password: &str) -> Vec<u8> {
     use sha1::{Digest, Sha1};
 
     if password.is_empty() {
@@ -404,12 +406,12 @@ fn mysql_native_password_auth(auth_data: &[u8], password: &str) -> Vec<u8> {
     let password_hash = hasher.finalize();
 
     let mut hasher = Sha1::new();
-    hasher.update(&password_hash);
+    hasher.update(password_hash);
     let password_double_hash = hasher.finalize();
 
     let mut hasher = Sha1::new();
     hasher.update(auth_data);
-    hasher.update(&password_double_hash);
+    hasher.update(password_double_hash);
     let result = hasher.finalize();
 
     password_hash
@@ -419,7 +421,7 @@ fn mysql_native_password_auth(auth_data: &[u8], password: &str) -> Vec<u8> {
         .collect()
 }
 
-pub fn mysql_test_query(stream: &mut TcpStream, query: &str, _expected_values: Vec<&str>) {
+pub fn _mysql_test_query(stream: &mut TcpStream, query: &str, _expected_values: Vec<&str>) {
     // Send query
     let mut packet = Vec::new();
     packet.extend(&((query.len() + 1) as u32).to_le_bytes()[..3]);
@@ -472,7 +474,7 @@ pub fn mysql_test_query(stream: &mut TcpStream, query: &str, _expected_values: V
     }
 }
 
-pub fn mysql_test_ping(stream: &mut TcpStream) {
+pub fn _mysql_test_ping(stream: &mut TcpStream) {
     // For the test, we need to track sequence numbers properly
     // After multiple queries, the sequence number will be higher
     // Let's use a higher sequence number that matches the current state
