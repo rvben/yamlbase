@@ -180,7 +180,7 @@ fn test_mysql_connection_and_simple_query() {
 
     // Kill server
     server.kill().expect("Failed to kill server");
-    
+
     // Wait for the child process to finish
     let _ = server.wait();
 
