@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use postgres::{Client, NoTls};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};

@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use clap::Parser;
 use tracing::info;
 use yamlbase::{Config, Server};

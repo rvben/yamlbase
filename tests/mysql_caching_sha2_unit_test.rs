@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use yamlbase::protocol::mysql_caching_sha2::compute_auth_response;
 
 #[test]
