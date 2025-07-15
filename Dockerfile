@@ -1,9 +1,7 @@
 # Build stage
-FROM rust:1.87-alpine AS builder
+FROM rust:1.88 AS builder
 
-# Install build dependencies
-RUN apk add --no-cache musl-dev
-
+# Create app directory
 WORKDIR /app
 
 # Copy manifests
@@ -11,27 +9,37 @@ COPY Cargo.toml Cargo.lock ./
 
 # Copy source code
 COPY src ./src
-COPY benches ./benches
 
-# Detect target platform and build accordingly
-ARG TARGETPLATFORM
-RUN case "$TARGETPLATFORM" in \
-        "linux/amd64") RUST_TARGET="x86_64-unknown-linux-musl" ;; \
-        "linux/arm64") RUST_TARGET="aarch64-unknown-linux-musl" ;; \
-        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
-    esac && \
-    rustup target add $RUST_TARGET && \
-    cargo build --release --target $RUST_TARGET && \
-    cp target/$RUST_TARGET/release/yamlbase /yamlbase
+# Build the application
+RUN cargo build --release
 
 # Runtime stage
-FROM scratch
+FROM alpine:3.22
 
-# Copy the binary
-COPY --from=builder /yamlbase /yamlbase
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates
 
-# Set the entrypoint
-ENTRYPOINT ["/yamlbase"]
+# Create non-root user
+RUN addgroup -g 1000 -S appuser && \
+    adduser -u 1000 -S appuser -G appuser
+
+# Copy the binary from builder
+COPY --from=builder /app/target/release/yamlbase /usr/local/bin/yamlbase
+
+# Create data directory
+RUN mkdir -p /data && chown appuser:appuser /data
+
+# Switch to non-root user
+USER appuser
+
+# Expose default ports for postgres and mysql protocols
+EXPOSE 5432 3306
+
+# Set working directory
+WORKDIR /data
+
+# Run the binary
+ENTRYPOINT ["yamlbase"]
 
 # Default arguments
 CMD ["-f", "/data/database.yaml"]
