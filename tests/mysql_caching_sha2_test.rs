@@ -1,7 +1,6 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tempfile::NamedTempFile;

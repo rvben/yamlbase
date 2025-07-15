@@ -116,7 +116,7 @@ async fn test_postgres_simple_protocol() {
     password_msg.push(b'p');
     password_msg.extend(&13u32.to_be_bytes()); // length: 4 (length field) + 9 ("password\0")
     password_msg.extend(b"password\0");
-    
+
     stream.write_all(&password_msg).await.unwrap();
 
     // Read auth response and ready for query
@@ -126,33 +126,33 @@ async fn test_postgres_simple_protocol() {
     // - Parameter Status messages (S)
     // - ReadyForQuery (Z)
     // We need to read enough data to get all of them
-    
+
     let mut total_read = 0;
     let mut found_ready = false;
     buf.resize(4096, 0); // Increase buffer size
-    
+
     // Keep reading until we find ReadyForQuery
     while total_read < buf.len() && !found_ready {
         let n = stream.read(&mut buf[total_read..]).await.unwrap();
         if n == 0 {
             break;
         }
-        
+
         // Look for ReadyForQuery message (Z)
         for i in 0..total_read + n {
             if buf[i] == b'Z' && i + 5 <= total_read + n {
                 // Check if this is a valid ReadyForQuery message
-                let len = u32::from_be_bytes([buf[i+1], buf[i+2], buf[i+3], buf[i+4]]);
-                if len == 5 && i + 6 <= total_read + n && buf[i+5] == b'I' {
+                let len = u32::from_be_bytes([buf[i + 1], buf[i + 2], buf[i + 3], buf[i + 4]]);
+                if len == 5 && i + 6 <= total_read + n && buf[i + 5] == b'I' {
                     found_ready = true;
                     break;
                 }
             }
         }
-        
+
         total_read += n;
     }
-    
+
     assert!(found_ready, "Server should send ready for query");
 
     // Send simple query

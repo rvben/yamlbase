@@ -27,6 +27,7 @@ impl CachingSha2Auth {
     }
 
     /// Handle the full caching_sha2_password authentication flow
+    #[allow(clippy::too_many_arguments)]
     pub async fn authenticate(
         &self,
         stream: &mut TcpStream,
@@ -163,7 +164,7 @@ impl CachingSha2Auth {
             "Writing caching_sha2 packet: len={}, seq={}, type={:02x}",
             payload.len(),
             *sequence_id,
-            payload.get(0).unwrap_or(&0)
+            payload.first().unwrap_or(&0)
         );
 
         *sequence_id = sequence_id.wrapping_add(1);
@@ -215,12 +216,12 @@ pub fn compute_auth_response(password: &str, auth_data: &[u8]) -> Vec<u8> {
 
     // SHA256(SHA256(password))
     let mut hasher = Sha256::new();
-    hasher.update(&stage1);
+    hasher.update(stage1);
     let stage2 = hasher.finalize();
 
     // SHA256(SHA256(SHA256(password)) + auth_data)
     let mut hasher = Sha256::new();
-    hasher.update(&stage2);
+    hasher.update(stage2);
     hasher.update(auth_data);
     let stage3 = hasher.finalize();
 

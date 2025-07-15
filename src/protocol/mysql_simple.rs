@@ -267,6 +267,7 @@ impl MySqlProtocol {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     fn parse_handshake_response(
         &self,
         packet: &[u8],

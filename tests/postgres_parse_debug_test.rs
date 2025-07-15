@@ -93,30 +93,38 @@ tables:
     // Read auth response and consume all messages until ReadyForQuery
     let mut total_read = 0;
     let mut found_ready = false;
-    
+
     // Keep reading until we find ReadyForQuery
     while total_read < response.len() && !found_ready {
         let n = stream.read(&mut response[total_read..]).await.unwrap();
         if n == 0 {
             break;
         }
-        
+
         // Look for ReadyForQuery message (Z)
         for i in 0..total_read + n {
             if response[i] == b'Z' && i + 5 <= total_read + n {
                 // Check if this is a valid ReadyForQuery message
-                let len = u32::from_be_bytes([response[i+1], response[i+2], response[i+3], response[i+4]]);
-                if len == 5 && i + 6 <= total_read + n && response[i+5] == b'I' {
+                let len = u32::from_be_bytes([
+                    response[i + 1],
+                    response[i + 2],
+                    response[i + 3],
+                    response[i + 4],
+                ]);
+                if len == 5 && i + 6 <= total_read + n && response[i + 5] == b'I' {
                     found_ready = true;
                     break;
                 }
             }
         }
-        
+
         total_read += n;
     }
-    
-    println!("Auth response and parameter status messages: {:?}", &response[..total_read]);
+
+    println!(
+        "Auth response and parameter status messages: {:?}",
+        &response[..total_read]
+    );
     assert!(found_ready, "Should receive ReadyForQuery message");
 
     // Now send a Parse message
@@ -139,7 +147,7 @@ tables:
 
     println!("Sending Parse message: {:?}", &buf[..]);
     stream.write_all(&buf).await.unwrap();
-    
+
     // Send Sync message to trigger response
     buf.clear();
     buf.put_u8(b'S');
@@ -151,7 +159,7 @@ tables:
     response.clear();
     response.resize(1024, 0);
     println!("Waiting for ParseComplete...");
-    
+
     match tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
         stream.read(&mut response),
@@ -161,12 +169,17 @@ tables:
         Ok(Ok(n)) => {
             println!("Received {} bytes: {:?}", n, &response[..n]);
             assert!(n > 0, "Expected response");
-            
+
             // Look for ParseComplete message ('1')
             let mut found_parse_complete = false;
             for i in 0..n {
                 if response[i] == b'1' && i + 5 <= n {
-                    let len = u32::from_be_bytes([response[i+1], response[i+2], response[i+3], response[i+4]]);
+                    let len = u32::from_be_bytes([
+                        response[i + 1],
+                        response[i + 2],
+                        response[i + 3],
+                        response[i + 4],
+                    ]);
                     if len == 4 {
                         found_parse_complete = true;
                         break;
