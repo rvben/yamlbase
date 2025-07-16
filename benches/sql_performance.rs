@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
