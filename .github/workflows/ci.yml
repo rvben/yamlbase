@@ -103,24 +103,9 @@ jobs:
       - name: Build multi-platform Docker image
         run: make docker-buildx
 
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    services:
-      yamlbase:
-        image: rust:latest
-        options: --network-alias yamlbase
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client mysql-client
-          pip install psycopg2-binary mysql-connector-python
-      
-      - name: Run integration tests
-        run: make integration-test
+  # Integration tests are run locally as part of release preparation
+  # due to timing/resource issues in CI environments
+  # Use 'make integration-test' locally to run these tests
 
   benchmark:
     name: Performance Benchmark

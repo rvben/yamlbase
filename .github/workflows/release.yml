@@ -13,6 +13,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Note: Integration tests should be run locally before creating a release
+  # Use 'make integration-test' and 'make coverage-full' to run all tests
+  
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
