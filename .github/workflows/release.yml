@@ -121,6 +121,12 @@ jobs:
     name: Publish Docker Images
     needs: build-binaries
     runs-on: ubuntu-latest
+    # Note: If this fails with 403, check package settings at:
+    # https://github.com/users/rvben/packages/container/yamlbase/settings
+    # Under "Manage Actions access", add this repository
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
