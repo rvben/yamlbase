@@ -1,5 +1,9 @@
 .PHONY: all build test bench clean run docker-build docker-run help
 
+# Note: Integration tests that spawn servers are excluded from CI coverage runs
+# due to timing/resource issues in the coverage environment. Use 'make coverage-full'
+# during release preparation to run ALL tests including integration tests.
+
 # Default target
 all: build
 
@@ -38,9 +42,14 @@ test-integration:
 test-no-features:
 	cargo test --no-default-features --verbose
 
-# Run tests with coverage
+# Run tests with coverage (excluding integration tests that spawn servers)
 coverage:
-	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info \
+		--ignore-filename-regex '(mysql_caching_sha2_test|mysql_protocol_test|mysql_auth_test|mysql_8_integration_test)\.rs'
+
+# Run ALL tests with coverage (including integration tests) - for release prep
+coverage-full:
+	cargo llvm-cov --all-features --workspace --lcov --output-path lcov-full.info
 
 # Run tests with coverage and generate HTML report
 coverage-html:
