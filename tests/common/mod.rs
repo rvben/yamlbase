@@ -235,10 +235,10 @@ impl TestServer {
                             _ => tables_yaml.push_str(&format!("{:?}", val)),
                         }
                         if i < table.columns.len() - 1 {
-                            tables_yaml.push_str("\n");
+                            tables_yaml.push('\n');
                         }
                     }
-                    tables_yaml.push_str("\n");
+                    tables_yaml.push('\n');
                 }
             }
 
