@@ -179,10 +179,22 @@ test-mysql:
 integration-test:
 	@echo "Running integration tests..."
 	@cargo build --release
-	@./target/release/yamlbase -f examples/sample_database.yaml &
-	@sleep 2
-	@python3 examples/python_integration.py || true
-	@pkill yamlbase || true
+	@echo "Starting PostgreSQL server on port 5432..."
+	@./target/release/yamlbase -f examples/sample_database.yaml --protocol postgres -p 5432 &
+	@PG_PID=$$!; \
+	sleep 2; \
+	echo "Starting MySQL server on port 3306..."; \
+	./target/release/yamlbase -f examples/sample_database.yaml --protocol mysql -p 3306 & \
+	MYSQL_PID=$$!; \
+	sleep 2; \
+	echo "Running Python integration tests..."; \
+	if uv run examples/python_integration.py; then \
+		echo "✅ Integration tests passed"; \
+	else \
+		echo "❌ Integration tests failed"; \
+	fi; \
+	kill $$PG_PID $$MYSQL_PID 2>/dev/null || true; \
+	pkill yamlbase || true
 
 # Publish to crates.io
 publish-crate:
