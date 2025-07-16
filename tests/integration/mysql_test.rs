@@ -16,8 +16,16 @@ fn get_yamlbase_command() -> (String, Vec<String>) {
     }
     
     // Check for pre-built binaries
-    let release_binary = "target/release/yamlbase";
-    let debug_binary = "target/debug/yamlbase";
+    let release_binary = if cfg!(windows) {
+        "target/release/yamlbase.exe"
+    } else {
+        "target/release/yamlbase"
+    };
+    let debug_binary = if cfg!(windows) {
+        "target/debug/yamlbase.exe"
+    } else {
+        "target/debug/yamlbase"
+    };
     
     if Path::new(release_binary).exists() {
         return (release_binary.to_string(), vec![]);
