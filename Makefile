@@ -45,7 +45,7 @@ test-no-features:
 # Run tests with coverage (excluding integration tests that spawn servers)
 coverage:
 	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info \
-		--ignore-filename-regex '(mysql_caching_sha2_test|mysql_protocol_test|mysql_auth_test|mysql_8_integration_test)\.rs'
+		--ignore-filename-regex 'mysql_caching_sha2_test|mysql_protocol_test|mysql_auth_test|mysql_8_integration_test'
 
 # Run ALL tests with coverage (including integration tests) - for release prep
 coverage-full:
