@@ -16,13 +16,22 @@ impl Storage {
             primary_key_index: Arc::new(DashMap::new()),
         };
 
-        // Build initial indexes
-        tokio::spawn({
-            let storage = storage.clone();
-            async move {
+        // Build initial indexes - try to spawn if in tokio context, otherwise do it synchronously
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn({
+                let storage = storage.clone();
+                async move {
+                    storage.rebuild_indexes().await;
+                }
+            });
+        } else {
+            // We're not in a tokio runtime, build indexes synchronously
+            // This is mainly for benchmarks and tests that don't run in async context
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
                 storage.rebuild_indexes().await;
-            }
-        });
+            });
+        }
 
         storage
     }
