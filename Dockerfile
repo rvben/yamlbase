@@ -17,6 +17,11 @@ RUN cargo build --release
 # Runtime stage
 FROM alpine:3.22
 
+# Link container to GitHub repository
+LABEL org.opencontainers.image.source=https://github.com/rvben/yamlbase
+LABEL org.opencontainers.image.description="YamlBase - A functional SQL server that serves YAML-defined tables over PostgreSQL wire protocol"
+LABEL org.opencontainers.image.licenses=MIT
+
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates
 
