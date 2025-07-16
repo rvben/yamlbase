@@ -392,12 +392,12 @@ fn mysql_native_password_auth(auth_data: &[u8], password: &str) -> Vec<u8> {
     let password_hash = hasher.finalize();
 
     let mut hasher = Sha1::new();
-    hasher.update(&password_hash);
+    hasher.update(password_hash);
     let password_double_hash = hasher.finalize();
 
     let mut hasher = Sha1::new();
     hasher.update(auth_data);
-    hasher.update(&password_double_hash);
+    hasher.update(password_double_hash);
     let result = hasher.finalize();
 
     password_hash
