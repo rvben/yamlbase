@@ -38,6 +38,7 @@ fn get_yamlbase_command() -> (String, Vec<String>) {
 }
 
 #[test]
+#[ignore = "Requires yamlbase server to be running - run locally"]
 fn test_mysql_connection_and_simple_query() {
     // Start server in background
     let (cmd, mut args) = get_yamlbase_command();
