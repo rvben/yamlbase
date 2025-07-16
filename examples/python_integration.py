@@ -5,7 +5,7 @@ Example of using yamlbase with Python clients.
 This demonstrates connecting to yamlbase using both PostgreSQL and MySQL protocols.
 """
 
-import psycopg2
+import psycopg
 import mysql.connector
 from datetime import datetime
 
@@ -15,10 +15,10 @@ def postgres_example():
     print("=== PostgreSQL Example ===")
     
     # Connect to yamlbase
-    conn = psycopg2.connect(
+    conn = psycopg.connect(
         host="localhost",
         port=5432,
-        database="test_db",
+        dbname="test_db",
         user="admin",
         password="password"
     )
@@ -37,16 +37,15 @@ def postgres_example():
             for row in cur.fetchall():
                 print(f"  - Username: {row[0]}, Email: {row[1]}")
             
-            # JOIN query
-            print("\n3. Orders with user info:")
+            # Simple order query (JOIN has a known issue)
+            print("\n3. Recent orders:")
             cur.execute("""
-                SELECT u.username, o.id, o.total_amount, o.status
-                FROM users u, orders o
-                WHERE u.id = o.user_id
-                ORDER BY o.order_date DESC
+                SELECT id, user_id, total_amount, status
+                FROM orders
+                ORDER BY order_date DESC
             """)
             for row in cur.fetchall():
-                print(f"  - {row[0]}: Order #{row[1]} - ${row[2]} ({row[3]})")
+                print(f"  - Order #{row[0]} for user {row[1]}: ${row[2]} ({row[3]})")
             
             # Aggregate-like query using ORDER BY and LIMIT
             print("\n4. Most recent orders:")
@@ -96,23 +95,15 @@ def mysql_example():
         for row in cur.fetchall():
             print(f"  - {row[0]}: ${row[1]} ({row[2]} in stock)")
         
-        # Complex query
-        print("\n3. Order details:")
+        # Order items query (JOIN has a known issue)
+        print("\n3. Order items:")
         cur.execute("""
-            SELECT 
-                o.id,
-                u.username,
-                p.name,
-                oi.quantity,
-                oi.unit_price
-            FROM orders o, users u, order_items oi, products p
-            WHERE o.user_id = u.id
-                AND oi.order_id = o.id
-                AND oi.product_id = p.id
-            ORDER BY o.id
+            SELECT order_id, product_id, quantity, unit_price
+            FROM order_items
+            ORDER BY order_id
         """)
         for row in cur.fetchall():
-            print(f"  - Order #{row[0]} ({row[1]}): {row[3]}x {row[2]} @ ${row[4]}")
+            print(f"  - Order #{row[0]}: {row[2]}x Product #{row[1]} @ ${row[3]}")
         
         cur.close()
     
@@ -125,10 +116,10 @@ def error_handling_example():
     print("\n\n=== Error Handling Example ===")
     
     try:
-        conn = psycopg2.connect(
+        conn = psycopg.connect(
             host="localhost",
             port=5432,
-            database="test_db",
+            dbname="test_db",
             user="admin",
             password="password"
         )
@@ -137,18 +128,18 @@ def error_handling_example():
             # Try to query non-existent table
             try:
                 cur.execute("SELECT * FROM non_existent_table")
-            except psycopg2.Error as e:
+            except psycopg.Error as e:
                 print(f"Expected error for non-existent table: {e}")
             
             # Try invalid SQL
             try:
                 cur.execute("SELECT * FROM WHERE")
-            except psycopg2.Error as e:
+            except psycopg.Error as e:
                 print(f"Expected error for invalid SQL: {e}")
         
         conn.close()
     
-    except psycopg2.OperationalError as e:
+    except psycopg.OperationalError as e:
         print(f"Connection failed: {e}")
 
 
@@ -156,35 +147,27 @@ def connection_pooling_example():
     """Example using connection pooling."""
     print("\n\n=== Connection Pooling Example ===")
     
-    from psycopg2 import pool
+    from psycopg_pool import ConnectionPool
     
     # Create connection pool
-    connection_pool = pool.SimpleConnectionPool(
-        1, 5,  # min and max connections
-        host="localhost",
-        port=5432,
-        database="test_db",
-        user="admin",
-        password="password"
+    connection_pool = ConnectionPool(
+        "postgresql://admin:password@localhost:5432/test_db",
+        min_size=1,
+        max_size=5
     )
     
     if connection_pool:
         print("Connection pool created successfully")
         
         # Get connection from pool
-        conn = connection_pool.getconn()
-        
-        try:
+        with connection_pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM users")
                 count = cur.fetchone()[0]
                 print(f"Total users: {count}")
-        finally:
-            # Return connection to pool
-            connection_pool.putconn(conn)
         
         # Close all connections
-        connection_pool.closeall()
+        connection_pool.close()
         print("Connection pool closed")
 
 
