@@ -38,9 +38,9 @@ test-unit:
 test-integration:
 	cargo test --test '*' --all-features --verbose
 
-# Run tests with no default features
+# Run tests with no default features (excluding integration tests)
 test-no-features:
-	cargo test --no-default-features --verbose
+	cargo test --lib --bins --no-default-features --verbose
 
 # Run tests with coverage (excluding integration tests that spawn servers)
 coverage:
