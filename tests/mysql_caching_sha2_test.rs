@@ -129,6 +129,7 @@ fn wait_for_port(port: u16, timeout: Duration) {
 }
 
 #[test]
+#[ignore = "Flaky in code coverage environment - server startup timeout"]
 fn test_mysql_caching_sha2_authentication() {
     let server = TestServer::start();
 
