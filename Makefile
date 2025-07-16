@@ -98,7 +98,7 @@ docker-login:
 # Push multi-platform image to GitHub Container Registry
 docker-push: docker-login docker-buildx
 	@if [ -z "$(VERSION)" ]; then echo "Usage: make docker-push VERSION=0.1.0"; exit 1; fi
-	docker buildx build --platform linux/amd64,linux/arm64 \
+	docker buildx build --platform linux/amd64 \
 		-t ghcr.io/rvben/yamlbase:$(VERSION) \
 		-t ghcr.io/rvben/yamlbase:latest \
 		--push .
