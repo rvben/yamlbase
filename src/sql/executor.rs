@@ -3165,9 +3165,30 @@ impl QueryExecutor {
         // Check if we have GROUP BY
         match &select.group_by {
             GroupByExpr::Expressions(exprs, _) if !exprs.is_empty() => {
-                return self
+                let mut result = self
                     .execute_group_by_aggregate(select, &select.group_by, &filtered_rows, table)
-                    .await;
+                    .await?;
+                
+                // Apply ORDER BY to GROUP BY results
+                if let Some(order_by) = &_query.order_by {
+                    // Create column info for sorting
+                    let col_info: Vec<(String, usize)> = result.columns
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, name)| (name.clone(), idx))
+                        .collect();
+                    
+                    let sorted_rows = self.sort_rows(result.rows, &order_by.exprs, &col_info)?;
+                    result.rows = sorted_rows;
+                }
+                
+                // Apply LIMIT and OFFSET
+                if let Some(limit_expr) = &_query.limit {
+                    let limit_rows = self.apply_limit(result.rows, limit_expr)?;
+                    result.rows = limit_rows;
+                }
+                
+                return Ok(result);
             }
             GroupByExpr::All(_) => {
                 return Err(YamlBaseError::NotImplemented(
@@ -5950,14 +5971,8 @@ mod tests {
 
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
-        // Check format YYYY-MM-DD
-        if let Value::Text(date_str) = &result.rows[0][0] {
-            assert_eq!(date_str.len(), 10);
-            assert!(date_str.chars().nth(4).unwrap() == '-');
-            assert!(date_str.chars().nth(7).unwrap() == '-');
-        } else {
-            panic!("Expected text value for CURRENT_DATE");
-        }
+        // CURRENT_DATE returns a Date value
+        assert!(matches!(result.rows[0][0], Value::Date(_)));
 
         // Test 3: SELECT NOW()
         let stmt = parse_statement("SELECT NOW()");
@@ -8399,7 +8414,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_min_max_aggregate_functions() {
-        let mut db = Database::new("test_db".to_string());
+        let db = Arc::new(RwLock::new(Database::new("test_db".to_string())));
+        {
+            let mut db_write = db.write().await;
         
         // Create test table
         let columns = vec![
@@ -8507,8 +8524,8 @@ mod tests {
             Value::Null,  // NULL created_date
         ]).unwrap();
 
-        db.add_table(table).unwrap();
-        let db = Arc::new(RwLock::new(db));
+        db_write.add_table(table).unwrap();
+        }
         let executor = create_test_executor_from_arc(db).await;
 
         // Test MIN on numeric column
