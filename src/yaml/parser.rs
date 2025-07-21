@@ -127,7 +127,7 @@ fn parse_value(yaml_value: &serde_yaml::Value, sql_type: &SqlType) -> crate::Res
             }
         }
 
-        (Value::String(s), SqlType::Varchar(_) | SqlType::Text) => Ok(DbValue::Text(s.clone())),
+        (Value::String(s), SqlType::Char(_) | SqlType::Varchar(_) | SqlType::Text) => Ok(DbValue::Text(s.clone())),
 
         (Value::String(s), SqlType::Timestamp) => {
             match chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {

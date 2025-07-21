@@ -203,6 +203,7 @@ impl TestServer {
                         }
                         yamlbase::yaml::schema::SqlType::Text => "TEXT".to_string(),
                         yamlbase::yaml::schema::SqlType::Varchar(n) => format!("VARCHAR({})", n),
+                        yamlbase::yaml::schema::SqlType::Char(n) => format!("CHAR({})", n),
                         yamlbase::yaml::schema::SqlType::Boolean => "BOOLEAN".to_string(),
                         yamlbase::yaml::schema::SqlType::Date => "DATE".to_string(),
                         yamlbase::yaml::schema::SqlType::Timestamp => "TIMESTAMP".to_string(),
