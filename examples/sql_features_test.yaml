@@ -1,0 +1,70 @@
+# Test database for enhanced SQL compatibility features
+# Demonstrates UPPER/LOWER/TRIM functions, CHAR type, and function support in JOINs
+
+database:
+  name: sql_features_test
+  auth:
+    username: admin
+    password: password123
+
+tables:
+  EMPLOYEES:
+    columns:
+      EMPLOYEE_ID: "VARCHAR(10) PRIMARY KEY"
+      FIRST_NAME: "VARCHAR(50)"
+      LAST_NAME: "VARCHAR(50)" 
+      EMAIL_ADDRESS: "VARCHAR(100)"
+      ACTIVE_FLAG: "CHAR(1)"  # Using new CHAR type
+    data:
+      - EMPLOYEE_ID: "abc123"
+        FIRST_NAME: "John"
+        LAST_NAME: "Smith"
+        EMAIL_ADDRESS: "john.smith@company.com"
+        ACTIVE_FLAG: "Y"
+      - EMPLOYEE_ID: "ABC123"  # Same ID but uppercase
+        FIRST_NAME: "Jane"
+        LAST_NAME: "Doe"
+        EMAIL_ADDRESS: "jane.doe@company.com"
+        ACTIVE_FLAG: "Y"
+      - EMPLOYEE_ID: "def456"
+        FIRST_NAME: "  Bob  "  # With extra spaces to test TRIM
+        LAST_NAME: "Johnson"
+        EMAIL_ADDRESS: "bob.johnson@company.com"
+        ACTIVE_FLAG: "N"
+
+  PROJECT_ASSIGNMENTS:
+    columns:
+      ALLOCATION_ID: "INTEGER PRIMARY KEY"
+      EMPLOYEE_ID: "VARCHAR(10)"
+      PROJECT_ID: "VARCHAR(20)"
+      JOB_CLASSIFICATION: "VARCHAR(50)"
+      VERSION_CODE: "VARCHAR(20)"
+    data:
+      - ALLOCATION_ID: 1
+        EMPLOYEE_ID: "ABC123"  # Uppercase version
+        PROJECT_ID: "PROJ001"
+        JOB_CLASSIFICATION: "Developer"
+        VERSION_CODE: "Published"
+      - ALLOCATION_ID: 2
+        EMPLOYEE_ID: "def456"
+        PROJECT_ID: "PROJ001"
+        JOB_CLASSIFICATION: "Manager"
+        VERSION_CODE: "Published"
+      - ALLOCATION_ID: 3
+        EMPLOYEE_ID: "abc123"  # Lowercase version
+        PROJECT_ID: "PROJ002"
+        JOB_CLASSIFICATION: "Analyst"
+        VERSION_CODE: "Draft"
+
+  PROJECTS:
+    columns:
+      PROJECT_ID: "VARCHAR(20) PRIMARY KEY"
+      PROJECT_NAME: "VARCHAR(100)"
+      PROJECT_TYPE: "CHAR(3)"  # Using CHAR type
+    data:
+      - PROJECT_ID: "PROJ001"
+        PROJECT_NAME: "Enterprise System Integration"
+        PROJECT_TYPE: "INT"  # Internal project
+      - PROJECT_ID: "PROJ002"
+        PROJECT_NAME: "Data Migration Project"
+        PROJECT_TYPE: "EXT"  # External project
