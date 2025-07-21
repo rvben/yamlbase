@@ -499,6 +499,11 @@ impl QueryExecutor {
                     }),
                 }
             }
+            Expr::Cast { expr, data_type, .. } => {
+                // Handle CAST expression
+                let value = self.evaluate_constant_expr(expr)?;
+                self.cast_value(value, data_type)
+            }
             _ => {
                 debug!(
                     "Unsupported expression type in evaluate_constant_expr: {:?}",
@@ -1404,6 +1409,11 @@ impl QueryExecutor {
                         message: "SUBSTRING requires a string argument".to_string(),
                     }),
                 }
+            }
+            Expr::Cast { expr, data_type, .. } => {
+                // Handle CAST expression
+                let value = self.get_expr_value(expr, row, table)?;
+                self.cast_value(value, data_type)
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
@@ -2860,9 +2870,218 @@ impl QueryExecutor {
                     ))
                 }
             }
+            "DATE_FORMAT" => {
+                // DATE_FORMAT(date, format) - formats date using MySQL format specifiers
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(format_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            let format_val = self.evaluate_constant_expr(format_expr)?;
+                            
+                            // Get the date
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    // Try to parse as date or datetime
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_FORMAT requires date as first argument".to_string(),
+                                    });
+                                }
+                            };
+                            
+                            // Get the format string
+                            let format_str = match &format_val {
+                                Value::Text(s) => s,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_FORMAT requires string format as second argument".to_string(),
+                                    });
+                                }
+                            };
+                            
+                            // Convert MySQL format to chrono format
+                            let chrono_format = self.mysql_to_chrono_format(format_str);
+                            let formatted = date.format(&chrono_format).to_string();
+                            Ok(Value::Text(formatted))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for DATE_FORMAT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_FORMAT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_FORMAT requires arguments".to_string(),
+                    })
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Function '{}' is not implemented",
                 func_name
+            ))),
+        }
+    }
+
+    fn mysql_to_chrono_format(&self, mysql_format: &str) -> String {
+        // Convert MySQL date format specifiers to chrono format
+        // This is a simplified version - MySQL has many more format specifiers
+        mysql_format
+            .replace("%Y", "%Y")      // 4-digit year (same)
+            .replace("%y", "%y")      // 2-digit year (same)
+            .replace("%m", "%m")      // Month as number (01-12) (same)
+            .replace("%c", "%-m")     // Month as number (1-12)
+            .replace("%M", "%B")      // Month name (January, February, etc.)
+            .replace("%b", "%b")      // Abbreviated month name (Jan, Feb, etc.)
+            .replace("%d", "%d")      // Day of month (01-31) (same)
+            .replace("%e", "%-d")     // Day of month (1-31)
+            .replace("%D", "%dth")    // Day with suffix (1st, 2nd, 3rd, etc.) - approximation
+            .replace("%W", "%A")      // Weekday name (Monday, Tuesday, etc.)
+            .replace("%w", "%w")      // Day of week (0=Sunday, 6=Saturday) (same)
+            .replace("%H", "%H")      // Hour (00-23) (same)
+            .replace("%h", "%I")      // Hour (01-12)
+            .replace("%I", "%I")      // Hour (01-12) (same)
+            .replace("%k", "%-H")     // Hour (0-23)
+            .replace("%l", "%-I")     // Hour (1-12)
+            .replace("%i", "%M")      // Minutes (00-59)
+            .replace("%s", "%S")      // Seconds (00-59)
+            .replace("%p", "%p")      // AM/PM (same)
+            .replace("%r", "%I:%M:%S %p") // Time 12-hour format
+            .replace("%T", "%H:%M:%S")    // Time 24-hour format
+            .replace("%%", "%")           // Literal %
+    }
+
+    fn cast_value(&self, value: Value, data_type: &DataType) -> crate::Result<Value> {
+        use sqlparser::ast::DataType;
+        
+        match data_type {
+            DataType::Int(_) | DataType::Integer(_) | DataType::BigInt(_) => {
+                match value {
+                    Value::Integer(i) => Ok(Value::Integer(i)),
+                    Value::Double(d) => Ok(Value::Integer(d as i64)),
+                    Value::Float(f) => Ok(Value::Integer(f as i64)),
+                    Value::Text(s) => {
+                        s.trim().parse::<i64>()
+                            .map(Value::Integer)
+                            .map_err(|_| YamlBaseError::Database {
+                                message: format!("Cannot cast '{}' to INTEGER", s),
+                            })
+                    }
+                    Value::Boolean(b) => Ok(Value::Integer(if b { 1 } else { 0 })),
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Cannot cast {:?} to INTEGER", value),
+                    }),
+                }
+            }
+            DataType::Float(_) | DataType::Real => {
+                match value {
+                    Value::Integer(i) => Ok(Value::Float(i as f32)),
+                    Value::Double(d) => Ok(Value::Float(d as f32)),
+                    Value::Float(f) => Ok(Value::Float(f)),
+                    Value::Text(s) => {
+                        s.trim().parse::<f32>()
+                            .map(Value::Float)
+                            .map_err(|_| YamlBaseError::Database {
+                                message: format!("Cannot cast '{}' to FLOAT", s),
+                            })
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Cannot cast {:?} to FLOAT", value),
+                    }),
+                }
+            }
+            DataType::Double | DataType::DoublePrecision => {
+                match value {
+                    Value::Integer(i) => Ok(Value::Double(i as f64)),
+                    Value::Double(d) => Ok(Value::Double(d)),
+                    Value::Float(f) => Ok(Value::Double(f as f64)),
+                    Value::Text(s) => {
+                        s.trim().parse::<f64>()
+                            .map(Value::Double)
+                            .map_err(|_| YamlBaseError::Database {
+                                message: format!("Cannot cast '{}' to DOUBLE", s),
+                            })
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Cannot cast {:?} to DOUBLE", value),
+                    }),
+                }
+            }
+            DataType::Varchar(_) | DataType::Char(_) | DataType::Text => {
+                match value {
+                    Value::Integer(i) => Ok(Value::Text(i.to_string())),
+                    Value::Double(d) => Ok(Value::Text(d.to_string())),
+                    Value::Float(f) => Ok(Value::Text(f.to_string())),
+                    Value::Boolean(b) => Ok(Value::Text(b.to_string())),
+                    Value::Text(s) => Ok(Value::Text(s)),
+                    Value::Date(d) => Ok(Value::Text(d.format("%Y-%m-%d").to_string())),
+                    Value::Null => Ok(Value::Null),
+                    _ => Ok(Value::Text(format!("{:?}", value))),
+                }
+            }
+            DataType::Date => {
+                match value {
+                    Value::Text(s) => {
+                        // Try to parse various date formats
+                        if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                            Ok(Value::Date(date))
+                        } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                            Ok(Value::Date(datetime.date()))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: format!("Cannot cast '{}' to DATE", s),
+                            })
+                        }
+                    }
+                    Value::Date(d) => Ok(Value::Date(d)),
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Cannot cast {:?} to DATE", value),
+                    }),
+                }
+            }
+            DataType::Boolean => {
+                match value {
+                    Value::Boolean(b) => Ok(Value::Boolean(b)),
+                    Value::Integer(i) => Ok(Value::Boolean(i != 0)),
+                    Value::Double(d) => Ok(Value::Boolean(d != 0.0)),
+                    Value::Float(f) => Ok(Value::Boolean(f != 0.0)),
+                    Value::Text(s) => {
+                        let s_lower = s.to_lowercase();
+                        Ok(Value::Boolean(
+                            s_lower == "true" || s_lower == "1" || s_lower == "yes" || s_lower == "on"
+                        ))
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Cannot cast {:?} to BOOLEAN", value),
+                    }),
+                }
+            }
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "CAST to {:?} is not supported",
+                data_type
             ))),
         }
     }
@@ -5958,6 +6177,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_date_format_function() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+        
+        // Test 1: Basic date formatting
+        let stmt = parse_statement("SELECT DATE_FORMAT(DATE '2025-07-15', '%Y-%m-%d')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("2025-07-15".to_string()));
+
+        // Test 2: Month name
+        let stmt = parse_statement("SELECT DATE_FORMAT(DATE '2025-07-15', '%M %Y')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("July 2025".to_string()));
+
+        // Test 3: Day and abbreviated month
+        let stmt = parse_statement("SELECT DATE_FORMAT(DATE '2025-07-15', '%d %b %Y')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("15 Jul 2025".to_string()));
+
+        // Test 4: Weekday name
+        let stmt = parse_statement("SELECT DATE_FORMAT(DATE '2025-07-15', '%W, %d %M %Y')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        // July 15, 2025 is a Tuesday
+        assert_eq!(result.rows[0][0], Value::Text("Tuesday, 15 July 2025".to_string()));
+
+        // Test 5: With CURRENT_DATE
+        let stmt = parse_statement("SELECT DATE_FORMAT(CURRENT_DATE, '%Y-%m-%d')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        // Should return today's date in YYYY-MM-DD format
+        assert!(matches!(result.rows[0][0], Value::Text(_)));
+    }
+
+    #[tokio::test]
     async fn test_date_functions() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
@@ -8510,5 +8767,71 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1); // ID 2
         assert_eq!(result.rows[0][1], Value::Integer(20));
+    }
+
+    #[tokio::test]
+    async fn test_cast_function() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+        
+        // Test 1: Cast integer to text
+        let stmt = parse_statement("SELECT CAST(123 AS VARCHAR)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("123".to_string()));
+        
+        // Test 2: Cast text to integer
+        let stmt = parse_statement("SELECT CAST('456' AS INTEGER)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(456));
+        
+        // Test 3: Cast float to integer (truncates)
+        let stmt = parse_statement("SELECT CAST(123.789 AS INTEGER)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(123));
+        
+        // Test 4: Cast integer to float
+        let stmt = parse_statement("SELECT CAST(123 AS FLOAT)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Float(123.0));
+        
+        // Test 5: Cast text to double
+        let stmt = parse_statement("SELECT CAST('123.456' AS DOUBLE)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Double(123.456));
+        
+        // Test 6: Cast text to date
+        let stmt = parse_statement("SELECT CAST('2025-07-15' AS DATE)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Date(NaiveDate::from_ymd_opt(2025, 7, 15).unwrap()));
+        
+        // Test 7: Cast boolean to integer
+        let stmt = parse_statement("SELECT CAST(TRUE AS INTEGER)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        
+        // Test 8: Cast integer to boolean
+        let stmt = parse_statement("SELECT CAST(1 AS BOOLEAN)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Boolean(true));
+        
+        // Test 9: Cast NULL
+        let stmt = parse_statement("SELECT CAST(NULL AS INTEGER)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Null);
+        
+        // Test 10: Cast in WHERE clause
+        let stmt = parse_statement("SELECT name FROM users WHERE CAST(id AS VARCHAR) = '1'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
     }
 }
