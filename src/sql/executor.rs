@@ -1674,6 +1674,62 @@ impl QueryExecutor {
                     })
                 }
             }
+            "LTRIM" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
+                            let val = self.get_expr_value(expr, row, table)?;
+                            match val {
+                                Value::Text(s) => Ok(Value::Text(s.trim_start().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LTRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for LTRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LTRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LTRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            "RTRIM" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
+                            let val = self.get_expr_value(expr, row, table)?;
+                            match val {
+                                Value::Text(s) => Ok(Value::Text(s.trim_end().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "RTRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for RTRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "RTRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "RTRIM requires arguments".to_string(),
+                    })
+                }
+            }
             "COALESCE" => {
                 if let FunctionArguments::List(args) = &func.args {
                     // COALESCE returns the first non-NULL value
@@ -2393,6 +2449,66 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::NotImplemented(
                         "TRIM function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "LTRIM" => {
+                // For SELECT without FROM, handle string literals
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.trim_start().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LTRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "LTRIM function requires single argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "LTRIM function requires exactly one argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "LTRIM function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "RTRIM" => {
+                // For SELECT without FROM, handle string literals
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.trim_end().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "RTRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "RTRIM function requires single argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "RTRIM function requires exactly one argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "RTRIM function requires arguments".to_string(),
                     ))
                 }
             }
@@ -4010,9 +4126,10 @@ impl QueryExecutor {
         let mut result = Vec::new();
 
         match join_type {
-            JoinOperator::Inner(constraint) | JoinOperator::LeftOuter(constraint) => {
-                // For INNER and LEFT JOIN
+            JoinOperator::Inner(constraint) | JoinOperator::LeftOuter(constraint) | JoinOperator::RightOuter(constraint) => {
+                // For INNER, LEFT JOIN, and RIGHT JOIN
                 let is_left_join = matches!(join_type, JoinOperator::LeftOuter(_));
+                let is_right_join = matches!(join_type, JoinOperator::RightOuter(_));
 
                 for left_row in &left_rows {
                     let mut matched = false;
@@ -4057,6 +4174,64 @@ impl QueryExecutor {
                             combined_row.push(Value::Null);
                         }
                         result.push(combined_row);
+                    }
+                }
+
+                // For RIGHT JOIN, we need to check which right rows were not matched
+                if is_right_join {
+                    // Track which right rows were matched
+                    let mut matched_right_indices = std::collections::HashSet::new();
+                    
+                    // First pass: find all matches (we need to redo this for RIGHT JOIN)
+                    result.clear(); // Clear previous results as we need to rebuild for RIGHT JOIN
+                    
+                    for (right_idx, right_row) in right_table.rows.iter().enumerate() {
+                        let mut row_matched = false;
+                        
+                        for left_row in &left_rows {
+                            // Combine rows for evaluation
+                            let mut combined_row = left_row.clone();
+                            combined_row.extend(right_row.clone());
+
+                            // Evaluate ON condition
+                            let matches = match constraint {
+                                JoinConstraint::On(expr) => self.evaluate_join_condition(
+                                    expr,
+                                    &combined_row,
+                                    all_tables,
+                                    table_aliases,
+                                )?,
+                                JoinConstraint::Using(_) => {
+                                    return Err(YamlBaseError::NotImplemented(
+                                        "JOIN USING is not yet supported".to_string(),
+                                    ));
+                                }
+                                JoinConstraint::Natural => {
+                                    return Err(YamlBaseError::NotImplemented(
+                                        "NATURAL JOIN is not yet supported".to_string(),
+                                    ));
+                                }
+                                JoinConstraint::None => true,
+                            };
+
+                            if matches {
+                                result.push(combined_row);
+                                matched_right_indices.insert(right_idx);
+                                row_matched = true;
+                            }
+                        }
+                        
+                        // If this right row had no matches, add it with NULLs for left columns
+                        if !row_matched {
+                            let mut combined_row = vec![];
+                            // Add NULL values for all columns from the left table
+                            let left_col_count = left_rows.first().map(|r| r.len()).unwrap_or(0);
+                            for _ in 0..left_col_count {
+                                combined_row.push(Value::Null);
+                            }
+                            combined_row.extend(right_row.clone());
+                            result.push(combined_row);
+                        }
                     }
                 }
             }
@@ -4379,6 +4554,62 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "TRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            "LTRIM" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
+                            let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                            match val {
+                                Value::Text(s) => Ok(Value::Text(s.trim_start().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LTRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for LTRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LTRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LTRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            "RTRIM" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
+                            let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                            match val {
+                                Value::Text(s) => Ok(Value::Text(s.trim_end().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "RTRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for RTRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "RTRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "RTRIM requires arguments".to_string(),
                     })
                 }
             }
@@ -8922,5 +9153,306 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Integer(3));
         assert_eq!(result.rows[0][1], Value::Text("Charlie".to_string()));
         assert_eq!(result.rows[0][2], Value::Null); // No order_id for Charlie
+    }
+
+    #[tokio::test]
+    async fn test_in_not_in_operators() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("name", crate::yaml::schema::SqlType::Varchar(50), false),
+                create_column("department", crate::yaml::schema::SqlType::Varchar(50), false),
+                create_column("salary", crate::yaml::schema::SqlType::Integer, false),
+            ];
+            let mut table = Table::new("employees".to_string(), columns);
+
+            table.insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Alice".to_string()),
+                Value::Text("Engineering".to_string()),
+                Value::Integer(100000),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Bob".to_string()),
+                Value::Text("Sales".to_string()),
+                Value::Integer(80000),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(3),
+                Value::Text("Charlie".to_string()),
+                Value::Text("Marketing".to_string()),
+                Value::Integer(90000),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(4),
+                Value::Text("David".to_string()),
+                Value::Text("Engineering".to_string()),
+                Value::Integer(110000),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(5),
+                Value::Text("Eve".to_string()),
+                Value::Text("HR".to_string()),
+                Value::Integer(75000),
+            ]).unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test 1: IN with string values
+        let stmt = parse_statement(
+            "SELECT name, department FROM employees WHERE department IN ('Engineering', 'Sales') ORDER BY id"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[2][0], Value::Text("David".to_string()));
+
+        // Test 2: NOT IN with string values
+        let stmt = parse_statement(
+            "SELECT name, department FROM employees WHERE department NOT IN ('Engineering', 'Sales') ORDER BY id"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Text("Charlie".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Eve".to_string()));
+
+        // Test 3: IN with integer values
+        let stmt = parse_statement(
+            "SELECT name, salary FROM employees WHERE salary IN (80000, 90000, 100000) ORDER BY id"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[2][0], Value::Text("Charlie".to_string()));
+
+        // Test 4: IN with single value
+        let stmt = parse_statement(
+            "SELECT name FROM employees WHERE id IN (3)"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("Charlie".to_string()));
+
+        // Test 5: NOT IN with no matches (should return all rows)
+        let stmt = parse_statement(
+            "SELECT name FROM employees WHERE department NOT IN ('NonExistent') ORDER BY id"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_string_functions() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "text_data".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("strings".to_string(), columns);
+
+            table.insert_row(vec![
+                Value::Integer(1),
+                Value::Text("  spaces around  ".to_string()),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(2),
+                Value::Text("  left spaces".to_string()),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(3),
+                Value::Text("right spaces  ".to_string()),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(4),
+                Value::Text("hello world".to_string()),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(5),
+                Value::Null,
+            ]).unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test TRIM
+        let stmt = parse_statement("SELECT TRIM(text_data) FROM strings WHERE id = 1");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("spaces around".to_string()));
+
+        // Test LTRIM
+        let stmt = parse_statement("SELECT LTRIM(text_data) FROM strings WHERE id = 2");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("left spaces".to_string()));
+
+        // Test RTRIM
+        let stmt = parse_statement("SELECT RTRIM(text_data) FROM strings WHERE id = 3");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("right spaces".to_string()));
+
+        // Test REPLACE
+        let stmt = parse_statement("SELECT REPLACE(text_data, 'world', 'universe') FROM strings WHERE id = 4");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("hello universe".to_string()));
+
+        // Test with NULL values
+        let stmt = parse_statement("SELECT TRIM(text_data), LTRIM(text_data), RTRIM(text_data), REPLACE(text_data, 'a', 'b') FROM strings WHERE id = 5");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+        assert_eq!(result.rows[0][1], Value::Null);
+        assert_eq!(result.rows[0][2], Value::Null);
+        assert_eq!(result.rows[0][3], Value::Null);
+
+    }
+
+    #[tokio::test]
+    async fn test_right_join() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create users table
+        let user_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut users = Table::new("users".to_string(), user_columns);
+        users
+            .insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+            .unwrap();
+        users
+            .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+            .unwrap();
+        // User ID 3 will not be added, but referenced in orders
+        db.add_table(users).unwrap();
+
+        // Create orders table
+        let order_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "user_id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "product".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut orders = Table::new("orders".to_string(), order_columns);
+        orders
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Text("Laptop".to_string()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Integer(2),
+                Value::Text("Mouse".to_string()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Integer(3), // User 3 doesn't exist
+                Value::Text("Keyboard".to_string()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(4),
+                Value::Integer(2),
+                Value::Text("Monitor".to_string()),
+            ])
+            .unwrap();
+        db.add_table(orders).unwrap();
+
+        let db_arc = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db_arc).await;
+
+        // Test RIGHT JOIN - should include all orders even if user doesn't exist
+        let stmt = parse_statement(
+            "SELECT u.name, o.product 
+             FROM users u 
+             RIGHT JOIN orders o ON u.id = o.user_id 
+             ORDER BY o.id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 4); // All 4 orders
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[0][1], Value::Text("Laptop".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Mouse".to_string()));
+        assert_eq!(result.rows[2][0], Value::Null); // No user for order 3
+        assert_eq!(result.rows[2][1], Value::Text("Keyboard".to_string()));
+        assert_eq!(result.rows[3][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[3][1], Value::Text("Monitor".to_string()));
+
+        // Test RIGHT JOIN with WHERE clause on right table
+        let stmt = parse_statement(
+            "SELECT u.name, o.product 
+             FROM users u 
+             RIGHT JOIN orders o ON u.id = o.user_id 
+             WHERE o.product = 'Keyboard'",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.rows.len(), 1); // Only the keyboard order
+        assert_eq!(result.rows[0][0], Value::Null); // No user for this order
+        assert_eq!(result.rows[0][1], Value::Text("Keyboard".to_string()));
     }
 }
