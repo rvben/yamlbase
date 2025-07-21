@@ -326,8 +326,11 @@ impl QueryExecutor {
             }
             Expr::Identifier(ident) => {
                 debug!("Evaluating identifier: {}", ident.value);
-                // Handle system variables (@@variable_name)
-                if ident.value.starts_with("@@") {
+                // Handle NULL as a special identifier
+                if ident.value.to_uppercase() == "NULL" {
+                    Ok(Value::Null)
+                } else if ident.value.starts_with("@@") {
+                    // Handle system variables (@@variable_name)
                     self.get_system_variable(&ident.value)
                 } else {
                     Err(YamlBaseError::NotImplemented(format!(
@@ -399,9 +402,79 @@ impl QueryExecutor {
                 // CASE WHEN in SELECT without FROM
                 self.evaluate_case_when_constant(operand.as_deref(), conditions, results, else_result.as_deref())
             }
-            _ => Err(YamlBaseError::NotImplemented(
-                "Only constant expressions are supported in SELECT without FROM".to_string(),
-            )),
+            Expr::Substring {
+                expr,
+                substring_from,
+                substring_for,
+                ..
+            } => {
+                // PostgreSQL-style SUBSTRING expression
+                let str_val = self.evaluate_constant_expr(expr)?;
+                
+                let start = if let Some(from_expr) = substring_from {
+                    let start_val = self.evaluate_constant_expr(from_expr)?;
+                    match start_val {
+                        Value::Integer(n) => n,
+                        Value::Null => return Ok(Value::Null),
+                        _ => return Err(YamlBaseError::Database {
+                            message: "SUBSTRING start position must be an integer".to_string(),
+                        }),
+                    }
+                } else {
+                    1 // Default to 1 if no FROM specified
+                };
+                
+                match str_val {
+                    Value::Text(s) => {
+                        // SQL uses 1-based indexing
+                        let start_idx = if start > 0 {
+                            (start as usize).saturating_sub(1)
+                        } else {
+                            0
+                        };
+                        
+                        if let Some(for_expr) = substring_for {
+                            let len_val = self.evaluate_constant_expr(for_expr)?;
+                            match len_val {
+                                Value::Integer(len) => {
+                                    let length = if len > 0 {
+                                        len as usize
+                                    } else {
+                                        0
+                                    };
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let result: String = chars.iter()
+                                        .skip(start_idx)
+                                        .take(length)
+                                        .collect();
+                                    Ok(Value::Text(result))
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "SUBSTRING length must be an integer".to_string(),
+                                }),
+                            }
+                        } else {
+                            // No length specified, take rest of string
+                            let chars: Vec<char> = s.chars().collect();
+                            let result: String = chars.iter()
+                                .skip(start_idx)
+                                .collect();
+                            Ok(Value::Text(result))
+                        }
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "SUBSTRING requires a string argument".to_string(),
+                    }),
+                }
+            }
+            _ => {
+                debug!("Unsupported expression type in evaluate_constant_expr: {:?}", expr);
+                Err(YamlBaseError::NotImplemented(
+                    "Only constant expressions are supported in SELECT without FROM".to_string(),
+                ))
+            }
         }
     }
 
@@ -1134,6 +1207,73 @@ impl QueryExecutor {
                 // CASE WHEN expression
                 self.evaluate_case_when(operand.as_deref(), conditions, results, else_result.as_deref(), row, table)
             }
+            Expr::Substring {
+                expr,
+                substring_from,
+                substring_for,
+                ..
+            } => {
+                // PostgreSQL-style SUBSTRING expression with row context
+                let str_val = self.get_expr_value(expr, row, table)?;
+                
+                let start = if let Some(from_expr) = substring_from {
+                    let start_val = self.get_expr_value(from_expr, row, table)?;
+                    match start_val {
+                        Value::Integer(n) => n,
+                        Value::Null => return Ok(Value::Null),
+                        _ => return Err(YamlBaseError::Database {
+                            message: "SUBSTRING start position must be an integer".to_string(),
+                        }),
+                    }
+                } else {
+                    1 // Default to 1 if no FROM specified
+                };
+                
+                match str_val {
+                    Value::Text(s) => {
+                        // SQL uses 1-based indexing
+                        let start_idx = if start > 0 {
+                            (start as usize).saturating_sub(1)
+                        } else {
+                            0
+                        };
+                        
+                        if let Some(for_expr) = substring_for {
+                            let len_val = self.get_expr_value(for_expr, row, table)?;
+                            match len_val {
+                                Value::Integer(len) => {
+                                    let length = if len > 0 {
+                                        len as usize
+                                    } else {
+                                        0
+                                    };
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let result: String = chars.iter()
+                                        .skip(start_idx)
+                                        .take(length)
+                                        .collect();
+                                    Ok(Value::Text(result))
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "SUBSTRING length must be an integer".to_string(),
+                                }),
+                            }
+                        } else {
+                            // No length specified, take rest of string
+                            let chars: Vec<char> = s.chars().collect();
+                            let result: String = chars.iter()
+                                .skip(start_idx)
+                                .collect();
+                            Ok(Value::Text(result))
+                        }
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "SUBSTRING requires a string argument".to_string(),
+                    }),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
                 expr
@@ -1606,7 +1746,12 @@ impl QueryExecutor {
                             
                             match (&str_val, &from_val, &to_val) {
                                 (Value::Text(s), Value::Text(from), Value::Text(to)) => {
-                                    Ok(Value::Text(s.replace(from, to)))
+                                    // Handle empty search string - return original string
+                                    if from.is_empty() {
+                                        Ok(Value::Text(s.clone()))
+                                    } else {
+                                        Ok(Value::Text(s.replace(from, to)))
+                                    }
                                 }
                                 (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
@@ -1932,7 +2077,7 @@ impl QueryExecutor {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
                             
                             match &str_val {
-                                Value::Text(s) => Ok(Value::Integer(s.len() as i64)),
+                                Value::Text(s) => Ok(Value::Integer(s.chars().count() as i64)),
                                 Value::Null => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
                                     message: "LENGTH requires string argument".to_string(),
@@ -1975,31 +2120,39 @@ impl QueryExecutor {
                                         };
                                         
                                         if args.args.len() == 3 {
-                                            // SUBSTRING with length
                                             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)) = &args.args[2]
                                             {
                                                 let len_val = self.evaluate_constant_expr(len_expr)?;
-                                                
-                                                if let Value::Integer(len) = len_val {
-                                                    let length = len.max(0) as usize;
-                                                    let result: String = s.chars()
-                                                        .skip(start_idx)
-                                                        .take(length)
-                                                        .collect();
-                                                    Ok(Value::Text(result))
-                                                } else {
-                                                    Err(YamlBaseError::Database {
-                                                        message: "SUBSTRING length must be an integer".to_string(),
-                                                    })
+                                                match &len_val {
+                                                    Value::Integer(len) => {
+                                                        let length = if *len > 0 {
+                                                            *len as usize
+                                                        } else {
+                                                            0
+                                                        };
+                                                        let chars: Vec<char> = s.chars().collect();
+                                                        let result: String = chars.iter()
+                                                            .skip(start_idx)
+                                                            .take(length)
+                                                            .collect();
+                                                        Ok(Value::Text(result))
+                                                    }
+                                                    Value::Null => Ok(Value::Null),
+                                                    _ => Err(YamlBaseError::Database {
+                                                        message: "SUBSTRING length must be integer".to_string(),
+                                                    }),
                                                 }
                                             } else {
-                                                Err(YamlBaseError::Database {
-                                                    message: "Invalid length argument for SUBSTRING".to_string(),
-                                                })
+                                                Err(YamlBaseError::NotImplemented(
+                                                    "Invalid SUBSTRING length argument".to_string(),
+                                                ))
                                             }
                                         } else {
-                                            // SUBSTRING without length
-                                            let result: String = s.chars().skip(start_idx).collect();
+                                            // No length specified, take rest of string
+                                            let chars: Vec<char> = s.chars().collect();
+                                            let result: String = chars.iter()
+                                                .skip(start_idx)
+                                                .collect();
                                             Ok(Value::Text(result))
                                         }
                                     }
@@ -2009,24 +2162,104 @@ impl QueryExecutor {
                                     }),
                                 }
                             } else {
-                                Err(YamlBaseError::Database {
-                                    message: "Invalid start argument for SUBSTRING".to_string(),
-                                })
+                                Err(YamlBaseError::NotImplemented(
+                                    "Invalid SUBSTRING start argument".to_string(),
+                                ))
                             }
                         } else {
-                            Err(YamlBaseError::Database {
-                                message: "Invalid string argument for SUBSTRING".to_string(),
-                            })
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid SUBSTRING string argument".to_string(),
+                            ))
                         }
                     } else {
-                        Err(YamlBaseError::Database {
-                            message: "SUBSTRING requires 2 or 3 arguments".to_string(),
-                        })
+                        Err(YamlBaseError::NotImplemented(
+                            "SUBSTRING requires 2 or 3 arguments".to_string(),
+                        ))
                     }
                 } else {
-                    Err(YamlBaseError::Database {
-                        message: "SUBSTRING requires arguments".to_string(),
-                    })
+                    Err(YamlBaseError::NotImplemented(
+                        "SUBSTRING function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "CONCAT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    let mut result = String::new();
+                    let mut has_null = false;
+                    
+                    for arg in &args.args {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
+                            let val = self.evaluate_constant_expr(expr)?;
+                            match &val {
+                                Value::Text(s) => result.push_str(s),
+                                Value::Integer(i) => result.push_str(&i.to_string()),
+                                Value::Double(d) => result.push_str(&d.to_string()),
+                                Value::Boolean(b) => result.push_str(&b.to_string()),
+                                Value::Null => {
+                                    has_null = true;
+                                    break;
+                                }
+                                _ => result.push_str(&format!("{:?}", val)),
+                            }
+                        } else {
+                            return Err(YamlBaseError::NotImplemented(
+                                "Invalid CONCAT argument".to_string(),
+                            ));
+                        }
+                    }
+                    
+                    if has_null {
+                        Ok(Value::Null)
+                    } else {
+                        Ok(Value::Text(result))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "CONCAT function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "REPLACE" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(from_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(to_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            let from_val = self.evaluate_constant_expr(from_expr)?;
+                            let to_val = self.evaluate_constant_expr(to_expr)?;
+                            
+                            match (&str_val, &from_val, &to_val) {
+                                (Value::Text(s), Value::Text(from), Value::Text(to)) => {
+                                    // Handle empty search string - return original string
+                                    if from.is_empty() {
+                                        Ok(Value::Text(s.clone()))
+                                    } else {
+                                        Ok(Value::Text(s.replace(from, to)))
+                                    }
+                                }
+                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "REPLACE requires string arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid REPLACE arguments".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "REPLACE requires exactly 3 arguments".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "REPLACE function requires arguments".to_string(),
+                    ))
                 }
             }
             "CONCAT" => {
@@ -2081,7 +2314,12 @@ impl QueryExecutor {
                             
                             match (&str_val, &from_val, &to_val) {
                                 (Value::Text(s), Value::Text(from), Value::Text(to)) => {
-                                    Ok(Value::Text(s.replace(from, to)))
+                                    // Handle empty search string - return original string
+                                    if from.is_empty() {
+                                        Ok(Value::Text(s.clone()))
+                                    } else {
+                                        Ok(Value::Text(s.replace(from, to)))
+                                    }
                                 }
                                 (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
@@ -3456,7 +3694,12 @@ impl QueryExecutor {
                             
                             match (&str_val, &from_val, &to_val) {
                                 (Value::Text(s), Value::Text(from), Value::Text(to)) => {
-                                    Ok(Value::Text(s.replace(from, to)))
+                                    // Handle empty search string - return original string
+                                    if from.is_empty() {
+                                        Ok(Value::Text(s.clone()))
+                                    } else {
+                                        Ok(Value::Text(s.replace(from, to)))
+                                    }
                                 }
                                 (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
@@ -5397,6 +5640,16 @@ mod tests {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
 
+        // First, let's test simple SELECT to ensure basics work
+        let stmt = parse_statement("SELECT 1");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        
+        // Test with string literal
+        let stmt = parse_statement("SELECT 'hello'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("hello".to_string()));
+
         // Test LENGTH
         let stmt = parse_statement("SELECT LENGTH('hello')");
         let result = executor.execute(&stmt).await.unwrap();
@@ -5526,6 +5779,227 @@ mod tests {
         let stmt = parse_statement("SELECT REPLACE(description, 'laptop', 'notebook') FROM products WHERE id = 1");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("High-performance notebook for professionals".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_string_functions_edge_cases() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // LENGTH edge cases
+        let stmt = parse_statement("SELECT LENGTH('')"); // Empty string
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(0));
+
+        // SUBSTRING edge cases
+        // Start position beyond string length
+        let stmt = parse_statement("SELECT SUBSTRING('Hello', 10)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("".to_string()));
+
+        // Start position 0 (should be treated as 1)
+        let stmt = parse_statement("SELECT SUBSTRING('Hello', 0)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello".to_string()));
+
+        // Negative start position
+        let stmt = parse_statement("SELECT SUBSTRING('Hello', -2)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello".to_string()));
+
+        // Length longer than remaining string
+        let stmt = parse_statement("SELECT SUBSTRING('Hello', 3, 10)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("llo".to_string()));
+
+        // Zero length
+        let stmt = parse_statement("SELECT SUBSTRING('Hello', 1, 0)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("".to_string()));
+
+        // Negative length (treated as 0)
+        let stmt = parse_statement("SELECT SUBSTRING('Hello', 1, -5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("".to_string()));
+
+        // CONCAT edge cases
+        // Single argument
+        let stmt = parse_statement("SELECT CONCAT('Hello')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello".to_string()));
+
+        // Mixed types
+        let stmt = parse_statement("SELECT CONCAT('Value: ', 123, ' Price: ', 45.67, ' Available: ', true)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Value: 123 Price: 45.67 Available: true".to_string()));
+
+        // Empty strings
+        let stmt = parse_statement("SELECT CONCAT('', 'Hello', '', 'World', '')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("HelloWorld".to_string()));
+
+        // REPLACE edge cases
+        // Empty search string (should return original)
+        let stmt = parse_statement("SELECT REPLACE('Hello World', '', 'X')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello World".to_string()));
+
+        // Empty replacement string (removes occurrences)
+        let stmt = parse_statement("SELECT REPLACE('Hello World', 'o', '')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hell Wrld".to_string()));
+
+        // No matches
+        let stmt = parse_statement("SELECT REPLACE('Hello World', 'xyz', 'abc')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello World".to_string()));
+
+        // Multiple occurrences
+        let stmt = parse_statement("SELECT REPLACE('abcabcabc', 'abc', 'X')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("XXX".to_string()));
+
+        // Overlapping patterns
+        let stmt = parse_statement("SELECT REPLACE('aaaa', 'aa', 'b')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("bb".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_string_functions_unicode() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test with Unicode characters
+        let stmt = parse_statement("SELECT LENGTH('Hello 世界')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(8)); // 6 ASCII + 2 Unicode
+
+        let stmt = parse_statement("SELECT SUBSTRING('Hello 世界', 7)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("世界".to_string()));
+
+        let stmt = parse_statement("SELECT SUBSTRING('Hello 世界', 7, 1)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("世".to_string()));
+
+        let stmt = parse_statement("SELECT CONCAT('Hello ', '世界')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello 世界".to_string()));
+
+        let stmt = parse_statement("SELECT REPLACE('Hello 世界', '世界', 'World')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello World".to_string()));
+
+        // Test with emojis
+        let stmt = parse_statement("SELECT LENGTH('Hello 👋 World 🌍')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(15)); // Counts characters, not bytes
+
+        let stmt = parse_statement("SELECT SUBSTRING('👋🌍🎉', 2, 1)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("🌍".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_string_functions_nested() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Nested function calls
+        let stmt = parse_statement("SELECT LENGTH(CONCAT('Hello', ' ', 'World'))");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(11));
+
+        let stmt = parse_statement("SELECT SUBSTRING(REPLACE('Hello World', 'World', 'Universe'), 7)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Universe".to_string()));
+
+        let stmt = parse_statement("SELECT REPLACE(SUBSTRING('Hello World', 1, 5), 'l', 'L')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("HeLLo".to_string()));
+
+        let stmt = parse_statement("SELECT CONCAT('Length: ', LENGTH('test'), ', Upper: ', UPPER('test'))");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Length: 4, Upper: TEST".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_string_functions_with_expressions() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create a table with numeric data
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "text1".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "text2".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "num".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut table = Table::new("test_data".to_string(), columns);
+        table
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Hello".to_string()),
+                Value::Text("World".to_string()),
+                Value::Integer(3),
+            ])
+            .unwrap();
+
+        db.add_table(table).unwrap();
+        let db_arc = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db_arc).await;
+
+        // Test string functions with column expressions
+        let stmt = parse_statement("SELECT CONCAT(text1, ' ', text2) FROM test_data");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Hello World".to_string()));
+
+        let stmt = parse_statement("SELECT SUBSTRING(text1, num) FROM test_data");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("llo".to_string()));
+
+        let stmt = parse_statement("SELECT LENGTH(CONCAT(text1, text2)) FROM test_data");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(10));
+
+        // Test in WHERE clause
+        let stmt = parse_statement("SELECT id FROM test_data WHERE LENGTH(text1) = 5");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
     }
 
     #[tokio::test]
