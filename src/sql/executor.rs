@@ -8834,4 +8834,76 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
     }
+
+    #[tokio::test]
+    async fn test_left_join_comprehensive() {
+        let db = Arc::new(RwLock::new(Database::new("test_db".to_string())));
+        {
+            let mut db_write = db.write().await;
+            
+            // Create users table
+            let users_columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("name", crate::yaml::schema::SqlType::Text, false),
+            ];
+            let mut users_table = Table::new("users".to_string(), users_columns);
+            
+            users_table.insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())]).unwrap();
+            users_table.insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())]).unwrap();
+            users_table.insert_row(vec![Value::Integer(3), Value::Text("Charlie".to_string())]).unwrap();
+            
+            // Create orders table
+            let orders_columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("user_id", crate::yaml::schema::SqlType::Integer, false),
+                create_column("amount", crate::yaml::schema::SqlType::Integer, false),
+            ];
+            let mut orders_table = Table::new("orders".to_string(), orders_columns);
+            
+            orders_table.insert_row(vec![Value::Integer(1), Value::Integer(1), Value::Integer(100)]).unwrap();
+            orders_table.insert_row(vec![Value::Integer(2), Value::Integer(1), Value::Integer(200)]).unwrap();
+            orders_table.insert_row(vec![Value::Integer(3), Value::Integer(2), Value::Integer(300)]).unwrap();
+            // Note: Charlie (id=3) has no orders
+            
+            db_write.add_table(users_table).unwrap();
+            db_write.add_table(orders_table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+        
+        // Test 1: Basic LEFT JOIN - all users including those without orders
+        let stmt = parse_statement(
+            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id ORDER BY u.id, o.id"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 4); // Alice (2 orders), Bob (1 order), Charlie (0 orders)
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[0][1], Value::Integer(100));
+        assert_eq!(result.rows[1][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][1], Value::Integer(200));
+        assert_eq!(result.rows[2][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[2][1], Value::Integer(300));
+        assert_eq!(result.rows[3][0], Value::Text("Charlie".to_string()));
+        assert_eq!(result.rows[3][1], Value::Null); // No orders for Charlie
+        
+        // Test 2: LEFT JOIN with WHERE on left table
+        let stmt = parse_statement(
+            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id >= 2 ORDER BY u.id"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // Bob and Charlie
+        assert_eq!(result.rows[0][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[0][1], Value::Integer(300));
+        assert_eq!(result.rows[1][0], Value::Text("Charlie".to_string()));
+        assert_eq!(result.rows[1][1], Value::Null);
+        
+        // Test 3: LEFT JOIN with NULL values
+        let stmt = parse_statement(
+            "SELECT u.id, u.name, o.id as order_id FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id = 3"
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(3));
+        assert_eq!(result.rows[0][1], Value::Text("Charlie".to_string()));
+        assert_eq!(result.rows[0][2], Value::Null); // No order_id for Charlie
+    }
 }
