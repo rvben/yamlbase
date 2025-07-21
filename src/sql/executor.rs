@@ -977,8 +977,8 @@ impl QueryExecutor {
                 }
             }
             Expr::Function(func) => {
-                // Evaluate functions
-                self.evaluate_constant_function(func)
+                // Evaluate functions with row context
+                self.evaluate_function_with_row(func, row, table)
             }
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT expression
@@ -1164,6 +1164,112 @@ impl QueryExecutor {
         }
     }
 
+    fn evaluate_function_with_row(
+        &self,
+        func: &Function,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<Value> {
+        let func_name = func
+            .name
+            .0
+            .first()
+            .map(|ident| ident.value.to_uppercase())
+            .unwrap_or_default();
+
+        match func_name.as_str() {
+            "UPPER" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.get_expr_value(str_expr, row, table)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "UPPER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for UPPER".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "UPPER requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "UPPER requires arguments".to_string(),
+                    })
+                }
+            }
+            "LOWER" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.get_expr_value(str_expr, row, table)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LOWER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for LOWER".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LOWER requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LOWER requires arguments".to_string(),
+                    })
+                }
+            }
+            "TRIM" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.get_expr_value(str_expr, row, table)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "TRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for TRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "TRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "TRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            // For functions that don't need row context, delegate to constant version
+            _ => self.evaluate_constant_function(func),
+        }
+    }
+
     fn evaluate_constant_function(&self, func: &Function) -> crate::Result<Value> {
         let func_name = func
             .name
@@ -1305,6 +1411,96 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "LAST_DAY requires arguments".to_string(),
+                    })
+                }
+            }
+            "UPPER" => {
+                // UPPER(string) - convert to uppercase
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "UPPER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for UPPER".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "UPPER requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "UPPER requires arguments".to_string(),
+                    })
+                }
+            }
+            "LOWER" => {
+                // LOWER(string) - convert to lowercase
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LOWER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for LOWER".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LOWER requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LOWER requires arguments".to_string(),
+                    })
+                }
+            }
+            "TRIM" => {
+                // TRIM(string) - remove leading/trailing whitespace
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "TRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for TRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "TRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "TRIM requires arguments".to_string(),
                     })
                 }
             }
@@ -1911,6 +2107,113 @@ impl QueryExecutor {
         }
     }
 
+    fn evaluate_function_with_join_row(
+        &self,
+        func: &Function,
+        row: &[Value],
+        tables: &[(String, &Table)],
+        table_aliases: &std::collections::HashMap<String, String>,
+    ) -> crate::Result<Value> {
+        let func_name = func
+            .name
+            .0
+            .first()
+            .map(|ident| ident.value.to_uppercase())
+            .unwrap_or_default();
+
+        match func_name.as_str() {
+            "UPPER" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "UPPER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for UPPER".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "UPPER requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "UPPER requires arguments".to_string(),
+                    })
+                }
+            }
+            "LOWER" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LOWER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for LOWER".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LOWER requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LOWER requires arguments".to_string(),
+                    })
+                }
+            }
+            "TRIM" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "TRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for TRIM".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "TRIM requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "TRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            // For functions that don't need row context, delegate to constant version
+            _ => self.evaluate_constant_function(func),
+        }
+    }
+
     fn get_join_expr_value(
         &self,
         expr: &Expr,
@@ -1970,8 +2273,8 @@ impl QueryExecutor {
             }
             Expr::Value(val) => self.sql_value_to_db_value(val),
             Expr::Function(func) => {
-                // Evaluate functions in JOIN conditions
-                self.evaluate_constant_function(func)
+                // Evaluate functions in JOIN conditions with row context
+                self.evaluate_function_with_join_row(func, row, tables, table_aliases)
             }
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT in JOIN conditions
@@ -2861,13 +3164,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_complex_sciforma_query() {
+    async fn test_complex_enterprise_query() {
         let db = create_test_database().await;
         {
             let mut db_write = db.write().await;
             let columns = vec![
                 create_column(
-                    "SAP_PROJECT_ID",
+                    "PROJECT_ID",
                     crate::yaml::schema::SqlType::Varchar(255),
                     true,
                 ),
@@ -2908,7 +3211,7 @@ mod tests {
                 ),
                 create_column("START_DATE", crate::yaml::schema::SqlType::Date, false),
                 create_column(
-                    "PF_PRODUCT_GROUP_NAME",
+                    "DEPARTMENT",
                     crate::yaml::schema::SqlType::Varchar(255),
                     false,
                 ),
@@ -2918,13 +3221,13 @@ mod tests {
                     false,
                 ),
                 create_column(
-                    "IFRS_TYPE",
+                    "PROJECT_CATEGORY",
                     crate::yaml::schema::SqlType::Varchar(255),
                     false,
                 ),
             ];
 
-            let mut table = Table::new("SF_PROJECT_V2".to_string(), columns);
+            let mut table = Table::new("PROJECTS".to_string(), columns);
 
             // Add test data that should match
             table
@@ -2967,15 +3270,15 @@ mod tests {
 
         let executor = create_test_executor_from_arc(db).await;
 
-        // Test the full Sciforma query
+        // Test complex enterprise query with multiple conditions
         let stmt = parse_statement(
-            "SELECT SAP_PROJECT_ID, PROJECT_NAME FROM SF_PROJECT_V2 WHERE VERSION_CODE = 'Published' \
+            "SELECT PROJECT_ID, PROJECT_NAME FROM PROJECTS WHERE VERSION_CODE = 'Published' \
              AND STATUS_CODE NOT IN ('Cancelled', 'Closed') AND ACTIVE_FLAG = 'Y' \
              AND CLOSED_FOR_TIME_ENTRY <> 'Y' AND SECURITY_CLASSIFICATION LIKE 'NS%' \
              AND PROJECT_STRUCTURE = 'Project' AND START_DATE > DATE '2025-01-01' \
-             AND PF_PRODUCT_GROUP_NAME NOT IN ('Support IT', 'The Support IT', 'The Demo Portfolio', 'The Archive') \
+             AND DEPARTMENT NOT IN ('Support IT', 'The Support IT', 'The Demo Portfolio', 'The Archive') \
              AND PROJECT_CLASS IN ('Product Development', 'Technology & Research Development') \
-             AND IFRS_TYPE IN ('PROD DEV', 'TECH & RESEARCH DEV')",
+             AND PROJECT_CATEGORY IN ('PROD DEV', 'TECH & RESEARCH DEV')",
         );
         let result = executor.execute(&stmt).await.unwrap();
 

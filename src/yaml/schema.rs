@@ -113,6 +113,10 @@ impl YamlColumn {
 
         Ok(match base_type {
             "INTEGER" | "INT" | "BIGINT" | "SMALLINT" => SqlType::Integer,
+            s if s.starts_with("CHAR") && !s.starts_with("CHARACTER") => {
+                let size = extract_size(s).unwrap_or(1);
+                SqlType::Char(size)
+            }
             s if s.starts_with("VARCHAR") => {
                 let size = extract_size(s).unwrap_or(255);
                 SqlType::Varchar(size)
@@ -144,6 +148,7 @@ impl YamlColumn {
 pub enum SqlType {
     Integer,
     BigInt, // For i64 values like COUNT(*)
+    Char(usize),
     Varchar(usize),
     Text,
     Timestamp,

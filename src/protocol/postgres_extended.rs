@@ -841,6 +841,7 @@ fn oid_to_sql_type(oid: u32) -> SqlType {
         25 => SqlType::Text,             // text
         700 => SqlType::Float,           // float4
         701 => SqlType::Double,          // float8
+        1042 => SqlType::Char(1),        // bpchar
         1043 => SqlType::Varchar(255),   // varchar
         1082 => SqlType::Date,           // date
         1083 => SqlType::Time,           // time
@@ -860,6 +861,7 @@ fn sql_type_to_oid(sql_type: &SqlType) -> u32 {
         SqlType::Float => 700,
         SqlType::Double => 701,
         SqlType::Decimal(_, _) => 1700,
+        SqlType::Char(_) => 1042,  // bpchar - PostgreSQL CHAR type
         SqlType::Varchar(_) => 1043,
         SqlType::Text => 25,
         SqlType::Date => 1082,
