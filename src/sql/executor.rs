@@ -25,6 +25,8 @@ enum ProjectionItem {
     TableColumn(String, usize),
     // A constant expression with its computed value and column alias
     Constant(String, Value),
+    // An expression that needs to be evaluated per row
+    Expression(String, Expr),
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +174,7 @@ impl QueryExecutor {
                 .map(|(idx, item)| match item {
                     ProjectionItem::TableColumn(name, _) => (name.clone(), idx),
                     ProjectionItem::Constant(name, _) => (name.clone(), idx),
+                    ProjectionItem::Expression(name, _) => (name.clone(), idx),
                 })
                 .collect();
             self.sort_rows(projected_rows, &order_by.exprs, &col_info)?
@@ -216,6 +219,11 @@ impl QueryExecutor {
                             Value::Null => crate::yaml::schema::SqlType::Text,
                         }
                     }
+                    ProjectionItem::Expression(_, _) => {
+                        // For expressions, default to Text type since we can't easily infer
+                        // This could be improved by analyzing the expression
+                        crate::yaml::schema::SqlType::Text
+                    }
                 }
             })
             .collect();
@@ -226,6 +234,7 @@ impl QueryExecutor {
             .map(|item| match item {
                 ProjectionItem::TableColumn(name, _) => name.clone(),
                 ProjectionItem::Constant(name, _) => name.clone(),
+                ProjectionItem::Expression(name, _) => name.clone(),
             })
             .collect();
 
@@ -531,7 +540,7 @@ impl QueryExecutor {
             self.filter_joined_rows(&joined_rows, &select.selection, &all_tables, &table_aliases)?;
 
         // Project columns
-        let projected_rows = self.project_joined_columns(&filtered_rows, &columns)?;
+        let projected_rows = self.project_joined_columns(&filtered_rows, &columns, &all_tables)?;
 
         // Apply ORDER BY
         let sorted_rows = if let Some(order_by) = &query.order_by {
@@ -610,11 +619,27 @@ impl QueryExecutor {
                             columns.push(ProjectionItem::TableColumn(col_name.clone(), col_idx));
                         }
                         _ => {
-                            // This is a constant expression (like SELECT 1, SELECT 'hello', etc.)
-                            let value = self.evaluate_constant_expr(expr)?;
-                            let col_name = format!("column_{}", column_counter);
-                            column_counter += 1;
-                            columns.push(ProjectionItem::Constant(col_name, value));
+                            // Check if this is a function that needs row context
+                            if let Expr::Function(_) = expr {
+                                let col_name = format!("column_{}", column_counter);
+                                column_counter += 1;
+                                columns.push(ProjectionItem::Expression(col_name, expr.clone()));
+                            } else {
+                                // This is a constant expression (like SELECT 1, SELECT 'hello', etc.)
+                                match self.evaluate_constant_expr(expr) {
+                                    Ok(value) => {
+                                        let col_name = format!("column_{}", column_counter);
+                                        column_counter += 1;
+                                        columns.push(ProjectionItem::Constant(col_name, value));
+                                    }
+                                    Err(_) => {
+                                        // If constant evaluation fails, treat it as an expression
+                                        let col_name = format!("column_{}", column_counter);
+                                        column_counter += 1;
+                                        columns.push(ProjectionItem::Expression(col_name, expr.clone()));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -631,9 +656,21 @@ impl QueryExecutor {
                             columns.push(ProjectionItem::TableColumn(alias.value.clone(), col_idx));
                         }
                         _ => {
-                            // Constant expression with alias
-                            let value = self.evaluate_constant_expr(expr)?;
-                            columns.push(ProjectionItem::Constant(alias.value.clone(), value));
+                            // Check if this is a function that needs row context
+                            if let Expr::Function(_) = expr {
+                                columns.push(ProjectionItem::Expression(alias.value.clone(), expr.clone()));
+                            } else {
+                                // Constant expression with alias
+                                match self.evaluate_constant_expr(expr) {
+                                    Ok(value) => {
+                                        columns.push(ProjectionItem::Constant(alias.value.clone(), value));
+                                    }
+                                    Err(_) => {
+                                        // If constant evaluation fails, treat it as an expression
+                                        columns.push(ProjectionItem::Expression(alias.value.clone(), expr.clone()));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -908,6 +945,7 @@ impl QueryExecutor {
                 // For other operators, evaluate the values first
                 let left_val = self.get_expr_value(left, row, table)?;
                 let right_val = self.get_expr_value(right, row, table)?;
+                debug!("Comparing values: left={:?}, right={:?}, op={:?}", left_val, right_val, op);
 
                 match op {
                     BinaryOperator::Eq => Ok(left_val == right_val),
@@ -1013,6 +1051,17 @@ impl QueryExecutor {
                     })
                 }
             }
+            Expr::Trim { expr, .. } => {
+                // Handle TRIM expression
+                let inner_val = self.get_expr_value(expr, row, table)?;
+                match &inner_val {
+                    Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "TRIM requires string argument".to_string(),
+                    }),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
                 expr
@@ -1047,7 +1096,7 @@ impl QueryExecutor {
         &self,
         rows: &[&Vec<Value>],
         columns: &[ProjectionItem],
-        _table: &Table,
+        table: &Table,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut result = Vec::new();
 
@@ -1060,6 +1109,10 @@ impl QueryExecutor {
                     }
                     ProjectionItem::Constant(_, value) => {
                         projected_row.push(value.clone());
+                    }
+                    ProjectionItem::Expression(_, expr) => {
+                        let value = self.get_expr_value(expr, row, table)?;
+                        projected_row.push(value);
                     }
                 }
             }
@@ -1411,96 +1464,6 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "LAST_DAY requires arguments".to_string(),
-                    })
-                }
-            }
-            "UPPER" => {
-                // UPPER(string) - convert to uppercase
-                if let FunctionArguments::List(args) = &func.args {
-                    if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
-                            let str_val = self.evaluate_constant_expr(str_expr)?;
-                            
-                            match &str_val {
-                                Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
-                                Value::Null => Ok(Value::Null),
-                                _ => Err(YamlBaseError::Database {
-                                    message: "UPPER requires string argument".to_string(),
-                                }),
-                            }
-                        } else {
-                            Err(YamlBaseError::Database {
-                                message: "Invalid argument for UPPER".to_string(),
-                            })
-                        }
-                    } else {
-                        Err(YamlBaseError::Database {
-                            message: "UPPER requires exactly 1 argument".to_string(),
-                        })
-                    }
-                } else {
-                    Err(YamlBaseError::Database {
-                        message: "UPPER requires arguments".to_string(),
-                    })
-                }
-            }
-            "LOWER" => {
-                // LOWER(string) - convert to lowercase
-                if let FunctionArguments::List(args) = &func.args {
-                    if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
-                            let str_val = self.evaluate_constant_expr(str_expr)?;
-                            
-                            match &str_val {
-                                Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
-                                Value::Null => Ok(Value::Null),
-                                _ => Err(YamlBaseError::Database {
-                                    message: "LOWER requires string argument".to_string(),
-                                }),
-                            }
-                        } else {
-                            Err(YamlBaseError::Database {
-                                message: "Invalid argument for LOWER".to_string(),
-                            })
-                        }
-                    } else {
-                        Err(YamlBaseError::Database {
-                            message: "LOWER requires exactly 1 argument".to_string(),
-                        })
-                    }
-                } else {
-                    Err(YamlBaseError::Database {
-                        message: "LOWER requires arguments".to_string(),
-                    })
-                }
-            }
-            "TRIM" => {
-                // TRIM(string) - remove leading/trailing whitespace
-                if let FunctionArguments::List(args) = &func.args {
-                    if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
-                            let str_val = self.evaluate_constant_expr(str_expr)?;
-                            
-                            match &str_val {
-                                Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
-                                Value::Null => Ok(Value::Null),
-                                _ => Err(YamlBaseError::Database {
-                                    message: "TRIM requires string argument".to_string(),
-                                }),
-                            }
-                        } else {
-                            Err(YamlBaseError::Database {
-                                message: "Invalid argument for TRIM".to_string(),
-                            })
-                        }
-                    } else {
-                        Err(YamlBaseError::Database {
-                            message: "TRIM requires exactly 1 argument".to_string(),
-                        })
-                    }
-                } else {
-                    Err(YamlBaseError::Database {
-                        message: "TRIM requires arguments".to_string(),
                     })
                 }
             }
@@ -2295,9 +2258,20 @@ impl QueryExecutor {
 
                 self.evaluate_extract_from_date(field, date_str)
             }
+            Expr::Trim { expr, .. } => {
+                // Handle TRIM expression
+                let inner_val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                match &inner_val {
+                    Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "TRIM requires string argument".to_string(),
+                    }),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Expression type not supported in JOIN conditions".to_string(),
-            )),
+            ))
         }
     }
 
@@ -2467,12 +2441,50 @@ impl QueryExecutor {
     fn project_joined_columns(
         &self,
         rows: &[Vec<Value>],
-        _columns: &[JoinedColumn],
+        columns: &[JoinedColumn],
+        tables: &[(String, &Table)],
     ) -> crate::Result<Vec<Vec<Value>>> {
-        // This method needs the table information to calculate offsets
-        // For now, we'll just return the rows as-is
-        // A proper implementation would track column offsets during join construction
-        Ok(rows.to_vec())
+        let mut projected_rows = Vec::new();
+        
+        // Calculate cumulative offsets for each table
+        let mut table_offsets = vec![0];
+        let mut cumulative_offset = 0;
+        for (_, table) in tables.iter() {
+            cumulative_offset += table.columns.len();
+            table_offsets.push(cumulative_offset);
+        }
+        
+        // For each row, extract only the requested columns
+        for row in rows {
+            let mut projected_row = Vec::new();
+            
+            for column in columns {
+                match column {
+                    JoinedColumn::TableColumn(_, table_idx, col_idx) => {
+                        // Calculate the actual position in the joined row
+                        let position = table_offsets[*table_idx] + col_idx;
+                        
+                        if let Some(value) = row.get(position) {
+                            projected_row.push(value.clone());
+                        } else {
+                            return Err(YamlBaseError::Database {
+                                message: format!(
+                                    "Column index out of bounds: table_idx={}, col_idx={}, position={}",
+                                    table_idx, col_idx, position
+                                ),
+                            });
+                        }
+                    }
+                    JoinedColumn::Constant(_, value) => {
+                        projected_row.push(value.clone());
+                    }
+                }
+            }
+            
+            projected_rows.push(projected_row);
+        }
+        
+        Ok(projected_rows)
     }
 
     fn sort_joined_rows(
@@ -2575,6 +2587,8 @@ mod tests {
             db_read.clone()
         };
         let storage = Arc::new(DbStorage::new(db_owned));
+        // Wait a bit for the async index building to complete
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         QueryExecutor::new(storage)
     }
 
@@ -2876,7 +2890,15 @@ mod tests {
             let mut db_write = db.write().await;
             let columns = vec![
                 create_column("id", crate::yaml::schema::SqlType::Integer, true),
-                create_column("name", crate::yaml::schema::SqlType::Varchar(100), false),
+                Column {
+                    name: "name".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
             ];
 
             let mut table = Table::new("classifications".to_string(), columns);
@@ -3957,5 +3979,392 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
 
         assert_eq!(result.rows.len(), 2); // Both activities are in March
+    }
+
+    #[tokio::test]
+    async fn test_upper_function() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "name".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("test_table".to_string(), columns);
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("hello world".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("ALREADY UPPER".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Null])
+                .unwrap();
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test UPPER in SELECT
+        let stmt = parse_statement("SELECT id, UPPER(name) FROM test_table ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][1], Value::Text("HELLO WORLD".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("ALREADY UPPER".to_string()));
+        assert_eq!(result.rows[2][1], Value::Null);
+
+        // Test UPPER in WHERE
+        let stmt = parse_statement("SELECT id FROM test_table WHERE UPPER(name) = 'HELLO WORLD'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_lower_function() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "name".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("test_table".to_string(), columns);
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("HELLO WORLD".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("already lower".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Null])
+                .unwrap();
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test LOWER in SELECT
+        let stmt = parse_statement("SELECT id, LOWER(name) FROM test_table ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][1], Value::Text("hello world".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("already lower".to_string()));
+        assert_eq!(result.rows[2][1], Value::Null);
+
+        // Test LOWER in WHERE
+        let stmt = parse_statement("SELECT id FROM test_table WHERE LOWER(name) = 'hello world'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_trim_function() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "name".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("test_table".to_string(), columns);
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("  spaces around  ".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("no spaces".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("\t\ttabs\t\t".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(4), Value::Null])
+                .unwrap();
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test TRIM in SELECT
+        let stmt = parse_statement("SELECT id, TRIM(name) FROM test_table ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 4);
+        assert_eq!(result.rows[0][1], Value::Text("spaces around".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("no spaces".to_string()));
+        assert_eq!(result.rows[2][1], Value::Text("tabs".to_string()));
+        assert_eq!(result.rows[3][1], Value::Null);
+
+        // Test TRIM in WHERE
+        let stmt = parse_statement("SELECT id FROM test_table WHERE TRIM(name) = 'spaces around'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_nested_string_functions() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "name".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("test_table".to_string(), columns);
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("  hello world  ".to_string()),
+                ])
+                .unwrap();
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test nested functions: UPPER(TRIM(name))
+        let stmt = parse_statement("SELECT UPPER(TRIM(name)) FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("HELLO WORLD".to_string()));
+
+        // Test nested functions: LOWER(UPPER(name))
+        let stmt = parse_statement("SELECT LOWER(UPPER(name)) FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("  hello world  ".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_functions_in_join_conditions() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create employees table
+        let emp_columns = vec![
+            create_column("emp_id", crate::yaml::schema::SqlType::Varchar(10), true),
+            Column {
+                name: "emp_name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+        let mut employees = Table::new("employees".to_string(), emp_columns);
+        employees
+            .insert_row(vec![
+                Value::Text("e001".to_string()),
+                Value::Text("Alice".to_string()),
+            ])
+            .unwrap();
+        employees
+            .insert_row(vec![
+                Value::Text("E002".to_string()), // Uppercase
+                Value::Text("Bob".to_string()),
+            ])
+            .unwrap();
+        db.add_table(employees).unwrap();
+
+        // Create assignments table
+        let assign_columns = vec![
+            create_column("assign_id", crate::yaml::schema::SqlType::Integer, true),
+            Column {
+                name: "emp_id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(10),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "project".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+        let mut assignments = Table::new("assignments".to_string(), assign_columns);
+        assignments
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("E001".to_string()), // Uppercase
+                Value::Text("Project A".to_string()),
+            ])
+            .unwrap();
+        assignments
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Text("e002".to_string()), // Lowercase
+                Value::Text("Project B".to_string()),
+            ])
+            .unwrap();
+        db.add_table(assignments).unwrap();
+
+        let db_arc = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db_arc).await;
+
+        // Test JOIN with UPPER function - should match case-insensitively
+        let stmt = parse_statement(
+            "SELECT e.emp_name, a.project 
+             FROM employees e 
+             JOIN assignments a ON UPPER(e.emp_id) = UPPER(a.emp_id)",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[0][1], Value::Text("Project A".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Project B".to_string()));
+
+        // Test LEFT JOIN with TRIM function
+        let stmt = parse_statement(
+            "SELECT e.emp_name, a.project 
+             FROM employees e 
+             LEFT JOIN assignments a ON TRIM(UPPER(e.emp_id)) = TRIM(UPPER(a.emp_id))
+             ORDER BY e.emp_name",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_char_type_support() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            
+            // Create table with CHAR columns
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "flag".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Char(1),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "code".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Char(3),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "fixed_id".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Char(10),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("test_char".to_string(), columns);
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Y".to_string()),
+                    Value::Text("ABC".to_string()),
+                    Value::Text("ID12345678".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("N".to_string()),
+                    Value::Text("XY".to_string()),  // Less than 3 chars
+                    Value::Text("SHORT".to_string()), // Less than 10 chars
+                ])
+                .unwrap();
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test selecting CHAR columns
+        let stmt = parse_statement("SELECT * FROM test_char ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        // Debug: Print the rows to see what we have
+        eprintln!("Rows in test_char table:");
+        for (i, row) in result.rows.iter().enumerate() {
+            eprintln!("Row {}: {:?}", i, row);
+        }
+        
+        // Test WHERE clause with CHAR column
+        let stmt = parse_statement("SELECT id FROM test_char WHERE flag = 'Y'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+
+        // Test basic SELECT first - without WHERE
+        let stmt = parse_statement("SELECT id, code FROM test_char");
+        let result = executor.execute(&stmt).await.unwrap();
+        eprintln!("SELECT id, code results:");
+        for row in &result.rows {
+            eprintln!("  {:?}", row);
+        }
+        
+        // Now test with WHERE clause
+        let stmt = parse_statement("SELECT code FROM test_char WHERE id = 2");
+        let result = executor.execute(&stmt).await.unwrap();
+        eprintln!("SELECT code WHERE id = 2 returned {} rows", result.rows.len());
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("XY".to_string()));
+        
+        // Test functions with CHAR columns
+        let stmt = parse_statement("SELECT UPPER(code) FROM test_char WHERE id = 2");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("XY".to_string()));
     }
 }
