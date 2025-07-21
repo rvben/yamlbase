@@ -7133,21 +7133,21 @@ mod tests {
         let executor = create_test_executor_from_arc(db).await;
 
         // Test ROUND - simpler case first
-        let stmt = parse_statement("SELECT ROUND(3.14)");
+        let stmt = parse_statement("SELECT ROUND(3.24)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Double(3.0));
 
-        let stmt = parse_statement("SELECT ROUND(3.14159, 2)");
+        let stmt = parse_statement("SELECT ROUND(3.456, 2)");
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Double(3.14));
+        assert_eq!(result.rows[0][0], Value::Double(3.46));
 
-        let stmt = parse_statement("SELECT ROUND(3.14159, 4)");
+        let stmt = parse_statement("SELECT ROUND(3.456789, 4)");
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Double(3.1416));
+        assert_eq!(result.rows[0][0], Value::Double(3.4568));
 
-        let stmt = parse_statement("SELECT ROUND(3.14159, 0)");
+        let stmt = parse_statement("SELECT ROUND(3.789, 0)");
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Double(3.0));
+        assert_eq!(result.rows[0][0], Value::Double(4.0));
 
         // Test FLOOR
         let stmt = parse_statement("SELECT FLOOR(3.7)");
@@ -7184,9 +7184,9 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(5));
 
-        let stmt = parse_statement("SELECT ABS(-3.14)");
+        let stmt = parse_statement("SELECT ABS(-3.5)");
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Double(3.14));
+        assert_eq!(result.rows[0][0], Value::Double(3.5));
 
         // Test MOD
         let stmt = parse_statement("SELECT MOD(10, 3)");
