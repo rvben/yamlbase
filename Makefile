@@ -1,4 +1,4 @@
-.PHONY: all build test bench clean run docker-build docker-run help
+.PHONY: all build test bench clean run docker-build docker-run help bump-version release publish-crate
 
 # Note: Integration tests that spawn servers are excluded from CI coverage runs
 # due to timing/resource issues in the coverage environment. Use 'make coverage-full'
@@ -196,10 +196,48 @@ integration-test:
 	kill $$PG_PID $$MYSQL_PID 2>/dev/null || true; \
 	pkill yamlbase || true
 
+# Version bump helper
+bump-version:
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make bump-version VERSION=0.2.5"; exit 1; fi
+	@echo "Bumping version to $(VERSION)..."
+	@sed -i.bak 's/^version = ".*"/version = "$(VERSION)"/' Cargo.toml && rm Cargo.toml.bak
+	@cargo build --quiet # This updates Cargo.lock
+	@git add Cargo.toml Cargo.lock
+	@git commit -m "chore: Bump version to $(VERSION)"
+	@echo "✅ Version bumped to $(VERSION)"
+
+# Create a release (bump version, tag, and push)
+release:
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=0.2.5"; exit 1; fi
+	@echo "Creating release $(VERSION)..."
+	@$(MAKE) bump-version VERSION=$(VERSION)
+	@git tag -a v$(VERSION) -m "Release v$(VERSION)"
+	@git push origin main
+	@git push origin v$(VERSION)
+	@echo "✅ Release v$(VERSION) created and pushed"
+
 # Publish to crates.io
 publish-crate:
 	@if [ -z "$$CRATES_IO_TOKEN" ]; then echo "Error: CRATES_IO_TOKEN not set"; exit 1; fi
 	cargo publish --token $$CRATES_IO_TOKEN
+
+# Deploy secrets to GitHub
+gh-secrets:
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file not found. Copy .env.example to .env and fill in your values."; \
+		exit 1; \
+	fi
+	@echo "Loading environment variables from .env..."
+	@export $$(grep -v '^#' .env | xargs) && \
+		gh secret set DOCKER_USERNAME --body "$$DOCKER_USERNAME" && \
+		echo "✓ Set DOCKER_USERNAME" && \
+		gh secret set DOCKER_PASSWORD --body "$$DOCKER_PASSWORD" && \
+		echo "✓ Set DOCKER_PASSWORD" && \
+		if [ ! -z "$$CRATES_IO_TOKEN" ]; then \
+			gh secret set CRATES_IO_TOKEN --body "$$CRATES_IO_TOKEN" && \
+			echo "✓ Set CRATES_IO_TOKEN"; \
+		fi
+	@echo "GitHub secrets deployed successfully!"
 
 # Dry run publish to crates.io
 publish-crate-dry:
