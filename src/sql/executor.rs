@@ -469,6 +469,30 @@ impl QueryExecutor {
                     }),
                 }
             }
+            Expr::Floor { expr, .. } => {
+                let val = self.evaluate_constant_expr(expr)?;
+                match val {
+                    Value::Integer(i) => Ok(Value::Integer(i)),
+                    Value::Double(d) => Ok(Value::Double(d.floor())),
+                    Value::Float(f) => Ok(Value::Float(f.floor())),
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "FLOOR requires numeric argument".to_string(),
+                    }),
+                }
+            }
+            Expr::Ceil { expr, .. } => {
+                let val = self.evaluate_constant_expr(expr)?;
+                match val {
+                    Value::Integer(i) => Ok(Value::Integer(i)),
+                    Value::Double(d) => Ok(Value::Double(d.ceil())),
+                    Value::Float(f) => Ok(Value::Float(f.ceil())),
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "CEIL requires numeric argument".to_string(),
+                    }),
+                }
+            }
             _ => {
                 debug!("Unsupported expression type in evaluate_constant_expr: {:?}", expr);
                 Err(YamlBaseError::NotImplemented(
@@ -1774,6 +1798,230 @@ impl QueryExecutor {
                     })
                 }
             }
+            "ROUND" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 || args.args.len() == 2 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.get_expr_value(num_expr, row, table)?;
+                            
+                            let precision = if args.args.len() == 2 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(prec_expr)) = &args.args[1]
+                                {
+                                    let prec_val = self.get_expr_value(prec_expr, row, table)?;
+                                    match prec_val {
+                                        Value::Integer(p) => p as i32,
+                                        Value::Null => return Ok(Value::Null),
+                                        _ => return Err(YamlBaseError::Database {
+                                            message: "ROUND precision must be an integer".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    return Err(YamlBaseError::Database {
+                                        message: "Invalid ROUND precision argument".to_string(),
+                                    });
+                                }
+                            } else {
+                                0
+                            };
+                            
+                            match num_val {
+                                Value::Integer(n) => {
+                                    if precision == 0 {
+                                        Ok(Value::Integer(n))
+                                    } else {
+                                        let f = n as f64;
+                                        let factor = 10f64.powi(precision);
+                                        Ok(Value::Double((f * factor).round() / factor))
+                                    }
+                                }
+                                Value::Float(f) => {
+                                    let factor = 10f64.powi(precision);
+                                    Ok(Value::Double(((f as f64) * factor).round() / factor))
+                                }
+                                Value::Double(d) => {
+                                    let factor = 10f64.powi(precision);
+                                    Ok(Value::Double((d * factor).round() / factor))
+                                }
+                                Value::Decimal(d) => {
+                                    let factor = 10f64.powi(precision);
+                                    let f = d.to_f64().ok_or_else(|| YamlBaseError::Database {
+                                        message: "Cannot convert decimal to float".to_string(),
+                                    })?;
+                                    Ok(Value::Double((f * factor).round() / factor))
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "ROUND requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for ROUND".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "ROUND requires 1 or 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "ROUND requires arguments".to_string(),
+                    })
+                }
+            }
+            "FLOOR" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.get_expr_value(num_expr, row, table)?;
+                            
+                            match num_val {
+                                Value::Integer(n) => Ok(Value::Integer(n)),
+                                Value::Float(f) => Ok(Value::Double((f as f64).floor())),
+                                Value::Double(d) => Ok(Value::Double(d.floor())),
+                                Value::Decimal(d) => {
+                                    let f = d.to_f64().ok_or_else(|| YamlBaseError::Database {
+                                        message: "Cannot convert decimal to float".to_string(),
+                                    })?;
+                                    Ok(Value::Double(f.floor()))
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "FLOOR requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for FLOOR".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "FLOOR requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "FLOOR requires arguments".to_string(),
+                    })
+                }
+            }
+            "CEIL" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.get_expr_value(num_expr, row, table)?;
+                            
+                            match num_val {
+                                Value::Integer(n) => Ok(Value::Integer(n)),
+                                Value::Float(f) => Ok(Value::Double((f as f64).ceil())),
+                                Value::Double(d) => Ok(Value::Double(d.ceil())),
+                                Value::Decimal(d) => {
+                                    let f = d.to_f64().ok_or_else(|| YamlBaseError::Database {
+                                        message: "Cannot convert decimal to float".to_string(),
+                                    })?;
+                                    Ok(Value::Double(f.ceil()))
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "CEIL requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for CEIL".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "CEIL requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "CEIL requires arguments".to_string(),
+                    })
+                }
+            }
+            "ABS" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.get_expr_value(num_expr, row, table)?;
+                            
+                            match num_val {
+                                Value::Integer(n) => Ok(Value::Integer(n.abs())),
+                                Value::Float(f) => Ok(Value::Float(f.abs())),
+                                Value::Double(d) => Ok(Value::Double(d.abs())),
+                                Value::Decimal(d) => Ok(Value::Decimal(d.abs())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "ABS requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for ABS".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "ABS requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "ABS requires arguments".to_string(),
+                    })
+                }
+            }
+            "MOD" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(div_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let num_val = self.get_expr_value(num_expr, row, table)?;
+                            let div_val = self.get_expr_value(div_expr, row, table)?;
+                            
+                            match (&num_val, &div_val) {
+                                (Value::Integer(n), Value::Integer(d)) => {
+                                    if *d == 0 {
+                                        Err(YamlBaseError::Database {
+                                            message: "Division by zero in MOD".to_string(),
+                                        })
+                                    } else {
+                                        Ok(Value::Integer(n % d))
+                                    }
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "MOD requires integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for MOD".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "MOD requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "MOD requires arguments".to_string(),
+                    })
+                }
+            }
             // For functions that don't need row context, delegate to constant version
             _ => self.evaluate_constant_function(func),
         }
@@ -2262,90 +2510,223 @@ impl QueryExecutor {
                     ))
                 }
             }
-            "CONCAT" => {
+            "ROUND" => {
                 if let FunctionArguments::List(args) = &func.args {
-                    if !args.args.is_empty() {
-                        let mut result = String::new();
-                        
-                        for arg in &args.args {
-                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
-                                let val = self.evaluate_constant_expr(expr)?;
-                                
-                                match val {
-                                    Value::Text(s) => result.push_str(&s),
-                                    Value::Integer(i) => result.push_str(&i.to_string()),
-                                    Value::Float(f) => result.push_str(&f.to_string()),
-                                    Value::Double(d) => result.push_str(&d.to_string()),
-                                    Value::Boolean(b) => result.push_str(&b.to_string()),
-                                    Value::Null => return Ok(Value::Null), // CONCAT returns NULL if any argument is NULL
-                                    _ => result.push_str(&val.to_string()),
+                    if args.args.len() == 1 || args.args.len() == 2 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.evaluate_constant_expr(num_expr)?;
+                            
+                            let precision = if args.args.len() == 2 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(prec_expr)) = &args.args[1]
+                                {
+                                    let prec_val = self.evaluate_constant_expr(prec_expr)?;
+                                    match prec_val {
+                                        Value::Integer(p) => p as i32,
+                                        Value::Null => return Ok(Value::Null),
+                                        _ => return Err(YamlBaseError::Database {
+                                            message: "ROUND precision must be an integer".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    return Err(YamlBaseError::NotImplemented(
+                                        "Invalid ROUND precision argument".to_string(),
+                                    ));
                                 }
                             } else {
-                                return Err(YamlBaseError::Database {
-                                    message: "Invalid argument for CONCAT".to_string(),
-                                });
-                            }
-                        }
-                        
-                        Ok(Value::Text(result))
-                    } else {
-                        Err(YamlBaseError::Database {
-                            message: "CONCAT requires at least 1 argument".to_string(),
-                        })
-                    }
-                } else {
-                    Err(YamlBaseError::Database {
-                        message: "CONCAT requires arguments".to_string(),
-                    })
-                }
-            }
-            "REPLACE" => {
-                if let FunctionArguments::List(args) = &func.args {
-                    if args.args.len() == 3 {
-                        if let (
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(from_expr)),
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(to_expr)),
-                        ) = (&args.args[0], &args.args[1], &args.args[2])
-                        {
-                            let str_val = self.evaluate_constant_expr(str_expr)?;
-                            let from_val = self.evaluate_constant_expr(from_expr)?;
-                            let to_val = self.evaluate_constant_expr(to_expr)?;
+                                0
+                            };
                             
-                            match (&str_val, &from_val, &to_val) {
-                                (Value::Text(s), Value::Text(from), Value::Text(to)) => {
-                                    // Handle empty search string - return original string
-                                    if from.is_empty() {
-                                        Ok(Value::Text(s.clone()))
-                                    } else {
-                                        Ok(Value::Text(s.replace(from, to)))
-                                    }
+                            match num_val {
+                                Value::Integer(i) => Ok(Value::Integer(i)),
+                                Value::Double(d) => {
+                                    let multiplier = 10f64.powi(precision);
+                                    let rounded = (d * multiplier).round() / multiplier;
+                                    Ok(Value::Double(rounded))
                                 }
-                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
+                                Value::Float(f) => {
+                                    let multiplier = 10f32.powi(precision);
+                                    let rounded = (f * multiplier).round() / multiplier;
+                                    Ok(Value::Float(rounded))
+                                }
+                                Value::Null => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "REPLACE requires string arguments".to_string(),
+                                    message: "ROUND requires numeric argument".to_string(),
                                 }),
                             }
                         } else {
-                            Err(YamlBaseError::Database {
-                                message: "Invalid arguments for REPLACE".to_string(),
-                            })
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid ROUND argument".to_string(),
+                            ))
                         }
                     } else {
-                        Err(YamlBaseError::Database {
-                            message: "REPLACE requires exactly 3 arguments".to_string(),
-                        })
+                        Err(YamlBaseError::NotImplemented(
+                            "ROUND requires 1 or 2 arguments".to_string(),
+                        ))
                     }
                 } else {
-                    Err(YamlBaseError::Database {
-                        message: "REPLACE requires arguments".to_string(),
-                    })
+                    Err(YamlBaseError::NotImplemented(
+                        "ROUND function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "FLOOR" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.evaluate_constant_expr(num_expr)?;
+                            
+                            match num_val {
+                                Value::Integer(i) => Ok(Value::Integer(i)),
+                                Value::Double(d) => Ok(Value::Double(d.floor())),
+                                Value::Float(f) => Ok(Value::Float(f.floor())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "FLOOR requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid FLOOR argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "FLOOR requires exactly 1 argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "FLOOR function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "CEIL" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.evaluate_constant_expr(num_expr)?;
+                            
+                            match num_val {
+                                Value::Integer(i) => Ok(Value::Integer(i)),
+                                Value::Double(d) => Ok(Value::Double(d.ceil())),
+                                Value::Float(f) => Ok(Value::Float(f.ceil())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "CEIL requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid CEIL argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "CEIL requires exactly 1 argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "CEIL function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "ABS" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
+                        {
+                            let num_val = self.evaluate_constant_expr(num_expr)?;
+                            
+                            match num_val {
+                                Value::Integer(i) => Ok(Value::Integer(i.wrapping_abs())),
+                                Value::Double(d) => Ok(Value::Double(d.abs())),
+                                Value::Float(f) => Ok(Value::Float(f.abs())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "ABS requires numeric argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid ABS argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "ABS requires exactly 1 argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "ABS function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "MOD" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(div_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let num_val = self.evaluate_constant_expr(num_expr)?;
+                            let div_val = self.evaluate_constant_expr(div_expr)?;
+                            
+                            match (&num_val, &div_val) {
+                                (Value::Integer(n), Value::Integer(d)) => {
+                                    if *d == 0 {
+                                        return Err(YamlBaseError::Database {
+                                            message: "Division by zero in MOD".to_string(),
+                                        });
+                                    }
+                                    Ok(Value::Integer(n % d))
+                                }
+                                (Value::Double(n), Value::Double(d)) => {
+                                    if *d == 0.0 {
+                                        return Err(YamlBaseError::Database {
+                                            message: "Division by zero in MOD".to_string(),
+                                        });
+                                    }
+                                    Ok(Value::Double(n % d))
+                                }
+                                (Value::Float(n), Value::Float(d)) => {
+                                    if *d == 0.0 {
+                                        return Err(YamlBaseError::Database {
+                                            message: "Division by zero in MOD".to_string(),
+                                        });
+                                    }
+                                    Ok(Value::Float(n % d))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "MOD requires numeric arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "Invalid MOD arguments".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "MOD requires exactly 2 arguments".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "MOD function requires arguments".to_string(),
+                    ))
                 }
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Function '{}' is not implemented",
                 func_name
-            ))),
+            )))
         }
     }
 
@@ -6744,5 +7125,207 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("XY".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_math_functions() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test ROUND - simpler case first
+        let stmt = parse_statement("SELECT ROUND(3.14)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.0));
+
+        let stmt = parse_statement("SELECT ROUND(3.14159, 2)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.14));
+
+        let stmt = parse_statement("SELECT ROUND(3.14159, 4)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.1416));
+
+        let stmt = parse_statement("SELECT ROUND(3.14159, 0)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.0));
+
+        // Test FLOOR
+        let stmt = parse_statement("SELECT FLOOR(3.7)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.0));
+
+        let stmt = parse_statement("SELECT FLOOR(-3.7)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(-4.0));
+
+        let stmt = parse_statement("SELECT FLOOR(5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(5));
+
+        // Test CEIL
+        let stmt = parse_statement("SELECT CEIL(3.2)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(4.0));
+
+        let stmt = parse_statement("SELECT CEIL(-3.2)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(-3.0));
+
+        let stmt = parse_statement("SELECT CEIL(5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(5));
+
+        // Test ABS
+        let stmt = parse_statement("SELECT ABS(-5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(5));
+
+        let stmt = parse_statement("SELECT ABS(5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(5));
+
+        let stmt = parse_statement("SELECT ABS(-3.14)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.14));
+
+        // Test MOD
+        let stmt = parse_statement("SELECT MOD(10, 3)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+
+        let stmt = parse_statement("SELECT MOD(10, -3)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+
+        let stmt = parse_statement("SELECT MOD(-10, 3)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(-1));
+
+        let stmt = parse_statement("SELECT MOD(10.5, 3.0)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(1.5));
+    }
+
+    #[tokio::test]
+    async fn test_math_functions_debug() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+        
+        // Test if VERSION works (it should)
+        let stmt = parse_statement("SELECT VERSION()");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert!(matches!(result.rows[0][0], Value::Text(ref s) if s.contains("yamlbase")));
+        
+        // Test if LENGTH works (it should)  
+        let stmt = parse_statement("SELECT LENGTH('test')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(4));
+        
+        // Now test ROUND
+        let stmt = parse_statement("SELECT ROUND(3.14)");
+        let result = executor.execute(&stmt).await;
+        
+        match result {
+            Ok(res) => {
+                assert_eq!(res.rows[0][0], Value::Double(3.0));
+            }
+            Err(e) => {
+                panic!("ROUND failed with error: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_math_functions_null_handling() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // First test a simple case
+        let stmt = parse_statement("SELECT ROUND(3.14)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(3.0));
+
+        // Test NULL handling for each function
+        let stmt = parse_statement("SELECT ROUND(NULL)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT ROUND(3.14, NULL)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT FLOOR(NULL)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT CEIL(NULL)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT ABS(NULL)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT MOD(NULL, 3)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT MOD(10, NULL)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_math_functions_edge_cases() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // ROUND edge cases
+        let stmt = parse_statement("SELECT ROUND(2.5)"); // Banker's rounding
+        let result = executor.execute(&stmt).await.unwrap();
+        // Note: Rust uses "round half away from zero", so 2.5 -> 3.0
+        assert_eq!(result.rows[0][0], Value::Double(3.0));
+
+        let stmt = parse_statement("SELECT ROUND(-2.5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(-3.0));
+
+        // Negative precision (not common in SQL, but let's test the behavior)
+        let stmt = parse_statement("SELECT ROUND(123.456, -1)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(120.0));
+
+        let stmt = parse_statement("SELECT ROUND(155.456, -2)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(200.0));
+
+        // Very small numbers
+        let stmt = parse_statement("SELECT FLOOR(0.0000001)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(0.0));
+
+        let stmt = parse_statement("SELECT CEIL(0.0000001)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Double(1.0));
+
+        // MOD with zero divisor (should error)
+        let stmt = parse_statement("SELECT MOD(10, 0)");
+        let result = executor.execute(&stmt).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Division by zero"));
+
+        // MOD with floating point zero
+        let stmt = parse_statement("SELECT MOD(10.0, 0.0)");
+        let result = executor.execute(&stmt).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Division by zero"));
+
+        // ABS with minimum integer (potential overflow in some systems, but Rust handles it)
+        // Note: We can't directly use -9223372036854775808 because the positive part is too large
+        // Instead, we'll use -9223372036854775807 - 1
+        let stmt = parse_statement("SELECT ABS(-9223372036854775807 - 1)"); // i64::MIN
+        let result = executor.execute(&stmt).await.unwrap();
+        // In Rust, i64::MIN.abs() would panic in debug mode, but we handle it with wrapping_abs
+        assert_eq!(result.rows[0][0], Value::Integer(i64::MIN.wrapping_abs()));
     }
 }
