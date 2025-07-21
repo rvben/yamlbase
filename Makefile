@@ -69,6 +69,18 @@ clean:
 	rm -rf target/
 	rm -rf docker-context/
 
+
+fmt:
+	cargo fmt
+	cargo clippy --fix --allow-dirty --allow-staged
+	cargo fix --allow-dirty --allow-staged
+
+lint:
+	cargo clippy --all-targets --all-features -- -D warnings
+
+check:
+	cargo check --all-targets --all-features
+
 # Run the server locally
 run:
 	cargo run -- -f examples/sample_database.yaml --verbose
@@ -120,21 +132,9 @@ docker-run:
 docker-stop:
 	docker stop yamlbase && docker rm yamlbase || true
 
-# Run linting
-lint:
-	cargo clippy --all-targets --all-features -- -D warnings
-
-# Format code
-fmt:
-	cargo fmt
-
 # Check formatting
 fmt-check:
 	cargo fmt -- --check
-
-# Type check
-check:
-	cargo check --all-features
 
 # Run all CI checks (format, lint, type check, test)
 ci: fmt-check check lint build test
