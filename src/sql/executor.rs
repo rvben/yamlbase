@@ -1,4 +1,4 @@
-use chrono::{self, Datelike};
+use chrono::{self, Datelike, NaiveDate};
 use regex::Regex;
 use rust_decimal::prelude::*;
 use sqlparser::ast::{
@@ -170,6 +170,13 @@ impl QueryExecutor {
         // Project columns
         let projected_rows = self.project_columns(&filtered_rows, &columns, table)?;
 
+        // Apply DISTINCT if specified
+        let distinct_rows = if select.distinct.is_some() {
+            self.apply_distinct(projected_rows)?
+        } else {
+            projected_rows
+        };
+
         // Apply ORDER BY
         let sorted_rows = if let Some(order_by) = &query.order_by {
             // Convert ProjectionItem to (String, usize) for compatibility with sort_rows
@@ -182,9 +189,9 @@ impl QueryExecutor {
                     ProjectionItem::Expression(name, _) => (name.clone(), idx),
                 })
                 .collect();
-            self.sort_rows(projected_rows, &order_by.exprs, &col_info)?
+            self.sort_rows(distinct_rows, &order_by.exprs, &col_info)?
         } else {
-            projected_rows
+            distinct_rows
         };
 
         // Apply LIMIT and OFFSET
@@ -400,7 +407,12 @@ impl QueryExecutor {
                 else_result,
             } => {
                 // CASE WHEN in SELECT without FROM
-                self.evaluate_case_when_constant(operand.as_deref(), conditions, results, else_result.as_deref())
+                self.evaluate_case_when_constant(
+                    operand.as_deref(),
+                    conditions,
+                    results,
+                    else_result.as_deref(),
+                )
             }
             Expr::Substring {
                 expr,
@@ -410,20 +422,22 @@ impl QueryExecutor {
             } => {
                 // PostgreSQL-style SUBSTRING expression
                 let str_val = self.evaluate_constant_expr(expr)?;
-                
+
                 let start = if let Some(from_expr) = substring_from {
                     let start_val = self.evaluate_constant_expr(from_expr)?;
                     match start_val {
                         Value::Integer(n) => n,
                         Value::Null => return Ok(Value::Null),
-                        _ => return Err(YamlBaseError::Database {
-                            message: "SUBSTRING start position must be an integer".to_string(),
-                        }),
+                        _ => {
+                            return Err(YamlBaseError::Database {
+                                message: "SUBSTRING start position must be an integer".to_string(),
+                            });
+                        }
                     }
                 } else {
                     1 // Default to 1 if no FROM specified
                 };
-                
+
                 match str_val {
                     Value::Text(s) => {
                         // SQL uses 1-based indexing
@@ -432,21 +446,15 @@ impl QueryExecutor {
                         } else {
                             0
                         };
-                        
+
                         if let Some(for_expr) = substring_for {
                             let len_val = self.evaluate_constant_expr(for_expr)?;
                             match len_val {
                                 Value::Integer(len) => {
-                                    let length = if len > 0 {
-                                        len as usize
-                                    } else {
-                                        0
-                                    };
+                                    let length = if len > 0 { len as usize } else { 0 };
                                     let chars: Vec<char> = s.chars().collect();
-                                    let result: String = chars.iter()
-                                        .skip(start_idx)
-                                        .take(length)
-                                        .collect();
+                                    let result: String =
+                                        chars.iter().skip(start_idx).take(length).collect();
                                     Ok(Value::Text(result))
                                 }
                                 Value::Null => Ok(Value::Null),
@@ -457,9 +465,7 @@ impl QueryExecutor {
                         } else {
                             // No length specified, take rest of string
                             let chars: Vec<char> = s.chars().collect();
-                            let result: String = chars.iter()
-                                .skip(start_idx)
-                                .collect();
+                            let result: String = chars.iter().skip(start_idx).collect();
                             Ok(Value::Text(result))
                         }
                     }
@@ -494,7 +500,10 @@ impl QueryExecutor {
                 }
             }
             _ => {
-                debug!("Unsupported expression type in evaluate_constant_expr: {:?}", expr);
+                debug!(
+                    "Unsupported expression type in evaluate_constant_expr: {:?}",
+                    expr
+                );
                 Err(YamlBaseError::NotImplemented(
                     "Only constant expressions are supported in SELECT without FROM".to_string(),
                 ))
@@ -684,11 +693,18 @@ impl QueryExecutor {
         // Project columns
         let projected_rows = self.project_joined_columns(&filtered_rows, &columns, &all_tables)?;
 
-        // Apply ORDER BY
-        let sorted_rows = if let Some(order_by) = &query.order_by {
-            self.sort_joined_rows(projected_rows, &order_by.exprs, &columns)?
+        // Apply DISTINCT if specified
+        let distinct_rows = if select.distinct.is_some() {
+            self.apply_distinct(projected_rows)?
         } else {
             projected_rows
+        };
+
+        // Apply ORDER BY
+        let sorted_rows = if let Some(order_by) = &query.order_by {
+            self.sort_joined_rows(distinct_rows, &order_by.exprs, &columns)?
+        } else {
+            distinct_rows
         };
 
         // Apply LIMIT and OFFSET
@@ -969,11 +985,101 @@ impl QueryExecutor {
                 // Handle parenthesized expressions by evaluating the inner expression
                 self.evaluate_expr(inner, row, table)
             }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                debug!(
+                    "Found Between expression: expr={:?}, negated={}, low={:?}, high={:?}",
+                    expr, negated, low, high
+                );
+                self.evaluate_between(expr, *negated, low, high, row, table)
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported: {:?}",
                 expr
             ))),
         }
+    }
+
+    fn evaluate_between(
+        &self,
+        expr: &Expr,
+        negated: bool,
+        low: &Expr,
+        high: &Expr,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<bool> {
+        let value = self.get_expr_value(expr, row, table)?;
+        let mut low_value = self.get_expr_value(low, row, table)?;
+        let mut high_value = self.get_expr_value(high, row, table)?;
+
+        // Handle NULL cases - if any value is NULL, the result is NULL (which we treat as false)
+        if matches!(value, Value::Null)
+            || matches!(low_value, Value::Null)
+            || matches!(high_value, Value::Null)
+        {
+            return Ok(false);
+        }
+
+        // Type conversion: if comparing dates with text, try to parse text as date
+        if matches!(value, Value::Date(_)) {
+            if let Value::Text(s) = &low_value {
+                if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    low_value = Value::Date(date);
+                }
+            }
+            if let Value::Text(s) = &high_value {
+                if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    high_value = Value::Date(date);
+                }
+            }
+        }
+
+        // Check if value is between low and high (inclusive)
+        let is_between = match (&value, &low_value, &high_value) {
+            (Value::Integer(v), Value::Integer(l), Value::Integer(h)) => *l <= *v && *v <= *h,
+            (Value::Double(v), Value::Double(l), Value::Double(h)) => *l <= *v && *v <= *h,
+            (Value::Float(v), Value::Float(l), Value::Float(h)) => *l <= *v && *v <= *h,
+            (Value::Text(v), Value::Text(l), Value::Text(h)) => l <= v && v <= h,
+            (Value::Date(v), Value::Date(l), Value::Date(h)) => *l <= *v && *v <= *h,
+            (Value::Time(v), Value::Time(l), Value::Time(h)) => *l <= *v && *v <= *h,
+            (Value::Timestamp(v), Value::Timestamp(l), Value::Timestamp(h)) => *l <= *v && *v <= *h,
+
+            // Handle mixed numeric types
+            (Value::Integer(v), Value::Double(l), Value::Double(h)) => {
+                *l <= *v as f64 && (*v as f64) <= *h
+            }
+            (Value::Double(v), Value::Integer(l), Value::Integer(h)) => {
+                (*l as f64) <= *v && *v <= (*h as f64)
+            }
+            (Value::Integer(v), Value::Float(l), Value::Float(h)) => {
+                *l <= *v as f32 && (*v as f32) <= *h
+            }
+            (Value::Float(v), Value::Integer(l), Value::Integer(h)) => {
+                (*l as f32) <= *v && *v <= (*h as f32)
+            }
+            (Value::Double(v), Value::Float(l), Value::Float(h)) => {
+                (*l as f64) <= *v && *v <= (*h as f64)
+            }
+            (Value::Float(v), Value::Double(l), Value::Double(h)) => {
+                (*l as f32) <= *v && *v <= (*h as f32)
+            }
+
+            _ => {
+                return Err(YamlBaseError::Database {
+                    message: format!(
+                        "BETWEEN requires compatible types, got {:?} BETWEEN {:?} AND {:?}",
+                        value, low_value, high_value
+                    ),
+                });
+            }
+        };
+
+        Ok(if negated { !is_between } else { is_between })
     }
 
     fn evaluate_in_list(
@@ -1229,7 +1335,14 @@ impl QueryExecutor {
                 else_result,
             } => {
                 // CASE WHEN expression
-                self.evaluate_case_when(operand.as_deref(), conditions, results, else_result.as_deref(), row, table)
+                self.evaluate_case_when(
+                    operand.as_deref(),
+                    conditions,
+                    results,
+                    else_result.as_deref(),
+                    row,
+                    table,
+                )
             }
             Expr::Substring {
                 expr,
@@ -1239,20 +1352,22 @@ impl QueryExecutor {
             } => {
                 // PostgreSQL-style SUBSTRING expression with row context
                 let str_val = self.get_expr_value(expr, row, table)?;
-                
+
                 let start = if let Some(from_expr) = substring_from {
                     let start_val = self.get_expr_value(from_expr, row, table)?;
                     match start_val {
                         Value::Integer(n) => n,
                         Value::Null => return Ok(Value::Null),
-                        _ => return Err(YamlBaseError::Database {
-                            message: "SUBSTRING start position must be an integer".to_string(),
-                        }),
+                        _ => {
+                            return Err(YamlBaseError::Database {
+                                message: "SUBSTRING start position must be an integer".to_string(),
+                            });
+                        }
                     }
                 } else {
                     1 // Default to 1 if no FROM specified
                 };
-                
+
                 match str_val {
                     Value::Text(s) => {
                         // SQL uses 1-based indexing
@@ -1261,21 +1376,15 @@ impl QueryExecutor {
                         } else {
                             0
                         };
-                        
+
                         if let Some(for_expr) = substring_for {
                             let len_val = self.get_expr_value(for_expr, row, table)?;
                             match len_val {
                                 Value::Integer(len) => {
-                                    let length = if len > 0 {
-                                        len as usize
-                                    } else {
-                                        0
-                                    };
+                                    let length = if len > 0 { len as usize } else { 0 };
                                     let chars: Vec<char> = s.chars().collect();
-                                    let result: String = chars.iter()
-                                        .skip(start_idx)
-                                        .take(length)
-                                        .collect();
+                                    let result: String =
+                                        chars.iter().skip(start_idx).take(length).collect();
                                     Ok(Value::Text(result))
                                 }
                                 Value::Null => Ok(Value::Null),
@@ -1286,9 +1395,7 @@ impl QueryExecutor {
                         } else {
                             // No length specified, take rest of string
                             let chars: Vec<char> = s.chars().collect();
-                            let result: String = chars.iter()
-                                .skip(start_idx)
-                                .collect();
+                            let result: String = chars.iter().skip(start_idx).collect();
                             Ok(Value::Text(result))
                         }
                     }
@@ -1590,7 +1697,7 @@ impl QueryExecutor {
                         {
                             let val1 = self.get_expr_value(expr1, row, table)?;
                             let val2 = self.get_expr_value(expr2, row, table)?;
-                            
+
                             // NULLIF returns NULL if val1 == val2, otherwise returns val1
                             if val1 == val2 {
                                 Ok(Value::Null)
@@ -1619,7 +1726,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
                         {
                             let str_val = self.get_expr_value(str_expr, row, table)?;
-                            
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Integer(s.len() as i64)),
                                 Value::Null => Ok(Value::Null),
@@ -1649,11 +1756,12 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
                         {
                             let str_val = self.get_expr_value(str_expr, row, table)?;
-                            
-                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)) = &args.args[1]
+
+                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)) =
+                                &args.args[1]
                             {
                                 let start_val = self.get_expr_value(start_expr, row, table)?;
-                                
+
                                 match (&str_val, &start_val) {
                                     (Value::Text(s), Value::Integer(start)) => {
                                         // SQL uses 1-based indexing
@@ -1662,39 +1770,49 @@ impl QueryExecutor {
                                         } else {
                                             0
                                         };
-                                        
+
                                         if args.args.len() == 3 {
                                             // SUBSTRING with length
-                                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)) = &args.args[2]
+                                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(
+                                                len_expr,
+                                            )) = &args.args[2]
                                             {
-                                                let len_val = self.get_expr_value(len_expr, row, table)?;
-                                                
+                                                let len_val =
+                                                    self.get_expr_value(len_expr, row, table)?;
+
                                                 if let Value::Integer(len) = len_val {
                                                     let length = len.max(0) as usize;
-                                                    let result: String = s.chars()
+                                                    let result: String = s
+                                                        .chars()
                                                         .skip(start_idx)
                                                         .take(length)
                                                         .collect();
                                                     Ok(Value::Text(result))
                                                 } else {
                                                     Err(YamlBaseError::Database {
-                                                        message: "SUBSTRING length must be an integer".to_string(),
+                                                        message:
+                                                            "SUBSTRING length must be an integer"
+                                                                .to_string(),
                                                     })
                                                 }
                                             } else {
                                                 Err(YamlBaseError::Database {
-                                                    message: "Invalid length argument for SUBSTRING".to_string(),
+                                                    message:
+                                                        "Invalid length argument for SUBSTRING"
+                                                            .to_string(),
                                                 })
                                             }
                                         } else {
                                             // SUBSTRING without length
-                                            let result: String = s.chars().skip(start_idx).collect();
+                                            let result: String =
+                                                s.chars().skip(start_idx).collect();
                                             Ok(Value::Text(result))
                                         }
                                     }
                                     (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                     _ => Err(YamlBaseError::Database {
-                                        message: "SUBSTRING requires string and integer arguments".to_string(),
+                                        message: "SUBSTRING requires string and integer arguments"
+                                            .to_string(),
                                     }),
                                 }
                             } else {
@@ -1722,11 +1840,11 @@ impl QueryExecutor {
                 if let FunctionArguments::List(args) = &func.args {
                     if !args.args.is_empty() {
                         let mut result = String::new();
-                        
+
                         for arg in &args.args {
                             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
                                 let val = self.get_expr_value(expr, row, table)?;
-                                
+
                                 match val {
                                     Value::Text(s) => result.push_str(&s),
                                     Value::Integer(i) => result.push_str(&i.to_string()),
@@ -1742,7 +1860,7 @@ impl QueryExecutor {
                                 });
                             }
                         }
-                        
+
                         Ok(Value::Text(result))
                     } else {
                         Err(YamlBaseError::Database {
@@ -1767,7 +1885,7 @@ impl QueryExecutor {
                             let str_val = self.get_expr_value(str_expr, row, table)?;
                             let from_val = self.get_expr_value(from_expr, row, table)?;
                             let to_val = self.get_expr_value(to_expr, row, table)?;
-                            
+
                             match (&str_val, &from_val, &to_val) {
                                 (Value::Text(s), Value::Text(from), Value::Text(to)) => {
                                     // Handle empty search string - return original string
@@ -1777,7 +1895,9 @@ impl QueryExecutor {
                                         Ok(Value::Text(s.replace(from, to)))
                                     }
                                 }
-                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
+                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => {
+                                    Ok(Value::Null)
+                                }
                                 _ => Err(YamlBaseError::Database {
                                     message: "REPLACE requires string arguments".to_string(),
                                 }),
@@ -1804,17 +1924,21 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.get_expr_value(num_expr, row, table)?;
-                            
+
                             let precision = if args.args.len() == 2 {
-                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(prec_expr)) = &args.args[1]
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(prec_expr)) =
+                                    &args.args[1]
                                 {
                                     let prec_val = self.get_expr_value(prec_expr, row, table)?;
                                     match prec_val {
                                         Value::Integer(p) => p as i32,
                                         Value::Null => return Ok(Value::Null),
-                                        _ => return Err(YamlBaseError::Database {
-                                            message: "ROUND precision must be an integer".to_string(),
-                                        }),
+                                        _ => {
+                                            return Err(YamlBaseError::Database {
+                                                message: "ROUND precision must be an integer"
+                                                    .to_string(),
+                                            });
+                                        }
                                     }
                                 } else {
                                     return Err(YamlBaseError::Database {
@@ -1824,7 +1948,7 @@ impl QueryExecutor {
                             } else {
                                 0
                             };
-                            
+
                             match num_val {
                                 Value::Integer(n) => {
                                     if precision == 0 {
@@ -1877,7 +2001,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.get_expr_value(num_expr, row, table)?;
-                            
+
                             match num_val {
                                 Value::Integer(n) => Ok(Value::Integer(n)),
                                 Value::Float(f) => Ok(Value::Double((f as f64).floor())),
@@ -1915,7 +2039,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.get_expr_value(num_expr, row, table)?;
-                            
+
                             match num_val {
                                 Value::Integer(n) => Ok(Value::Integer(n)),
                                 Value::Float(f) => Ok(Value::Double((f as f64).ceil())),
@@ -1953,7 +2077,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.get_expr_value(num_expr, row, table)?;
-                            
+
                             match num_val {
                                 Value::Integer(n) => Ok(Value::Integer(n.abs())),
                                 Value::Float(f) => Ok(Value::Float(f.abs())),
@@ -1990,7 +2114,7 @@ impl QueryExecutor {
                         {
                             let num_val = self.get_expr_value(num_expr, row, table)?;
                             let div_val = self.get_expr_value(div_expr, row, table)?;
-                            
+
                             match (&num_val, &div_val) {
                                 (Value::Integer(n), Value::Integer(d)) => {
                                     if *d == 0 {
@@ -2294,7 +2418,7 @@ impl QueryExecutor {
                         {
                             let val1 = self.evaluate_constant_expr(expr1)?;
                             let val2 = self.evaluate_constant_expr(expr2)?;
-                            
+
                             // NULLIF returns NULL if val1 == val2, otherwise returns val1
                             if val1 == val2 {
                                 Ok(Value::Null)
@@ -2323,7 +2447,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
                         {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
-                            
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Integer(s.chars().count() as i64)),
                                 Value::Null => Ok(Value::Null),
@@ -2353,11 +2477,12 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
                         {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
-                            
-                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)) = &args.args[1]
+
+                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)) =
+                                &args.args[1]
                             {
                                 let start_val = self.evaluate_constant_expr(start_expr)?;
-                                
+
                                 match (&str_val, &start_val) {
                                     (Value::Text(s), Value::Integer(start)) => {
                                         // SQL uses 1-based indexing
@@ -2366,11 +2491,14 @@ impl QueryExecutor {
                                         } else {
                                             0
                                         };
-                                        
+
                                         if args.args.len() == 3 {
-                                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)) = &args.args[2]
+                                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(
+                                                len_expr,
+                                            )) = &args.args[2]
                                             {
-                                                let len_val = self.evaluate_constant_expr(len_expr)?;
+                                                let len_val =
+                                                    self.evaluate_constant_expr(len_expr)?;
                                                 match &len_val {
                                                     Value::Integer(len) => {
                                                         let length = if *len > 0 {
@@ -2379,7 +2507,8 @@ impl QueryExecutor {
                                                             0
                                                         };
                                                         let chars: Vec<char> = s.chars().collect();
-                                                        let result: String = chars.iter()
+                                                        let result: String = chars
+                                                            .iter()
                                                             .skip(start_idx)
                                                             .take(length)
                                                             .collect();
@@ -2387,7 +2516,8 @@ impl QueryExecutor {
                                                     }
                                                     Value::Null => Ok(Value::Null),
                                                     _ => Err(YamlBaseError::Database {
-                                                        message: "SUBSTRING length must be integer".to_string(),
+                                                        message: "SUBSTRING length must be integer"
+                                                            .to_string(),
                                                     }),
                                                 }
                                             } else {
@@ -2398,15 +2528,15 @@ impl QueryExecutor {
                                         } else {
                                             // No length specified, take rest of string
                                             let chars: Vec<char> = s.chars().collect();
-                                            let result: String = chars.iter()
-                                                .skip(start_idx)
-                                                .collect();
+                                            let result: String =
+                                                chars.iter().skip(start_idx).collect();
                                             Ok(Value::Text(result))
                                         }
                                     }
                                     (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                     _ => Err(YamlBaseError::Database {
-                                        message: "SUBSTRING requires string and integer arguments".to_string(),
+                                        message: "SUBSTRING requires string and integer arguments"
+                                            .to_string(),
                                     }),
                                 }
                             } else {
@@ -2434,7 +2564,7 @@ impl QueryExecutor {
                 if let FunctionArguments::List(args) = &func.args {
                     let mut result = String::new();
                     let mut has_null = false;
-                    
+
                     for arg in &args.args {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
                             let val = self.evaluate_constant_expr(expr)?;
@@ -2455,7 +2585,7 @@ impl QueryExecutor {
                             ));
                         }
                     }
-                    
+
                     if has_null {
                         Ok(Value::Null)
                     } else {
@@ -2479,7 +2609,7 @@ impl QueryExecutor {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
                             let from_val = self.evaluate_constant_expr(from_expr)?;
                             let to_val = self.evaluate_constant_expr(to_expr)?;
-                            
+
                             match (&str_val, &from_val, &to_val) {
                                 (Value::Text(s), Value::Text(from), Value::Text(to)) => {
                                     // Handle empty search string - return original string
@@ -2489,7 +2619,9 @@ impl QueryExecutor {
                                         Ok(Value::Text(s.replace(from, to)))
                                     }
                                 }
-                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
+                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => {
+                                    Ok(Value::Null)
+                                }
                                 _ => Err(YamlBaseError::Database {
                                     message: "REPLACE requires string arguments".to_string(),
                                 }),
@@ -2516,17 +2648,21 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.evaluate_constant_expr(num_expr)?;
-                            
+
                             let precision = if args.args.len() == 2 {
-                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(prec_expr)) = &args.args[1]
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(prec_expr)) =
+                                    &args.args[1]
                                 {
                                     let prec_val = self.evaluate_constant_expr(prec_expr)?;
                                     match prec_val {
                                         Value::Integer(p) => p as i32,
                                         Value::Null => return Ok(Value::Null),
-                                        _ => return Err(YamlBaseError::Database {
-                                            message: "ROUND precision must be an integer".to_string(),
-                                        }),
+                                        _ => {
+                                            return Err(YamlBaseError::Database {
+                                                message: "ROUND precision must be an integer"
+                                                    .to_string(),
+                                            });
+                                        }
                                     }
                                 } else {
                                     return Err(YamlBaseError::NotImplemented(
@@ -2536,7 +2672,7 @@ impl QueryExecutor {
                             } else {
                                 0
                             };
-                            
+
                             match num_val {
                                 Value::Integer(i) => Ok(Value::Integer(i)),
                                 Value::Double(d) => {
@@ -2576,7 +2712,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.evaluate_constant_expr(num_expr)?;
-                            
+
                             match num_val {
                                 Value::Integer(i) => Ok(Value::Integer(i)),
                                 Value::Double(d) => Ok(Value::Double(d.floor())),
@@ -2608,7 +2744,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.evaluate_constant_expr(num_expr)?;
-                            
+
                             match num_val {
                                 Value::Integer(i) => Ok(Value::Integer(i)),
                                 Value::Double(d) => Ok(Value::Double(d.ceil())),
@@ -2640,7 +2776,7 @@ impl QueryExecutor {
                         if let FunctionArg::Unnamed(FunctionArgExpr::Expr(num_expr)) = &args.args[0]
                         {
                             let num_val = self.evaluate_constant_expr(num_expr)?;
-                            
+
                             match num_val {
                                 Value::Integer(i) => Ok(Value::Integer(i.wrapping_abs())),
                                 Value::Double(d) => Ok(Value::Double(d.abs())),
@@ -2676,7 +2812,7 @@ impl QueryExecutor {
                         {
                             let num_val = self.evaluate_constant_expr(num_expr)?;
                             let div_val = self.evaluate_constant_expr(div_expr)?;
-                            
+
                             match (&num_val, &div_val) {
                                 (Value::Integer(n), Value::Integer(d)) => {
                                     if *d == 0 {
@@ -2726,8 +2862,27 @@ impl QueryExecutor {
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Function '{}' is not implemented",
                 func_name
-            )))
+            ))),
         }
+    }
+
+    fn apply_distinct(&self, rows: Vec<Vec<Value>>) -> crate::Result<Vec<Vec<Value>>> {
+        if rows.is_empty() {
+            return Ok(rows);
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut distinct_rows = Vec::new();
+
+        for row in rows {
+            // Create a hashable key from the row
+            // Note: This assumes Value implements Hash and Eq properly
+            if seen.insert(row.clone()) {
+                distinct_rows.push(row);
+            }
+        }
+
+        Ok(distinct_rows)
     }
 
     fn apply_limit(&self, rows: Vec<Vec<Value>>, limit: &Expr) -> crate::Result<Vec<Vec<Value>>> {
@@ -3107,7 +3262,7 @@ impl QueryExecutor {
         if let Some(operand_expr) = operand {
             // Simple CASE: CASE expr WHEN val1 THEN result1 WHEN val2 THEN result2 ... END
             let operand_value = self.get_expr_value(operand_expr, row, table)?;
-            
+
             for (condition, result) in conditions.iter().zip(results.iter()) {
                 let condition_value = self.get_expr_value(condition, row, table)?;
                 if operand_value == condition_value {
@@ -3123,7 +3278,7 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         // If no conditions matched, return ELSE result or NULL
         if let Some(else_expr) = else_result {
             self.get_expr_value(else_expr, row, table)
@@ -3143,7 +3298,7 @@ impl QueryExecutor {
         if let Some(operand_expr) = operand {
             // Simple CASE: CASE expr WHEN val1 THEN result1 WHEN val2 THEN result2 ... END
             let operand_value = self.evaluate_constant_expr(operand_expr)?;
-            
+
             for (condition, result) in conditions.iter().zip(results.iter()) {
                 let condition_value = self.evaluate_constant_expr(condition)?;
                 if operand_value == condition_value {
@@ -3159,7 +3314,7 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         // If no conditions matched, return ELSE result or NULL
         if let Some(else_expr) = else_result {
             self.evaluate_constant_expr(else_expr)
@@ -3746,6 +3901,124 @@ impl QueryExecutor {
                     )),
                 }
             }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                let value = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                let mut low_value = self.get_join_expr_value(low, row, tables, table_aliases)?;
+                let mut high_value = self.get_join_expr_value(high, row, tables, table_aliases)?;
+
+                // NULL handling - any NULL value results in false
+                if matches!(value, Value::Null)
+                    || matches!(low_value, Value::Null)
+                    || matches!(high_value, Value::Null)
+                {
+                    return Ok(false);
+                }
+
+                // Type conversion: if comparing dates with text, try to parse text as date
+                if matches!(value, Value::Date(_)) {
+                    if let Value::Text(s) = &low_value {
+                        if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                            low_value = Value::Date(date);
+                        }
+                    }
+                    if let Value::Text(s) = &high_value {
+                        if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                            high_value = Value::Date(date);
+                        }
+                    }
+                }
+
+                let in_range = match (&value, &low_value, &high_value) {
+                    // Numeric comparisons with mixed types
+                    (Value::Integer(v), Value::Integer(l), Value::Integer(h)) => {
+                        *l <= *v && *v <= *h
+                    }
+                    (Value::Integer(v), Value::Double(l), Value::Double(h)) => {
+                        *l <= *v as f64 && (*v as f64) <= *h
+                    }
+                    (Value::Integer(v), Value::Float(l), Value::Float(h)) => {
+                        *l <= *v as f32 && (*v as f32) <= *h
+                    }
+                    (Value::Double(v), Value::Integer(l), Value::Integer(h)) => {
+                        (*l as f64) <= *v && *v <= (*h as f64)
+                    }
+                    (Value::Double(v), Value::Double(l), Value::Double(h)) => *l <= *v && *v <= *h,
+                    (Value::Double(v), Value::Float(l), Value::Float(h)) => {
+                        (*l as f64) <= *v && *v <= (*h as f64)
+                    }
+                    (Value::Float(v), Value::Integer(l), Value::Integer(h)) => {
+                        (*l as f32) <= *v && *v <= (*h as f32)
+                    }
+                    (Value::Float(v), Value::Double(l), Value::Double(h)) => {
+                        *l <= (*v as f64) && (*v as f64) <= *h
+                    }
+                    (Value::Float(v), Value::Float(l), Value::Float(h)) => *l <= *v && *v <= *h,
+
+                    // Mixed numeric types
+                    (Value::Integer(v), Value::Integer(l), Value::Double(h)) => {
+                        (*l as f64) <= (*v as f64) && (*v as f64) <= *h
+                    }
+                    (Value::Integer(v), Value::Double(l), Value::Integer(h)) => {
+                        *l <= (*v as f64) && *v <= *h
+                    }
+                    (Value::Integer(v), Value::Integer(l), Value::Float(h)) => {
+                        (*l as f32) <= (*v as f32) && (*v as f32) <= *h
+                    }
+                    (Value::Integer(v), Value::Float(l), Value::Integer(h)) => {
+                        *l <= (*v as f32) && *v <= *h
+                    }
+                    (Value::Double(v), Value::Double(l), Value::Integer(h)) => {
+                        *l <= *v && *v <= (*h as f64)
+                    }
+                    (Value::Double(v), Value::Integer(l), Value::Double(h)) => {
+                        (*l as f64) <= *v && *v <= *h
+                    }
+                    (Value::Double(v), Value::Float(l), Value::Integer(h)) => {
+                        (*l as f64) <= *v && *v <= (*h as f64)
+                    }
+                    (Value::Double(v), Value::Integer(l), Value::Float(h)) => {
+                        (*l as f64) <= *v && *v <= (*h as f64)
+                    }
+                    (Value::Float(v), Value::Float(l), Value::Integer(h)) => {
+                        *l <= *v && *v <= (*h as f32)
+                    }
+                    (Value::Float(v), Value::Integer(l), Value::Float(h)) => {
+                        (*l as f32) <= *v && *v <= *h
+                    }
+                    (Value::Float(v), Value::Double(l), Value::Float(h)) => {
+                        *l <= (*v as f64) && (*v as f64) <= (*h as f64)
+                    }
+                    (Value::Float(v), Value::Float(l), Value::Double(h)) => {
+                        (*l as f64) <= (*v as f64) && (*v as f64) <= *h
+                    }
+
+                    // Text comparison
+                    (Value::Text(v), Value::Text(l), Value::Text(h)) => l <= v && v <= h,
+
+                    // Date/Time comparisons
+                    (Value::Date(v), Value::Date(l), Value::Date(h)) => l <= v && v <= h,
+                    (Value::Time(v), Value::Time(l), Value::Time(h)) => l <= v && v <= h,
+                    (Value::Timestamp(v), Value::Timestamp(l), Value::Timestamp(h)) => {
+                        l <= v && v <= h
+                    }
+
+                    _ => {
+                        return Err(YamlBaseError::Database {
+                            message: format!(
+                                "Cannot compare {:?} BETWEEN {:?} AND {:?}",
+                                value, low_value, high_value
+                            ),
+                        });
+                    }
+                };
+
+                Ok(if *negated { !in_range } else { in_range })
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Complex JOIN conditions are not yet supported".to_string(),
             )),
@@ -3891,9 +4164,11 @@ impl QueryExecutor {
                             FunctionArg::Unnamed(FunctionArgExpr::Expr(expr2)),
                         ) = (&args.args[0], &args.args[1])
                         {
-                            let val1 = self.get_join_expr_value(expr1, row, tables, table_aliases)?;
-                            let val2 = self.get_join_expr_value(expr2, row, tables, table_aliases)?;
-                            
+                            let val1 =
+                                self.get_join_expr_value(expr1, row, tables, table_aliases)?;
+                            let val2 =
+                                self.get_join_expr_value(expr2, row, tables, table_aliases)?;
+
                             // NULLIF returns NULL if val1 == val2, otherwise returns val1
                             if val1 == val2 {
                                 Ok(Value::Null)
@@ -3923,7 +4198,7 @@ impl QueryExecutor {
                         {
                             let str_val =
                                 self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Integer(s.len() as i64)),
                                 Value::Null => Ok(Value::Null),
@@ -3954,11 +4229,17 @@ impl QueryExecutor {
                         {
                             let str_val =
                                 self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            
-                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)) = &args.args[1]
+
+                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)) =
+                                &args.args[1]
                             {
-                                let start_val = self.get_join_expr_value(start_expr, row, tables, table_aliases)?;
-                                
+                                let start_val = self.get_join_expr_value(
+                                    start_expr,
+                                    row,
+                                    tables,
+                                    table_aliases,
+                                )?;
+
                                 match (&str_val, &start_val) {
                                     (Value::Text(s), Value::Integer(start)) => {
                                         // SQL uses 1-based indexing
@@ -3967,39 +4248,53 @@ impl QueryExecutor {
                                         } else {
                                             0
                                         };
-                                        
+
                                         if args.args.len() == 3 {
                                             // SUBSTRING with length
-                                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)) = &args.args[2]
+                                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(
+                                                len_expr,
+                                            )) = &args.args[2]
                                             {
-                                                let len_val = self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
-                                                
+                                                let len_val = self.get_join_expr_value(
+                                                    len_expr,
+                                                    row,
+                                                    tables,
+                                                    table_aliases,
+                                                )?;
+
                                                 if let Value::Integer(len) = len_val {
                                                     let length = len.max(0) as usize;
-                                                    let result: String = s.chars()
+                                                    let result: String = s
+                                                        .chars()
                                                         .skip(start_idx)
                                                         .take(length)
                                                         .collect();
                                                     Ok(Value::Text(result))
                                                 } else {
                                                     Err(YamlBaseError::Database {
-                                                        message: "SUBSTRING length must be an integer".to_string(),
+                                                        message:
+                                                            "SUBSTRING length must be an integer"
+                                                                .to_string(),
                                                     })
                                                 }
                                             } else {
                                                 Err(YamlBaseError::Database {
-                                                    message: "Invalid length argument for SUBSTRING".to_string(),
+                                                    message:
+                                                        "Invalid length argument for SUBSTRING"
+                                                            .to_string(),
                                                 })
                                             }
                                         } else {
                                             // SUBSTRING without length
-                                            let result: String = s.chars().skip(start_idx).collect();
+                                            let result: String =
+                                                s.chars().skip(start_idx).collect();
                                             Ok(Value::Text(result))
                                         }
                                     }
                                     (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                     _ => Err(YamlBaseError::Database {
-                                        message: "SUBSTRING requires string and integer arguments".to_string(),
+                                        message: "SUBSTRING requires string and integer arguments"
+                                            .to_string(),
                                     }),
                                 }
                             } else {
@@ -4027,11 +4322,12 @@ impl QueryExecutor {
                 if let FunctionArguments::List(args) = &func.args {
                     if !args.args.is_empty() {
                         let mut result = String::new();
-                        
+
                         for arg in &args.args {
                             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
-                                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
-                                
+                                let val =
+                                    self.get_join_expr_value(expr, row, tables, table_aliases)?;
+
                                 match val {
                                     Value::Text(s) => result.push_str(&s),
                                     Value::Integer(i) => result.push_str(&i.to_string()),
@@ -4047,7 +4343,7 @@ impl QueryExecutor {
                                 });
                             }
                         }
-                        
+
                         Ok(Value::Text(result))
                     } else {
                         Err(YamlBaseError::Database {
@@ -4069,10 +4365,13 @@ impl QueryExecutor {
                             FunctionArg::Unnamed(FunctionArgExpr::Expr(to_expr)),
                         ) = (&args.args[0], &args.args[1], &args.args[2])
                         {
-                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            let from_val = self.get_join_expr_value(from_expr, row, tables, table_aliases)?;
-                            let to_val = self.get_join_expr_value(to_expr, row, tables, table_aliases)?;
-                            
+                            let str_val =
+                                self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            let from_val =
+                                self.get_join_expr_value(from_expr, row, tables, table_aliases)?;
+                            let to_val =
+                                self.get_join_expr_value(to_expr, row, tables, table_aliases)?;
+
                             match (&str_val, &from_val, &to_val) {
                                 (Value::Text(s), Value::Text(from), Value::Text(to)) => {
                                     // Handle empty search string - return original string
@@ -4082,7 +4381,9 @@ impl QueryExecutor {
                                         Ok(Value::Text(s.replace(from, to)))
                                     }
                                 }
-                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => Ok(Value::Null),
+                                (Value::Null, _, _) | (_, Value::Null, _) | (_, _, Value::Null) => {
+                                    Ok(Value::Null)
+                                }
                                 _ => Err(YamlBaseError::Database {
                                     message: "REPLACE requires string arguments".to_string(),
                                 }),
@@ -6025,7 +6326,7 @@ mod tests {
         let stmt = parse_statement("SELECT 1");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(1));
-        
+
         // Test with string literal
         let stmt = parse_statement("SELECT 'hello'");
         let result = executor.execute(&stmt).await.unwrap();
@@ -6153,13 +6454,21 @@ mod tests {
         // Test CONCAT with columns
         let stmt = parse_statement("SELECT CONCAT('Product: ', name) FROM products");
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Text("Product: Laptop".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text("Product: Laptop".to_string())
+        );
         assert_eq!(result.rows[1][0], Value::Text("Product: Mouse".to_string()));
 
         // Test REPLACE on column
-        let stmt = parse_statement("SELECT REPLACE(description, 'laptop', 'notebook') FROM products WHERE id = 1");
+        let stmt = parse_statement(
+            "SELECT REPLACE(description, 'laptop', 'notebook') FROM products WHERE id = 1",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Text("High-performance notebook for professionals".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text("High-performance notebook for professionals".to_string())
+        );
     }
 
     #[tokio::test]
@@ -6210,9 +6519,14 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Text("Hello".to_string()));
 
         // Mixed types
-        let stmt = parse_statement("SELECT CONCAT('Value: ', 123, ' Price: ', 45.67, ' Available: ', true)");
+        let stmt = parse_statement(
+            "SELECT CONCAT('Value: ', 123, ' Price: ', 45.67, ' Available: ', true)",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Text("Value: 123 Price: 45.67 Available: true".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text("Value: 123 Price: 45.67 Available: true".to_string())
+        );
 
         // Empty strings
         let stmt = parse_statement("SELECT CONCAT('', 'Hello', '', 'World', '')");
@@ -6292,7 +6606,8 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(11));
 
-        let stmt = parse_statement("SELECT SUBSTRING(REPLACE('Hello World', 'World', 'Universe'), 7)");
+        let stmt =
+            parse_statement("SELECT SUBSTRING(REPLACE('Hello World', 'World', 'Universe'), 7)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("Universe".to_string()));
 
@@ -6300,9 +6615,14 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("HeLLo".to_string()));
 
-        let stmt = parse_statement("SELECT CONCAT('Length: ', LENGTH('test'), ', Upper: ', UPPER('test'))");
+        let stmt = parse_statement(
+            "SELECT CONCAT('Length: ', LENGTH('test'), ', Upper: ', UPPER('test'))",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        assert_eq!(result.rows[0][0], Value::Text("Length: 4, Upper: TEST".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text("Length: 4, Upper: TEST".to_string())
+        );
     }
 
     #[tokio::test]
@@ -6704,41 +7024,71 @@ mod tests {
                 create_column("name", crate::yaml::schema::SqlType::Varchar(50), false),
             ];
             let mut table = Table::new("case_test_users".to_string(), columns);
-            
-            table.insert_row(vec![Value::Integer(1), Value::Integer(25), Value::Text("Alice".to_string())]).unwrap();
-            table.insert_row(vec![Value::Integer(2), Value::Integer(15), Value::Text("Bob".to_string())]).unwrap();
-            table.insert_row(vec![Value::Integer(3), Value::Integer(10), Value::Text("Charlie".to_string())]).unwrap();
-            table.insert_row(vec![Value::Integer(4), Value::Integer(65), Value::Text("David".to_string())]).unwrap();
-            
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Integer(25),
+                    Value::Text("Alice".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Integer(15),
+                    Value::Text("Bob".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Integer(10),
+                    Value::Text("Charlie".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Integer(65),
+                    Value::Text("David".to_string()),
+                ])
+                .unwrap();
+
             db_write.add_table(table).unwrap();
         }
         let executor = create_test_executor_from_arc(db).await;
 
         // Test searched CASE (CASE WHEN)
-        let stmt = parse_statement("SELECT name, CASE WHEN age >= 65 THEN 'senior' WHEN age >= 18 THEN 'adult' WHEN age >= 13 THEN 'teen' ELSE 'child' END as category FROM case_test_users");
+        let stmt = parse_statement(
+            "SELECT name, CASE WHEN age >= 65 THEN 'senior' WHEN age >= 18 THEN 'adult' WHEN age >= 13 THEN 'teen' ELSE 'child' END as category FROM case_test_users",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns, vec!["name", "category"]);
         assert_eq!(result.rows.len(), 4);
-        
+
         assert_eq!(result.rows[0][1], Value::Text("adult".to_string()));
         assert_eq!(result.rows[1][1], Value::Text("teen".to_string()));
         assert_eq!(result.rows[2][1], Value::Text("child".to_string()));
         assert_eq!(result.rows[3][1], Value::Text("senior".to_string()));
 
         // Test simple CASE
-        let stmt = parse_statement("SELECT name, CASE age WHEN 25 THEN 'twenty-five' WHEN 15 THEN 'fifteen' ELSE 'other' END FROM case_test_users");
+        let stmt = parse_statement(
+            "SELECT name, CASE age WHEN 25 THEN 'twenty-five' WHEN 15 THEN 'fifteen' ELSE 'other' END FROM case_test_users",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows[0][1], Value::Text("twenty-five".to_string()));
         assert_eq!(result.rows[1][1], Value::Text("fifteen".to_string()));
         assert_eq!(result.rows[2][1], Value::Text("other".to_string()));
         assert_eq!(result.rows[3][1], Value::Text("other".to_string()));
 
         // Test CASE without ELSE (returns NULL)
-        let stmt = parse_statement("SELECT name, CASE WHEN age = 100 THEN 'centenarian' END FROM case_test_users");
+        let stmt = parse_statement(
+            "SELECT name, CASE WHEN age = 100 THEN 'centenarian' END FROM case_test_users",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows[0][1], Value::Null);
         assert_eq!(result.rows[1][1], Value::Null);
         assert_eq!(result.rows[2][1], Value::Null);
@@ -6753,20 +7103,23 @@ mod tests {
         // Test searched CASE without FROM
         let stmt = parse_statement("SELECT CASE WHEN 1 > 0 THEN 'positive' ELSE 'negative' END");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("positive".to_string()));
 
         // Test simple CASE without FROM
-        let stmt = parse_statement("SELECT CASE 5 WHEN 1 THEN 'one' WHEN 5 THEN 'five' ELSE 'other' END");
+        let stmt =
+            parse_statement("SELECT CASE 5 WHEN 1 THEN 'one' WHEN 5 THEN 'five' ELSE 'other' END");
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows[0][0], Value::Text("five".to_string()));
 
         // Test nested CASE
-        let stmt = parse_statement("SELECT CASE WHEN 10 > 5 THEN CASE WHEN 20 > 10 THEN 'both true' ELSE 'first true' END ELSE 'false' END");
+        let stmt = parse_statement(
+            "SELECT CASE WHEN 10 > 5 THEN CASE WHEN 20 > 10 THEN 'both true' ELSE 'first true' END ELSE 'false' END",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows[0][0], Value::Text("both true".to_string()));
     }
 
@@ -6806,44 +7159,54 @@ mod tests {
                 },
             ];
             let mut table = Table::new("users_with_nulls".to_string(), columns);
-            
+
             // Insert test data with various NULL values
-            table.insert_row(vec![
-                Value::Integer(1),
-                Value::Text("Alice".to_string()),
-                Value::Null,
-                Value::Text("active".to_string()),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(2),
-                Value::Text("Bob".to_string()),
-                Value::Text("Bobby".to_string()),
-                Value::Null,
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(3),
-                Value::Null,
-                Value::Text("Chuck".to_string()),
-                Value::Text("inactive".to_string()),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(4),
-                Value::Null,
-                Value::Null,
-                Value::Null,
-            ]).unwrap();
-            
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Alice".to_string()),
+                    Value::Null,
+                    Value::Text("active".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Bob".to_string()),
+                    Value::Text("Bobby".to_string()),
+                    Value::Null,
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Null,
+                    Value::Text("Chuck".to_string()),
+                    Value::Text("inactive".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                ])
+                .unwrap();
+
             db_write.add_table(table).unwrap();
         }
         let executor = create_test_executor_from_arc(db).await;
 
         // Test COALESCE with table rows
-        let stmt = parse_statement("SELECT id, COALESCE(name, nickname, 'Unknown') as display_name FROM users_with_nulls");
+        let stmt = parse_statement(
+            "SELECT id, COALESCE(name, nickname, 'Unknown') as display_name FROM users_with_nulls",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns, vec!["id", "display_name"]);
         assert_eq!(result.rows.len(), 4);
-        
+
         assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
         assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
         assert_eq!(result.rows[2][1], Value::Text("Chuck".to_string()));
@@ -6855,12 +7218,14 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Text("default".to_string()));
 
         // Test NULLIF with table rows
-        let stmt = parse_statement("SELECT id, NULLIF(status, 'inactive') as active_status FROM users_with_nulls");
+        let stmt = parse_statement(
+            "SELECT id, NULLIF(status, 'inactive') as active_status FROM users_with_nulls",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.columns, vec!["id", "active_status"]);
         assert_eq!(result.rows.len(), 4);
-        
+
         assert_eq!(result.rows[0][1], Value::Text("active".to_string()));
         assert_eq!(result.rows[1][1], Value::Null);
         assert_eq!(result.rows[2][1], Value::Null); // "inactive" becomes NULL
@@ -6876,9 +7241,11 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Integer(5));
 
         // Test COALESCE with NULLIF
-        let stmt = parse_statement("SELECT id, COALESCE(NULLIF(nickname, ''), name, 'Guest') as display FROM users_with_nulls");
+        let stmt = parse_statement(
+            "SELECT id, COALESCE(NULLIF(nickname, ''), name, 'Guest') as display FROM users_with_nulls",
+        );
         let result = executor.execute(&stmt).await.unwrap();
-        
+
         assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
         assert_eq!(result.rows[1][1], Value::Text("Bobby".to_string()));
         assert_eq!(result.rows[2][1], Value::Text("Chuck".to_string()));
@@ -7210,21 +7577,21 @@ mod tests {
     async fn test_math_functions_debug() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test if VERSION works (it should)
         let stmt = parse_statement("SELECT VERSION()");
         let result = executor.execute(&stmt).await.unwrap();
         assert!(matches!(result.rows[0][0], Value::Text(ref s) if s.contains("yamlbase")));
-        
-        // Test if LENGTH works (it should)  
+
+        // Test if LENGTH works (it should)
         let stmt = parse_statement("SELECT LENGTH('test')");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(4));
-        
+
         // Now test ROUND
         let stmt = parse_statement("SELECT ROUND(3.14)");
         let result = executor.execute(&stmt).await;
-        
+
         match result {
             Ok(res) => {
                 assert_eq!(res.rows[0][0], Value::Double(3.0));
@@ -7327,5 +7694,401 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         // In Rust, i64::MIN.abs() would panic in debug mode, but we handle it with wrapping_abs
         assert_eq!(result.rows[0][0], Value::Integer(i64::MIN.wrapping_abs()));
+    }
+
+    #[tokio::test]
+    async fn test_distinct() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create test table
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Text,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "department".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Text,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut table = Table::new("test_table".to_string(), columns);
+
+        // Add test data with duplicates
+        table
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Alice".to_string()),
+                Value::Text("Sales".to_string()),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Bob".to_string()),
+                Value::Text("Engineering".to_string()),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Text("Charlie".to_string()),
+                Value::Text("Sales".to_string()),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(4),
+                Value::Text("David".to_string()),
+                Value::Text("Engineering".to_string()),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(5),
+                Value::Text("Eve".to_string()),
+                Value::Text("Sales".to_string()),
+            ])
+            .unwrap();
+
+        db.add_table(table).unwrap();
+        let db = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test DISTINCT on single column
+        let stmt = parse_statement("SELECT DISTINCT department FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // Only Sales and Engineering
+
+        let departments: Vec<String> = result
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                Value::Text(s) => s.clone(),
+                _ => panic!("Expected text value"),
+            })
+            .collect();
+        assert!(departments.contains(&"Sales".to_string()));
+        assert!(departments.contains(&"Engineering".to_string()));
+
+        // Test DISTINCT on all columns
+        let stmt = parse_statement("SELECT DISTINCT * FROM test_table");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 5); // All rows are unique
+
+        // Test DISTINCT with ORDER BY
+        let stmt =
+            parse_statement("SELECT DISTINCT department FROM test_table ORDER BY department");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Text("Engineering".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Sales".to_string()));
+
+        // Test DISTINCT with WHERE
+        let stmt =
+            parse_statement("SELECT DISTINCT name FROM test_table WHERE department = 'Sales'");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3); // Alice, Charlie, Eve
+    }
+
+    #[tokio::test]
+    async fn test_distinct_with_multiple_columns() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create orders table
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "customer".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Text,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "product".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Text,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "quantity".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut table = Table::new("orders".to_string(), columns);
+
+        // Add test data with duplicates
+        table
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Alice".to_string()),
+                Value::Text("Widget".to_string()),
+                Value::Integer(5),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Alice".to_string()),
+                Value::Text("Widget".to_string()),
+                Value::Integer(5),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Text("Alice".to_string()),
+                Value::Text("Gadget".to_string()),
+                Value::Integer(3),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(4),
+                Value::Text("Bob".to_string()),
+                Value::Text("Widget".to_string()),
+                Value::Integer(5),
+            ])
+            .unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(5),
+                Value::Text("Bob".to_string()),
+                Value::Text("Widget".to_string()),
+                Value::Integer(2),
+            ])
+            .unwrap();
+
+        db.add_table(table).unwrap();
+        let db = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test DISTINCT on multiple columns
+        let stmt = parse_statement("SELECT DISTINCT customer, product FROM orders");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3); // (Alice, Widget), (Alice, Gadget), (Bob, Widget)
+
+        // Test DISTINCT with all columns having duplicates
+        let stmt = parse_statement("SELECT DISTINCT customer, product, quantity FROM orders");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 4); // One duplicate row (Alice, Widget, 5)
+    }
+
+    #[tokio::test]
+    async fn test_between_operator() {
+        let mut db = Database::new("test_db".to_string());
+
+        // Create test table
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "value".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "price".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Double,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "created_date".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Date,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut table = Table::new("test_data".to_string(), columns);
+
+        // Add test data
+        table
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Integer(10),
+                Value::Double(99.99),
+                Value::Text("apple".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Integer(20),
+                Value::Double(149.99),
+                Value::Text("banana".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 2, 15).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Integer(30),
+                Value::Double(199.99),
+                Value::Text("cherry".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 3, 20).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(4),
+                Value::Integer(40),
+                Value::Double(249.99),
+                Value::Text("date".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 4, 10).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(5),
+                Value::Integer(50),
+                Value::Double(299.99),
+                Value::Text("elderberry".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 5, 5).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(6),
+                Value::Null,
+                Value::Double(399.99),
+                Value::Text("fig".to_string()),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 6, 1).unwrap()),
+            ])
+            .unwrap();
+
+        db.add_table(table).unwrap();
+        let db = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test basic integer BETWEEN
+        let stmt =
+            parse_statement("SELECT * FROM test_data WHERE value BETWEEN 20 AND 40 ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3); // IDs 2, 3, 4
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+        assert_eq!(result.rows[1][0], Value::Integer(3));
+        assert_eq!(result.rows[2][0], Value::Integer(4));
+
+        // Test NOT BETWEEN
+        let stmt = parse_statement(
+            "SELECT * FROM test_data WHERE value NOT BETWEEN 20 AND 40 ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 1, 5 (not 6 because it's NULL)
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[1][0], Value::Integer(5));
+
+        // Test BETWEEN with double values
+        let stmt = parse_statement(
+            "SELECT * FROM test_data WHERE price BETWEEN 150.0 AND 250.0 ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 2, 3 (249.99 < 250.0)
+
+        // Test BETWEEN with double values - inclusive upper bound
+        let stmt = parse_statement(
+            "SELECT * FROM test_data WHERE price BETWEEN 150.0 AND 249.99 ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 3, 4 (149.99 < 150.0)
+
+        // Test text BETWEEN
+        let stmt =
+            parse_statement("SELECT * FROM test_data WHERE name BETWEEN 'b' AND 'd' ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // banana, cherry
+        assert_eq!(result.rows[0][3], Value::Text("banana".to_string()));
+        assert_eq!(result.rows[1][3], Value::Text("cherry".to_string()));
+
+        // Test date BETWEEN
+        let stmt = parse_statement(
+            "SELECT * FROM test_data WHERE created_date BETWEEN '2024-02-01' AND '2024-04-30' ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3); // IDs 2, 3, 4
+
+        // Test NULL handling - NULL values should not match
+        let stmt = parse_statement("SELECT * FROM test_data WHERE value BETWEEN 0 AND 100");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 5); // Should not include row with NULL value
+
+        // Test boundary inclusiveness
+        let stmt = parse_statement("SELECT * FROM test_data WHERE value BETWEEN 20 AND 20");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1); // ID 2
+        assert_eq!(result.rows[0][1], Value::Integer(20));
     }
 }
