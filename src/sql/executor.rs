@@ -1,7 +1,12 @@
 use chrono::{self, Datelike};
 use regex::Regex;
 use rust_decimal::prelude::*;
-use sqlparser::ast::*;
+use sqlparser::ast::{
+    BinaryOperator, DataType, DateTimeField, DuplicateTreatment, Expr, Function, FunctionArg,
+    FunctionArgExpr, FunctionArguments, GroupByExpr, JoinConstraint, JoinOperator, OrderByExpr,
+    Query, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins, UnaryOperator,
+    With,
+};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -26,7 +31,7 @@ enum ProjectionItem {
     // A constant expression with its computed value and column alias
     Constant(String, Value),
     // An expression that needs to be evaluated per row
-    Expression(String, Expr),
+    Expression(String, Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -385,6 +390,15 @@ impl QueryExecutor {
                     _ => Ok(Value::Text(value.clone())),
                 }
             }
+            Expr::Case {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => {
+                // CASE WHEN in SELECT without FROM
+                self.evaluate_case_when_constant(operand.as_deref(), conditions, results, else_result.as_deref())
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Only constant expressions are supported in SELECT without FROM".to_string(),
             )),
@@ -440,6 +454,37 @@ impl QueryExecutor {
                     message: "Cannot divide non-numeric values".to_string(),
                 }),
             },
+            // Comparison operators
+            BinaryOperator::Eq => Ok(Value::Boolean(left == right)),
+            BinaryOperator::NotEq => Ok(Value::Boolean(left != right)),
+            BinaryOperator::Lt => {
+                if let Some(ord) = left.compare(right) {
+                    Ok(Value::Boolean(ord.is_lt()))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            BinaryOperator::LtEq => {
+                if let Some(ord) = left.compare(right) {
+                    Ok(Value::Boolean(ord.is_le()))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            BinaryOperator::Gt => {
+                if let Some(ord) = left.compare(right) {
+                    Ok(Value::Boolean(ord.is_gt()))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            BinaryOperator::GtEq => {
+                if let Some(ord) = left.compare(right) {
+                    Ok(Value::Boolean(ord.is_ge()))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Binary operator not supported in constant expressions".to_string(),
             )),
@@ -623,7 +668,10 @@ impl QueryExecutor {
                             if let Expr::Function(_) = expr {
                                 let col_name = format!("column_{}", column_counter);
                                 column_counter += 1;
-                                columns.push(ProjectionItem::Expression(col_name, expr.clone()));
+                                columns.push(ProjectionItem::Expression(
+                                    col_name,
+                                    Box::new(expr.clone()),
+                                ));
                             } else {
                                 // This is a constant expression (like SELECT 1, SELECT 'hello', etc.)
                                 match self.evaluate_constant_expr(expr) {
@@ -636,7 +684,10 @@ impl QueryExecutor {
                                         // If constant evaluation fails, treat it as an expression
                                         let col_name = format!("column_{}", column_counter);
                                         column_counter += 1;
-                                        columns.push(ProjectionItem::Expression(col_name, expr.clone()));
+                                        columns.push(ProjectionItem::Expression(
+                                            col_name,
+                                            Box::new(expr.clone()),
+                                        ));
                                     }
                                 }
                             }
@@ -658,16 +709,25 @@ impl QueryExecutor {
                         _ => {
                             // Check if this is a function that needs row context
                             if let Expr::Function(_) = expr {
-                                columns.push(ProjectionItem::Expression(alias.value.clone(), expr.clone()));
+                                columns.push(ProjectionItem::Expression(
+                                    alias.value.clone(),
+                                    Box::new(expr.clone()),
+                                ));
                             } else {
                                 // Constant expression with alias
                                 match self.evaluate_constant_expr(expr) {
                                     Ok(value) => {
-                                        columns.push(ProjectionItem::Constant(alias.value.clone(), value));
+                                        columns.push(ProjectionItem::Constant(
+                                            alias.value.clone(),
+                                            value,
+                                        ));
                                     }
                                     Err(_) => {
                                         // If constant evaluation fails, treat it as an expression
-                                        columns.push(ProjectionItem::Expression(alias.value.clone(), expr.clone()));
+                                        columns.push(ProjectionItem::Expression(
+                                            alias.value.clone(),
+                                            Box::new(expr.clone()),
+                                        ));
                                     }
                                 }
                             }
@@ -945,7 +1005,10 @@ impl QueryExecutor {
                 // For other operators, evaluate the values first
                 let left_val = self.get_expr_value(left, row, table)?;
                 let right_val = self.get_expr_value(right, row, table)?;
-                debug!("Comparing values: left={:?}, right={:?}, op={:?}", left_val, right_val, op);
+                debug!(
+                    "Comparing values: left={:?}, right={:?}, op={:?}",
+                    left_val, right_val, op
+                );
 
                 match op {
                     BinaryOperator::Eq => Ok(left_val == right_val),
@@ -1062,6 +1125,15 @@ impl QueryExecutor {
                     }),
                 }
             }
+            Expr::Case {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => {
+                // CASE WHEN expression
+                self.evaluate_case_when(operand.as_deref(), conditions, results, else_result.as_deref(), row, table)
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
                 expr
@@ -1111,7 +1183,7 @@ impl QueryExecutor {
                         projected_row.push(value.clone());
                     }
                     ProjectionItem::Expression(_, expr) => {
-                        let value = self.get_expr_value(expr, row, table)?;
+                        let value = self.get_expr_value(expr.as_ref(), row, table)?;
                         projected_row.push(value);
                     }
                 }
@@ -1234,9 +1306,10 @@ impl QueryExecutor {
             "UPPER" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
                             let str_val = self.get_expr_value(str_expr, row, table)?;
-                            
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
                                 Value::Null => Ok(Value::Null),
@@ -1263,9 +1336,10 @@ impl QueryExecutor {
             "LOWER" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
                             let str_val = self.get_expr_value(str_expr, row, table)?;
-                            
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
                                 Value::Null => Ok(Value::Null),
@@ -1292,9 +1366,10 @@ impl QueryExecutor {
             "TRIM" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
                             let str_val = self.get_expr_value(str_expr, row, table)?;
-                            
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
                                 Value::Null => Ok(Value::Null),
@@ -1315,6 +1390,62 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "TRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            "COALESCE" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    // COALESCE returns the first non-NULL value
+                    for arg in &args.args {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
+                            let val = self.get_expr_value(expr, row, table)?;
+                            if !matches!(val, Value::Null) {
+                                return Ok(val);
+                            }
+                        } else {
+                            return Err(YamlBaseError::Database {
+                                message: "Invalid argument for COALESCE".to_string(),
+                            });
+                        }
+                    }
+                    // If all values are NULL, return NULL
+                    Ok(Value::Null)
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "COALESCE requires arguments".to_string(),
+                    })
+                }
+            }
+            "NULLIF" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr1)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr2)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let val1 = self.get_expr_value(expr1, row, table)?;
+                            let val2 = self.get_expr_value(expr2, row, table)?;
+                            
+                            // NULLIF returns NULL if val1 == val2, otherwise returns val1
+                            if val1 == val2 {
+                                Ok(Value::Null)
+                            } else {
+                                Ok(val1)
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for NULLIF".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "NULLIF requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "NULLIF requires arguments".to_string(),
                     })
                 }
             }
@@ -1471,7 +1602,8 @@ impl QueryExecutor {
                 // For SELECT without FROM, handle string literals
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
@@ -1500,7 +1632,8 @@ impl QueryExecutor {
                 // For SELECT without FROM, handle string literals
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
@@ -1529,7 +1662,8 @@ impl QueryExecutor {
                 // For SELECT without FROM, handle string literals
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
                             let str_val = self.evaluate_constant_expr(str_expr)?;
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
@@ -1552,6 +1686,62 @@ impl QueryExecutor {
                     Err(YamlBaseError::NotImplemented(
                         "TRIM function requires arguments".to_string(),
                     ))
+                }
+            }
+            "COALESCE" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    // COALESCE returns the first non-NULL value
+                    for arg in &args.args {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
+                            let val = self.evaluate_constant_expr(expr)?;
+                            if !matches!(val, Value::Null) {
+                                return Ok(val);
+                            }
+                        } else {
+                            return Err(YamlBaseError::Database {
+                                message: "Invalid argument for COALESCE".to_string(),
+                            });
+                        }
+                    }
+                    // If all values are NULL, return NULL
+                    Ok(Value::Null)
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "COALESCE requires arguments".to_string(),
+                    })
+                }
+            }
+            "NULLIF" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr1)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr2)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let val1 = self.evaluate_constant_expr(expr1)?;
+                            let val2 = self.evaluate_constant_expr(expr2)?;
+                            
+                            // NULLIF returns NULL if val1 == val2, otherwise returns val1
+                            if val1 == val2 {
+                                Ok(Value::Null)
+                            } else {
+                                Ok(val1)
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for NULLIF".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "NULLIF requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "NULLIF requires arguments".to_string(),
+                    })
                 }
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
@@ -1618,7 +1808,22 @@ impl QueryExecutor {
             .filter_rows(table, table_name, &select.selection)
             .await?;
 
-        // Process aggregate functions
+        // Check if we have GROUP BY
+        match &select.group_by {
+            GroupByExpr::Expressions(exprs, _) if !exprs.is_empty() => {
+                return self
+                    .execute_group_by_aggregate(select, &select.group_by, &filtered_rows, table)
+                    .await;
+            }
+            GroupByExpr::All(_) => {
+                return Err(YamlBaseError::NotImplemented(
+                    "GROUP BY ALL is not supported yet".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        // Simple aggregate without GROUP BY (existing logic)
         let mut columns = Vec::new();
         let mut row_values = Vec::new();
 
@@ -1663,6 +1868,385 @@ impl QueryExecutor {
         })
     }
 
+    async fn execute_group_by_aggregate(
+        &self,
+        select: &Select,
+        group_by: &GroupByExpr,
+        filtered_rows: &[&Vec<Value>],
+        table: &Table,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing GROUP BY aggregate");
+
+        // Extract GROUP BY expressions
+        let group_by_exprs = match group_by {
+            GroupByExpr::Expressions(exprs, _) => exprs,
+            GroupByExpr::All(_) => {
+                return Err(YamlBaseError::NotImplemented(
+                    "GROUP BY ALL is not supported yet".to_string(),
+                ));
+            }
+        };
+
+        // Step 1: Evaluate GROUP BY expressions for each row to create groups
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<&Vec<Value>>> =
+            std::collections::HashMap::new();
+
+        for row in filtered_rows {
+            let mut group_key = Vec::new();
+            for expr in group_by_exprs {
+                let value = self.get_expr_value(expr, row, table)?;
+                group_key.push(value);
+            }
+            groups.entry(group_key).or_default().push(row);
+        }
+
+        // Step 2: Process each group
+        let mut result_rows = Vec::new();
+        let mut columns = Vec::new();
+        let mut column_types = Vec::new();
+        let mut first_row = true;
+
+        for (group_values, group_rows) in groups {
+            let mut row_values = Vec::new();
+
+            // Process each projection item
+            for item in select.projection.iter() {
+                match item {
+                    SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                        let (col_name, col_type, value) = self.evaluate_group_by_expr(
+                            expr,
+                            &group_rows,
+                            &group_values,
+                            group_by_exprs,
+                            table,
+                        )?;
+
+                        // Collect column metadata on first row
+                        if first_row {
+                            match item {
+                                SelectItem::ExprWithAlias { alias, .. } => {
+                                    columns.push(alias.value.clone());
+                                }
+                                _ => {
+                                    columns.push(col_name);
+                                }
+                            }
+                            column_types.push(col_type);
+                        }
+
+                        row_values.push(value);
+                    }
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            "Complex projections in GROUP BY queries are not supported".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            // Apply HAVING clause if present
+            if let Some(having_expr) = &select.having {
+                // Create a synthetic row with aggregate values for HAVING evaluation
+                let having_result = self.evaluate_having_expr(
+                    having_expr,
+                    &group_rows,
+                    &group_values,
+                    group_by_exprs,
+                    table,
+                )?;
+
+                match having_result {
+                    Value::Boolean(true) => {
+                        result_rows.push(row_values);
+                    }
+                    Value::Boolean(false) => {
+                        // Skip this group
+                    }
+                    _ => {
+                        return Err(YamlBaseError::Database {
+                            message: "HAVING clause must evaluate to boolean".to_string(),
+                        });
+                    }
+                }
+            } else {
+                result_rows.push(row_values);
+            }
+
+            first_row = false;
+        }
+
+        Ok(QueryResult {
+            columns,
+            column_types,
+            rows: result_rows,
+        })
+    }
+
+    fn evaluate_group_by_expr(
+        &self,
+        expr: &Expr,
+        group_rows: &[&Vec<Value>],
+        group_values: &[Value],
+        group_by_exprs: &[Expr],
+        table: &Table,
+    ) -> crate::Result<(String, crate::yaml::schema::SqlType, Value)> {
+        match expr {
+            // If this is one of the GROUP BY expressions, return the group value
+            _ if self.is_group_by_expr(expr, group_by_exprs) => {
+                let idx = self.get_group_by_expr_index(expr, group_by_exprs).unwrap();
+                let value = group_values[idx].clone();
+                let col_name = self.expr_to_string(expr);
+                let col_type = self.infer_value_type(&value);
+                Ok((col_name, col_type, value))
+            }
+            // If this is an aggregate function, evaluate it over the group
+            Expr::Function(func) if self.is_aggregate_function(&func.name.0[0].value) => {
+                let (col_name, value) = self.evaluate_aggregate_expr(expr, group_rows, table, 0)?;
+                let col_type = self.get_aggregate_result_type(expr);
+                Ok((col_name, col_type, value))
+            }
+            // Regular column references in GROUP BY context
+            Expr::Identifier(ident) => {
+                // This should be one of the GROUP BY columns
+                if self.is_group_by_expr(expr, group_by_exprs) {
+                    let idx = self.get_group_by_expr_index(expr, group_by_exprs).unwrap();
+                    let value = group_values[idx].clone();
+                    let col_type = self.infer_value_type(&value);
+                    Ok((ident.value.clone(), col_type, value))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!(
+                            "Column '{}' must appear in GROUP BY clause or be used in an aggregate function",
+                            ident.value
+                        ),
+                    })
+                }
+            }
+            _ => Err(YamlBaseError::NotImplemented(
+                "This expression type is not supported in GROUP BY queries".to_string(),
+            )),
+        }
+    }
+
+    fn evaluate_having_expr(
+        &self,
+        expr: &Expr,
+        group_rows: &[&Vec<Value>],
+        _group_values: &[Value],
+        _group_by_exprs: &[Expr],
+        table: &Table,
+    ) -> crate::Result<Value> {
+        match expr {
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_having_expr(
+                    left,
+                    group_rows,
+                    _group_values,
+                    _group_by_exprs,
+                    table,
+                )?;
+                let right_val = self.evaluate_having_expr(
+                    right,
+                    group_rows,
+                    _group_values,
+                    _group_by_exprs,
+                    table,
+                )?;
+                self.evaluate_comparison(&left_val, op, &right_val)
+            }
+            Expr::Function(func) if self.is_aggregate_function(&func.name.0[0].value) => {
+                let (_, value) = self.evaluate_aggregate_expr(expr, group_rows, table, 0)?;
+                Ok(value)
+            }
+            Expr::Value(val) => self.sql_value_to_db_value(val),
+            _ => Err(YamlBaseError::NotImplemented(
+                "This expression type is not supported in HAVING clause".to_string(),
+            )),
+        }
+    }
+
+    fn is_group_by_expr(&self, expr: &Expr, group_by_exprs: &[Expr]) -> bool {
+        group_by_exprs.iter().any(|gbe| self.exprs_equal(expr, gbe))
+    }
+
+    fn get_group_by_expr_index(&self, expr: &Expr, group_by_exprs: &[Expr]) -> Option<usize> {
+        group_by_exprs
+            .iter()
+            .position(|gbe| self.exprs_equal(expr, gbe))
+    }
+
+    fn exprs_equal(&self, expr1: &Expr, expr2: &Expr) -> bool {
+        // Simple expression equality check - can be enhanced
+        match (expr1, expr2) {
+            (Expr::Identifier(id1), Expr::Identifier(id2)) => id1.value == id2.value,
+            _ => false,
+        }
+    }
+
+    fn expr_to_string(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::Identifier(ident) => ident.value.clone(),
+            Expr::Function(func) => func.name.0[0].value.clone(),
+            _ => "expr".to_string(),
+        }
+    }
+
+    fn infer_value_type(&self, value: &Value) -> crate::yaml::schema::SqlType {
+        match value {
+            Value::Integer(_) => crate::yaml::schema::SqlType::BigInt,
+            Value::Float(_) => crate::yaml::schema::SqlType::Float,
+            Value::Double(_) => crate::yaml::schema::SqlType::Double,
+            Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2),
+            Value::Text(_) => crate::yaml::schema::SqlType::Text,
+            Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
+            Value::Date(_) => crate::yaml::schema::SqlType::Date,
+            Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
+            Value::Time(_) => crate::yaml::schema::SqlType::Time,
+            Value::Uuid(_) => crate::yaml::schema::SqlType::Text, // UUIDs as text
+            Value::Json(_) => crate::yaml::schema::SqlType::Json,
+            Value::Null => crate::yaml::schema::SqlType::Text,
+        }
+    }
+
+    fn is_aggregate_function(&self, func_name: &str) -> bool {
+        matches!(
+            func_name.to_uppercase().as_str(),
+            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+        )
+    }
+
+    fn evaluate_case_when(
+        &self,
+        operand: Option<&Expr>,
+        conditions: &[Expr],
+        results: &[Expr],
+        else_result: Option<&Expr>,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<Value> {
+        // Handle simple CASE (with operand) vs searched CASE (without operand)
+        if let Some(operand_expr) = operand {
+            // Simple CASE: CASE expr WHEN val1 THEN result1 WHEN val2 THEN result2 ... END
+            let operand_value = self.get_expr_value(operand_expr, row, table)?;
+            
+            for (condition, result) in conditions.iter().zip(results.iter()) {
+                let condition_value = self.get_expr_value(condition, row, table)?;
+                if operand_value == condition_value {
+                    return self.get_expr_value(result, row, table);
+                }
+            }
+        } else {
+            // Searched CASE: CASE WHEN condition1 THEN result1 WHEN condition2 THEN result2 ... END
+            for (condition, result) in conditions.iter().zip(results.iter()) {
+                let condition_result = self.evaluate_expr(condition, row, table)?;
+                if condition_result {
+                    return self.get_expr_value(result, row, table);
+                }
+            }
+        }
+        
+        // If no conditions matched, return ELSE result or NULL
+        if let Some(else_expr) = else_result {
+            self.get_expr_value(else_expr, row, table)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+
+    fn evaluate_case_when_constant(
+        &self,
+        operand: Option<&Expr>,
+        conditions: &[Expr],
+        results: &[Expr],
+        else_result: Option<&Expr>,
+    ) -> crate::Result<Value> {
+        // Handle simple CASE (with operand) vs searched CASE (without operand) for constant expressions
+        if let Some(operand_expr) = operand {
+            // Simple CASE: CASE expr WHEN val1 THEN result1 WHEN val2 THEN result2 ... END
+            let operand_value = self.evaluate_constant_expr(operand_expr)?;
+            
+            for (condition, result) in conditions.iter().zip(results.iter()) {
+                let condition_value = self.evaluate_constant_expr(condition)?;
+                if operand_value == condition_value {
+                    return self.evaluate_constant_expr(result);
+                }
+            }
+        } else {
+            // Searched CASE: CASE WHEN condition1 THEN result1 WHEN condition2 THEN result2 ... END
+            for (condition, result) in conditions.iter().zip(results.iter()) {
+                let condition_result = self.evaluate_constant_expr_as_bool(condition)?;
+                if condition_result {
+                    return self.evaluate_constant_expr(result);
+                }
+            }
+        }
+        
+        // If no conditions matched, return ELSE result or NULL
+        if let Some(else_expr) = else_result {
+            self.evaluate_constant_expr(else_expr)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+
+    fn evaluate_constant_expr_as_bool(&self, expr: &Expr) -> crate::Result<bool> {
+        let value = self.evaluate_constant_expr(expr)?;
+        match value {
+            Value::Boolean(b) => Ok(b),
+            Value::Null => Ok(false),
+            _ => Err(YamlBaseError::Database {
+                message: "CASE WHEN condition must evaluate to boolean".to_string(),
+            }),
+        }
+    }
+
+    fn evaluate_comparison(
+        &self,
+        left_val: &Value,
+        op: &BinaryOperator,
+        right_val: &Value,
+    ) -> crate::Result<Value> {
+        let result = match op {
+            BinaryOperator::Eq => left_val == right_val,
+            BinaryOperator::NotEq => left_val != right_val,
+            BinaryOperator::Lt => {
+                if let Some(ord) = left_val.compare(right_val) {
+                    ord.is_lt()
+                } else {
+                    false
+                }
+            }
+            BinaryOperator::LtEq => {
+                if let Some(ord) = left_val.compare(right_val) {
+                    ord.is_le()
+                } else {
+                    false
+                }
+            }
+            BinaryOperator::Gt => {
+                if let Some(ord) = left_val.compare(right_val) {
+                    ord.is_gt()
+                } else {
+                    false
+                }
+            }
+            BinaryOperator::GtEq => {
+                if let Some(ord) = left_val.compare(right_val) {
+                    ord.is_ge()
+                } else {
+                    false
+                }
+            }
+            _ => {
+                return Err(YamlBaseError::NotImplemented(format!(
+                    "Binary operator {:?} not supported in HAVING",
+                    op
+                )));
+            }
+        };
+        Ok(Value::Boolean(result))
+    }
+
     fn get_aggregate_result_type(&self, expr: &Expr) -> crate::yaml::schema::SqlType {
         match expr {
             Expr::Function(func) => {
@@ -1675,7 +2259,7 @@ impl QueryExecutor {
 
                 match func_name.as_str() {
                     "COUNT" => crate::yaml::schema::SqlType::BigInt, // COUNT returns i64
-                    "SUM" => crate::yaml::schema::SqlType::Text, // We return as formatted text for monetary values
+                    "SUM" => crate::yaml::schema::SqlType::Double,   // SUM returns double
                     "AVG" => crate::yaml::schema::SqlType::Double,
                     "MIN" | "MAX" => crate::yaml::schema::SqlType::Text, // Depends on input type, default to text
                     _ => crate::yaml::schema::SqlType::Text,
@@ -1770,7 +2354,31 @@ impl QueryExecutor {
                                 ));
                             }
                         };
-                        Ok((func_name.clone(), Value::Integer(count)))
+                        // Generate proper column name
+                        let col_name = match &func.args {
+                            FunctionArguments::List(args) if !args.args.is_empty() => {
+                                match &args.args[0] {
+                                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                                        "COUNT(*)".to_string()
+                                    }
+                                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                        if args
+                                            .duplicate_treatment
+                                            .as_ref()
+                                            .map(|dt| matches!(dt, DuplicateTreatment::Distinct))
+                                            .unwrap_or(false)
+                                        {
+                                            format!("COUNT(DISTINCT {})", self.expr_to_string(expr))
+                                        } else {
+                                            format!("COUNT({})", self.expr_to_string(expr))
+                                        }
+                                    }
+                                    _ => func_name.clone(),
+                                }
+                            }
+                            _ => func_name.clone(),
+                        };
+                        Ok((col_name, Value::Integer(count)))
                     }
                     "SUM" => {
                         match &func.args {
@@ -1797,8 +2405,10 @@ impl QueryExecutor {
                                                 }
                                             }
                                         }
-                                        // Return as string with 2 decimal places for monetary values
-                                        Ok((func_name.clone(), Value::Text(format!("{:.2}", sum))))
+                                        // Return as Double, not Text
+                                        let col_name =
+                                            format!("SUM({})", self.expr_to_string(expr));
+                                        Ok((col_name, Value::Double(sum)))
                                     }
                                     _ => Err(YamlBaseError::NotImplemented(
                                         "Unsupported SUM argument".to_string(),
@@ -1848,7 +2458,9 @@ impl QueryExecutor {
                                         }
 
                                         let avg = if count > 0 { sum / count as f64 } else { 0.0 };
-                                        Ok((func_name.clone(), Value::Double(avg)))
+                                        let col_name =
+                                            format!("AVG({})", self.expr_to_string(expr));
+                                        Ok((col_name, Value::Double(avg)))
                                     }
                                     _ => Err(YamlBaseError::NotImplemented(
                                         "Unsupported AVG argument".to_string(),
@@ -1890,7 +2502,9 @@ impl QueryExecutor {
                                             }
                                         }
 
-                                        Ok((func_name.clone(), min_value.unwrap_or(Value::Null)))
+                                        let col_name =
+                                            format!("MIN({})", self.expr_to_string(expr));
+                                        Ok((col_name, min_value.unwrap_or(Value::Null)))
                                     }
                                     _ => Err(YamlBaseError::NotImplemented(
                                         "Unsupported MIN argument".to_string(),
@@ -1932,7 +2546,9 @@ impl QueryExecutor {
                                             }
                                         }
 
-                                        Ok((func_name.clone(), max_value.unwrap_or(Value::Null)))
+                                        let col_name =
+                                            format!("MAX({})", self.expr_to_string(expr));
+                                        Ok((col_name, max_value.unwrap_or(Value::Null)))
                                     }
                                     _ => Err(YamlBaseError::NotImplemented(
                                         "Unsupported MAX argument".to_string(),
@@ -2175,9 +2791,11 @@ impl QueryExecutor {
             "UPPER" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
-                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
+                            let str_val =
+                                self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
                                 Value::Null => Ok(Value::Null),
@@ -2204,9 +2822,11 @@ impl QueryExecutor {
             "LOWER" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
-                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
+                            let str_val =
+                                self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
                                 Value::Null => Ok(Value::Null),
@@ -2233,9 +2853,11 @@ impl QueryExecutor {
             "TRIM" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
-                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0]
+                        {
+                            let str_val =
+                                self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+
                             match &str_val {
                                 Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
                                 Value::Null => Ok(Value::Null),
@@ -2256,6 +2878,62 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "TRIM requires arguments".to_string(),
+                    })
+                }
+            }
+            "COALESCE" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    // COALESCE returns the first non-NULL value
+                    for arg in &args.args {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
+                            let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                            if !matches!(val, Value::Null) {
+                                return Ok(val);
+                            }
+                        } else {
+                            return Err(YamlBaseError::Database {
+                                message: "Invalid argument for COALESCE".to_string(),
+                            });
+                        }
+                    }
+                    // If all values are NULL, return NULL
+                    Ok(Value::Null)
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "COALESCE requires arguments".to_string(),
+                    })
+                }
+            }
+            "NULLIF" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr1)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr2)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let val1 = self.get_join_expr_value(expr1, row, tables, table_aliases)?;
+                            let val2 = self.get_join_expr_value(expr2, row, tables, table_aliases)?;
+                            
+                            // NULLIF returns NULL if val1 == val2, otherwise returns val1
+                            if val1 == val2 {
+                                Ok(Value::Null)
+                            } else {
+                                Ok(val1)
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for NULLIF".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "NULLIF requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "NULLIF requires arguments".to_string(),
                     })
                 }
             }
@@ -2358,7 +3036,7 @@ impl QueryExecutor {
             }
             _ => Err(YamlBaseError::NotImplemented(
                 "Expression type not supported in JOIN conditions".to_string(),
-            ))
+            )),
         }
     }
 
@@ -2532,7 +3210,7 @@ impl QueryExecutor {
         tables: &[(String, &Table)],
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut projected_rows = Vec::new();
-        
+
         // Calculate cumulative offsets for each table
         let mut table_offsets = vec![0];
         let mut cumulative_offset = 0;
@@ -2540,17 +3218,17 @@ impl QueryExecutor {
             cumulative_offset += table.columns.len();
             table_offsets.push(cumulative_offset);
         }
-        
+
         // For each row, extract only the requested columns
         for row in rows {
             let mut projected_row = Vec::new();
-            
+
             for column in columns {
                 match column {
                     JoinedColumn::TableColumn(_, table_idx, col_idx) => {
                         // Calculate the actual position in the joined row
                         let position = table_offsets[*table_idx] + col_idx;
-                        
+
                         if let Some(value) = row.get(position) {
                             projected_row.push(value.clone());
                         } else {
@@ -2567,10 +3245,10 @@ impl QueryExecutor {
                     }
                 }
             }
-            
+
             projected_rows.push(projected_row);
         }
-        
+
         Ok(projected_rows)
     }
 
@@ -4093,7 +4771,10 @@ mod tests {
                 ])
                 .unwrap();
             table
-                .insert_row(vec![Value::Integer(2), Value::Text("ALREADY UPPER".to_string())])
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("ALREADY UPPER".to_string()),
+                ])
                 .unwrap();
             table
                 .insert_row(vec![Value::Integer(3), Value::Null])
@@ -4142,7 +4823,10 @@ mod tests {
                 ])
                 .unwrap();
             table
-                .insert_row(vec![Value::Integer(2), Value::Text("already lower".to_string())])
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("already lower".to_string()),
+                ])
                 .unwrap();
             table
                 .insert_row(vec![Value::Integer(3), Value::Null])
@@ -4191,10 +4875,16 @@ mod tests {
                 ])
                 .unwrap();
             table
-                .insert_row(vec![Value::Integer(2), Value::Text("no spaces".to_string())])
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("no spaces".to_string()),
+                ])
                 .unwrap();
             table
-                .insert_row(vec![Value::Integer(3), Value::Text("\t\ttabs\t\t".to_string())])
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("\t\ttabs\t\t".to_string()),
+                ])
                 .unwrap();
             table
                 .insert_row(vec![Value::Integer(4), Value::Null])
@@ -4217,6 +4907,449 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_group_by_count() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column(
+                    "department",
+                    crate::yaml::schema::SqlType::Varchar(50),
+                    false,
+                ),
+                create_column("salary", crate::yaml::schema::SqlType::Integer, false),
+            ];
+            let mut table = Table::new("employees".to_string(), columns);
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(80000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(85000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Sales".to_string()),
+                    Value::Integer(60000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Text("Sales".to_string()),
+                    Value::Integer(65000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(5),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(90000),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test GROUP BY with COUNT
+        let stmt =
+            parse_statement("SELECT department, COUNT(*) FROM employees GROUP BY department");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns, vec!["department", "COUNT(*)"]);
+        assert_eq!(result.rows.len(), 2);
+
+        // Check results (order may vary)
+        let mut found_engineering = false;
+        let mut found_sales = false;
+
+        for row in &result.rows {
+            if let (Value::Text(dept), Value::Integer(count)) = (&row[0], &row[1]) {
+                if dept == "Engineering" {
+                    assert_eq!(count, &3);
+                    found_engineering = true;
+                } else if dept == "Sales" {
+                    assert_eq!(count, &2);
+                    found_sales = true;
+                }
+            }
+        }
+
+        assert!(found_engineering);
+        assert!(found_sales);
+    }
+
+    #[tokio::test]
+    async fn test_group_by_sum_avg() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column(
+                    "department",
+                    crate::yaml::schema::SqlType::Varchar(50),
+                    false,
+                ),
+                create_column("salary", crate::yaml::schema::SqlType::Integer, false),
+            ];
+            let mut table = Table::new("employees".to_string(), columns);
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(80000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(90000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Sales".to_string()),
+                    Value::Integer(60000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Text("Sales".to_string()),
+                    Value::Integer(70000),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test GROUP BY with SUM
+        let stmt =
+            parse_statement("SELECT department, SUM(salary) FROM employees GROUP BY department");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns, vec!["department", "SUM(salary)"]);
+        assert_eq!(result.rows.len(), 2);
+
+        for row in &result.rows {
+            if let (Value::Text(dept), Value::Double(sum)) = (&row[0], &row[1]) {
+                if dept == "Engineering" {
+                    assert_eq!(sum, &170000.0);
+                } else if dept == "Sales" {
+                    assert_eq!(sum, &130000.0);
+                }
+            }
+        }
+
+        // Test GROUP BY with AVG
+        let stmt =
+            parse_statement("SELECT department, AVG(salary) FROM employees GROUP BY department");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns, vec!["department", "AVG(salary)"]);
+        assert_eq!(result.rows.len(), 2);
+
+        for row in &result.rows {
+            if let (Value::Text(dept), Value::Double(avg)) = (&row[0], &row[1]) {
+                if dept == "Engineering" {
+                    assert_eq!(avg, &85000.0);
+                } else if dept == "Sales" {
+                    assert_eq!(avg, &65000.0);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_group_by_having() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column(
+                    "department",
+                    crate::yaml::schema::SqlType::Varchar(50),
+                    false,
+                ),
+                create_column("salary", crate::yaml::schema::SqlType::Integer, false),
+            ];
+            let mut table = Table::new("employees".to_string(), columns);
+
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(80000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(85000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Sales".to_string()),
+                    Value::Integer(60000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Text("HR".to_string()),
+                    Value::Integer(55000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(5),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(90000),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test GROUP BY with HAVING COUNT(*) > 1
+        let stmt = parse_statement(
+            "SELECT department, COUNT(*) FROM employees GROUP BY department HAVING COUNT(*) > 1",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns, vec!["department", "COUNT(*)"]);
+        assert_eq!(result.rows.len(), 1); // Only Engineering has more than 1 employee
+
+        assert_eq!(result.rows[0][0], Value::Text("Engineering".to_string()));
+        assert_eq!(result.rows[0][1], Value::Integer(3));
+
+        // Test GROUP BY with HAVING on AVG
+        let stmt = parse_statement(
+            "SELECT department, AVG(salary) FROM employees GROUP BY department HAVING AVG(salary) > 70000",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns, vec!["department", "AVG(salary)"]);
+        assert_eq!(result.rows.len(), 1); // Only Engineering has avg > 70000
+
+        assert_eq!(result.rows[0][0], Value::Text("Engineering".to_string()));
+        assert_eq!(result.rows[0][1], Value::Double(85000.0));
+    }
+
+    #[tokio::test]
+    async fn test_case_when_expressions() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                create_column("age", crate::yaml::schema::SqlType::Integer, false),
+                create_column("name", crate::yaml::schema::SqlType::Varchar(50), false),
+            ];
+            let mut table = Table::new("case_test_users".to_string(), columns);
+            
+            table.insert_row(vec![Value::Integer(1), Value::Integer(25), Value::Text("Alice".to_string())]).unwrap();
+            table.insert_row(vec![Value::Integer(2), Value::Integer(15), Value::Text("Bob".to_string())]).unwrap();
+            table.insert_row(vec![Value::Integer(3), Value::Integer(10), Value::Text("Charlie".to_string())]).unwrap();
+            table.insert_row(vec![Value::Integer(4), Value::Integer(65), Value::Text("David".to_string())]).unwrap();
+            
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test searched CASE (CASE WHEN)
+        let stmt = parse_statement("SELECT name, CASE WHEN age >= 65 THEN 'senior' WHEN age >= 18 THEN 'adult' WHEN age >= 13 THEN 'teen' ELSE 'child' END as category FROM case_test_users");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns, vec!["name", "category"]);
+        assert_eq!(result.rows.len(), 4);
+        
+        assert_eq!(result.rows[0][1], Value::Text("adult".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("teen".to_string()));
+        assert_eq!(result.rows[2][1], Value::Text("child".to_string()));
+        assert_eq!(result.rows[3][1], Value::Text("senior".to_string()));
+
+        // Test simple CASE
+        let stmt = parse_statement("SELECT name, CASE age WHEN 25 THEN 'twenty-five' WHEN 15 THEN 'fifteen' ELSE 'other' END FROM case_test_users");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.rows[0][1], Value::Text("twenty-five".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("fifteen".to_string()));
+        assert_eq!(result.rows[2][1], Value::Text("other".to_string()));
+        assert_eq!(result.rows[3][1], Value::Text("other".to_string()));
+
+        // Test CASE without ELSE (returns NULL)
+        let stmt = parse_statement("SELECT name, CASE WHEN age = 100 THEN 'centenarian' END FROM case_test_users");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.rows[0][1], Value::Null);
+        assert_eq!(result.rows[1][1], Value::Null);
+        assert_eq!(result.rows[2][1], Value::Null);
+        assert_eq!(result.rows[3][1], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_case_when_without_from() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test searched CASE without FROM
+        let stmt = parse_statement("SELECT CASE WHEN 1 > 0 THEN 'positive' ELSE 'negative' END");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("positive".to_string()));
+
+        // Test simple CASE without FROM
+        let stmt = parse_statement("SELECT CASE 5 WHEN 1 THEN 'one' WHEN 5 THEN 'five' ELSE 'other' END");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.rows[0][0], Value::Text("five".to_string()));
+
+        // Test nested CASE
+        let stmt = parse_statement("SELECT CASE WHEN 10 > 5 THEN CASE WHEN 20 > 10 THEN 'both true' ELSE 'first true' END ELSE 'false' END");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.rows[0][0], Value::Text("both true".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_coalesce_and_nullif_functions() {
+        let db = create_test_database().await;
+        {
+            let mut db_write = db.write().await;
+            let columns = vec![
+                create_column("id", crate::yaml::schema::SqlType::Integer, true),
+                Column {
+                    name: "name".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "nickname".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "status".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(20),
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("users_with_nulls".to_string(), columns);
+            
+            // Insert test data with various NULL values
+            table.insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Alice".to_string()),
+                Value::Null,
+                Value::Text("active".to_string()),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Bob".to_string()),
+                Value::Text("Bobby".to_string()),
+                Value::Null,
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(3),
+                Value::Null,
+                Value::Text("Chuck".to_string()),
+                Value::Text("inactive".to_string()),
+            ]).unwrap();
+            table.insert_row(vec![
+                Value::Integer(4),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ]).unwrap();
+            
+            db_write.add_table(table).unwrap();
+        }
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test COALESCE with table rows
+        let stmt = parse_statement("SELECT id, COALESCE(name, nickname, 'Unknown') as display_name FROM users_with_nulls");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns, vec!["id", "display_name"]);
+        assert_eq!(result.rows.len(), 4);
+        
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[2][1], Value::Text("Chuck".to_string()));
+        assert_eq!(result.rows[3][1], Value::Text("Unknown".to_string()));
+
+        // Test COALESCE without FROM
+        let stmt = parse_statement("SELECT COALESCE(NULL, NULL, 'default', 'other')");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("default".to_string()));
+
+        // Test NULLIF with table rows
+        let stmt = parse_statement("SELECT id, NULLIF(status, 'inactive') as active_status FROM users_with_nulls");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.columns, vec!["id", "active_status"]);
+        assert_eq!(result.rows.len(), 4);
+        
+        assert_eq!(result.rows[0][1], Value::Text("active".to_string()));
+        assert_eq!(result.rows[1][1], Value::Null);
+        assert_eq!(result.rows[2][1], Value::Null); // "inactive" becomes NULL
+        assert_eq!(result.rows[3][1], Value::Null);
+
+        // Test NULLIF without FROM
+        let stmt = parse_statement("SELECT NULLIF(5, 5)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        let stmt = parse_statement("SELECT NULLIF(5, 3)");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(5));
+
+        // Test COALESCE with NULLIF
+        let stmt = parse_statement("SELECT id, COALESCE(NULLIF(nickname, ''), name, 'Guest') as display FROM users_with_nulls");
+        let result = executor.execute(&stmt).await.unwrap();
+        
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Bobby".to_string()));
+        assert_eq!(result.rows[2][1], Value::Text("Chuck".to_string()));
+        assert_eq!(result.rows[3][1], Value::Text("Guest".to_string()));
     }
 
     #[tokio::test]
@@ -4257,7 +5390,10 @@ mod tests {
         let stmt = parse_statement("SELECT LOWER(UPPER(name)) FROM test_table");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], Value::Text("  hello world  ".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text("  hello world  ".to_string())
+        );
     }
 
     #[tokio::test]
@@ -4363,7 +5499,7 @@ mod tests {
         let db = create_test_database().await;
         {
             let mut db_write = db.write().await;
-            
+
             // Create table with CHAR columns
             let columns = vec![
                 create_column("id", crate::yaml::schema::SqlType::Integer, true),
@@ -4408,7 +5544,7 @@ mod tests {
                 .insert_row(vec![
                     Value::Integer(2),
                     Value::Text("N".to_string()),
-                    Value::Text("XY".to_string()),  // Less than 3 chars
+                    Value::Text("XY".to_string()), // Less than 3 chars
                     Value::Text("SHORT".to_string()), // Less than 10 chars
                 ])
                 .unwrap();
@@ -4426,7 +5562,7 @@ mod tests {
         for (i, row) in result.rows.iter().enumerate() {
             eprintln!("Row {}: {:?}", i, row);
         }
-        
+
         // Test WHERE clause with CHAR column
         let stmt = parse_statement("SELECT id FROM test_char WHERE flag = 'Y'");
         let result = executor.execute(&stmt).await.unwrap();
@@ -4440,14 +5576,17 @@ mod tests {
         for row in &result.rows {
             eprintln!("  {:?}", row);
         }
-        
+
         // Now test with WHERE clause
         let stmt = parse_statement("SELECT code FROM test_char WHERE id = 2");
         let result = executor.execute(&stmt).await.unwrap();
-        eprintln!("SELECT code WHERE id = 2 returned {} rows", result.rows.len());
+        eprintln!(
+            "SELECT code WHERE id = 2 returned {} rows",
+            result.rows.len()
+        );
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("XY".to_string()));
-        
+
         // Test functions with CHAR columns
         let stmt = parse_statement("SELECT UPPER(code) FROM test_char WHERE id = 2");
         let result = executor.execute(&stmt).await.unwrap();

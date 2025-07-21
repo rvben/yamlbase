@@ -254,7 +254,10 @@ impl Value {
                 | (Value::Float(_), SqlType::Float)
                 | (Value::Double(_), SqlType::Double)
                 | (Value::Decimal(_), SqlType::Decimal(_, _))
-                | (Value::Text(_), SqlType::Char(_) | SqlType::Varchar(_) | SqlType::Text)
+                | (
+                    Value::Text(_),
+                    SqlType::Char(_) | SqlType::Varchar(_) | SqlType::Text
+                )
                 | (Value::Boolean(_), SqlType::Boolean)
                 | (Value::Timestamp(_), SqlType::Timestamp)
                 | (Value::Date(_), SqlType::Date)
