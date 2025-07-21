@@ -2165,9 +2165,14 @@ impl QueryExecutor {
                 Ok(Value::Text("8.0.35-yamlbase".to_string()))
             }
             "CURRENT_DATE" => {
-                // Return current date as YYYY-MM-DD string
-                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                Ok(Value::Text(today))
+                // Return current date as Date value
+                let today = chrono::Local::now().date_naive();
+                Ok(Value::Date(today))
+            }
+            "CURRENT_TIMESTAMP" => {
+                // Return current datetime as YYYY-MM-DD HH:MM:SS string
+                let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                Ok(Value::Text(now))
             }
             "NOW" => {
                 // Return current datetime as YYYY-MM-DD HH:MM:SS string
@@ -2187,8 +2192,14 @@ impl QueryExecutor {
                             let months_val = self.evaluate_constant_expr(months_expr)?;
 
                             // Parse date
-                            let date_str = match &date_val {
-                                Value::Text(s) => s,
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                        .map_err(|_| YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        })?
+                                }
                                 _ => {
                                     return Err(YamlBaseError::Database {
                                         message: "ADD_MONTHS requires date as first argument"
@@ -2208,21 +2219,13 @@ impl QueryExecutor {
                                 }
                             };
 
-                            // Parse and manipulate date
-                            if let Ok(date) =
-                                chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-                            {
-                                let result = if months >= 0 {
-                                    date + chrono::Months::new(months as u32)
-                                } else {
-                                    date - chrono::Months::new((-months) as u32)
-                                };
-                                Ok(Value::Text(result.format("%Y-%m-%d").to_string()))
+                            // Add or subtract months
+                            let result = if months >= 0 {
+                                date + chrono::Months::new(months as u32)
                             } else {
-                                Err(YamlBaseError::Database {
-                                    message: "Invalid date format for ADD_MONTHS".to_string(),
-                                })
-                            }
+                                date - chrono::Months::new((-months) as u32)
+                            };
+                            Ok(Value::Text(result.format("%Y-%m-%d").to_string()))
                         } else {
                             Err(YamlBaseError::Database {
                                 message: "Invalid arguments for ADD_MONTHS".to_string(),
@@ -2248,37 +2251,35 @@ impl QueryExecutor {
                         {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
 
-                            let date_str = match &date_val {
-                                Value::Text(s) => s,
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                        .map_err(|_| YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        })?
+                                }
                                 _ => {
                                     return Err(YamlBaseError::Database {
                                         message: "LAST_DAY requires date argument".to_string(),
                                     });
                                 }
                             };
-
-                            if let Ok(date) =
-                                chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-                            {
-                                // Get first day of next month
-                                let next_month = if date.month() == 12 {
-                                    chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
-                                } else {
-                                    chrono::NaiveDate::from_ymd_opt(
-                                        date.year(),
-                                        date.month() + 1,
-                                        1,
-                                    )
-                                    .unwrap()
-                                };
-                                // Subtract one day to get last day of current month
-                                let last_day = next_month - chrono::Duration::days(1);
-                                Ok(Value::Text(last_day.format("%Y-%m-%d").to_string()))
+                            
+                            // Get first day of next month
+                            let next_month = if date.month() == 12 {
+                                chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
                             } else {
-                                Err(YamlBaseError::Database {
-                                    message: "Invalid date format for LAST_DAY".to_string(),
-                                })
-                            }
+                                chrono::NaiveDate::from_ymd_opt(
+                                    date.year(),
+                                    date.month() + 1,
+                                    1,
+                                )
+                                .unwrap()
+                            };
+                            // Subtract one day to get last day of current month
+                            let last_day = next_month - chrono::Duration::days(1);
+                            Ok(Value::Text(last_day.format("%Y-%m-%d").to_string()))
                         } else {
                             Err(YamlBaseError::Database {
                                 message: "Invalid argument for LAST_DAY".to_string(),
@@ -4018,6 +4019,14 @@ impl QueryExecutor {
                 };
 
                 Ok(if *negated { !in_range } else { in_range })
+            }
+            Expr::IsNull(expr) => {
+                let value = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                Ok(matches!(value, Value::Null))
+            }
+            Expr::IsNotNull(expr) => {
+                let value = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                Ok(!matches!(value, Value::Null))
             }
             _ => Err(YamlBaseError::NotImplemented(
                 "Complex JOIN conditions are not yet supported".to_string(),
@@ -5885,6 +5894,67 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
 
         assert_eq!(result.rows.len(), 6); // 2 users × 3 orders = 6 rows
+    }
+
+    #[tokio::test]
+    async fn test_current_date_and_timestamp() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+        
+        // Test 1: CURRENT_DATE returns Date value
+        let stmt = parse_statement("SELECT CURRENT_DATE");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns.len(), 1);
+        assert_eq!(result.rows.len(), 1);
+        // Result should be a Date value
+        assert!(matches!(result.rows[0][0], Value::Date(_)));
+
+        // Test 2: CURRENT_TIMESTAMP returns datetime string
+        let stmt = parse_statement("SELECT CURRENT_TIMESTAMP");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns.len(), 1);
+        assert_eq!(result.rows.len(), 1);
+        // Check format YYYY-MM-DD HH:MM:SS
+        if let Value::Text(datetime_str) = &result.rows[0][0] {
+            assert_eq!(datetime_str.len(), 19);
+            assert!(datetime_str.chars().nth(4).unwrap() == '-');
+            assert!(datetime_str.chars().nth(7).unwrap() == '-');
+            assert!(datetime_str.chars().nth(10).unwrap() == ' ');
+            assert!(datetime_str.chars().nth(13).unwrap() == ':');
+            assert!(datetime_str.chars().nth(16).unwrap() == ':');
+        } else {
+            panic!("Expected text value for CURRENT_TIMESTAMP");
+        }
+
+        // Test 3: CURRENT_DATE in table query
+        let stmt = parse_statement("SELECT id, name, CURRENT_DATE FROM users");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns.len(), 3);
+        assert_eq!(result.columns[0], "id");
+        assert_eq!(result.columns[1], "name");
+        assert_eq!(result.columns[2], "column_1"); // Generated column name
+        assert_eq!(result.rows.len(), 2); // Two users in test db
+        // All rows should have the same current date
+        assert!(matches!(result.rows[0][2], Value::Date(_)));
+        assert!(matches!(result.rows[1][2], Value::Date(_)));
+        assert_eq!(result.rows[0][2], result.rows[1][2]);
+
+        // Test 4: CURRENT_TIMESTAMP with table data
+        let stmt = parse_statement("SELECT name, CURRENT_TIMESTAMP FROM users WHERE id = 1");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert!(matches!(result.rows[0][1], Value::Text(_)));
+
+        // Test 5: With aliases
+        let stmt = parse_statement("SELECT CURRENT_DATE AS today, CURRENT_TIMESTAMP AS now");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.columns[0], "today");
+        assert_eq!(result.columns[1], "now");
+        assert!(matches!(result.rows[0][0], Value::Date(_)));
+        assert!(matches!(result.rows[0][1], Value::Text(_)));
     }
 
     #[tokio::test]
@@ -7911,6 +7981,356 @@ mod tests {
         let stmt = parse_statement("SELECT DISTINCT customer, product, quantity FROM orders");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 4); // One duplicate row (Alice, Widget, 5)
+    }
+
+    #[tokio::test]
+    async fn test_is_null_is_not_null_operators() {
+        let mut db = Database::new("test_db".to_string());
+        
+        // Create test table with nullable columns
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "name".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "email".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "age".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "created_at".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Date,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut table = Table::new("users".to_string(), columns);
+        
+        // Add test data with various NULL values
+        table.insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Alice".to_string()),
+            Value::Text("alice@example.com".to_string()),
+            Value::Integer(25),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Bob".to_string()),
+            Value::Null,  // NULL email
+            Value::Integer(30),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(3),
+            Value::Null,  // NULL name
+            Value::Text("charlie@example.com".to_string()),
+            Value::Null,  // NULL age
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 3).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(4),
+            Value::Text("David".to_string()),
+            Value::Text("david@example.com".to_string()),
+            Value::Integer(35),
+            Value::Null,  // NULL created_at
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(5),
+            Value::Null,  // NULL name
+            Value::Null,  // NULL email
+            Value::Null,  // NULL age
+            Value::Null,  // NULL created_at
+        ]).unwrap();
+
+        db.add_table(table).unwrap();
+        let db = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test IS NULL
+        let stmt = parse_statement("SELECT * FROM users WHERE email IS NULL ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 2, 5
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+        assert_eq!(result.rows[1][0], Value::Integer(5));
+
+        // Test IS NOT NULL
+        let stmt = parse_statement("SELECT * FROM users WHERE email IS NOT NULL ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3); // IDs 1, 3, 4
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[1][0], Value::Integer(3));
+        assert_eq!(result.rows[2][0], Value::Integer(4));
+
+        // Test multiple NULL checks
+        // Both ID 3 and ID 5 have NULL name and NULL age
+        let stmt = parse_statement("SELECT * FROM users WHERE name IS NULL AND age IS NULL ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 3, 5
+        assert_eq!(result.rows[0][0], Value::Integer(3));
+        assert_eq!(result.rows[1][0], Value::Integer(5));
+
+        // Test IS NULL with OR
+        let stmt = parse_statement("SELECT * FROM users WHERE name IS NULL OR age IS NULL ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 3, 5
+        assert_eq!(result.rows[0][0], Value::Integer(3));
+        assert_eq!(result.rows[1][0], Value::Integer(5));
+
+        // Test combining IS NULL with other conditions
+        // Note: NULL > 25 evaluates to false, so Charlie (ID 3) with NULL age won't match
+        let stmt = parse_statement("SELECT * FROM users WHERE email IS NOT NULL AND age > 25 ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1); // Only ID 4 (David, age 35)
+        assert_eq!(result.rows[0][0], Value::Integer(4));
+        
+        // Test with OR to include NULL ages
+        let stmt = parse_statement("SELECT * FROM users WHERE email IS NOT NULL AND (age > 29 OR age IS NULL) ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // IDs 3, 4
+        
+        // Test COUNT with IS NULL
+        let stmt = parse_statement("SELECT COUNT(*) FROM users WHERE created_at IS NULL");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(2)); // IDs 4, 5
+
+        // Test with SELECT specific columns
+        let stmt = parse_statement("SELECT id, name FROM users WHERE name IS NOT NULL ORDER BY id");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3); // IDs 1, 2, 4
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[2][1], Value::Text("David".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_min_max_aggregate_functions() {
+        let mut db = Database::new("test_db".to_string());
+        
+        // Create test table
+        let columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: true,
+                nullable: false,
+                unique: true,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "product".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "price".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Double,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "quantity".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Integer,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "category".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "created_date".to_string(),
+                sql_type: crate::yaml::schema::SqlType::Date,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ];
+
+        let mut table = Table::new("products".to_string(), columns);
+        
+        // Add test data
+        table.insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Laptop".to_string()),
+            Value::Double(999.99),
+            Value::Integer(10),
+            Value::Text("Electronics".to_string()),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Mouse".to_string()),
+            Value::Double(29.99),
+            Value::Integer(50),
+            Value::Text("Electronics".to_string()),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 20).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(3),
+            Value::Text("Desk".to_string()),
+            Value::Double(299.99),
+            Value::Integer(5),
+            Value::Text("Furniture".to_string()),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 2, 1).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(4),
+            Value::Text("Chair".to_string()),
+            Value::Double(149.99),
+            Value::Null,  // NULL quantity
+            Value::Text("Furniture".to_string()),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()),
+        ]).unwrap();
+        
+        table.insert_row(vec![
+            Value::Integer(5),
+            Value::Text("Monitor".to_string()),
+            Value::Null,  // NULL price
+            Value::Integer(15),
+            Value::Text("Electronics".to_string()),
+            Value::Null,  // NULL created_date
+        ]).unwrap();
+
+        db.add_table(table).unwrap();
+        let db = Arc::new(RwLock::new(db));
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test MIN on numeric column
+        let stmt = parse_statement("SELECT MIN(price) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Double(29.99));
+
+        // Test MAX on numeric column
+        let stmt = parse_statement("SELECT MAX(price) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Double(999.99));
+
+        // Test MIN on integer column with NULL
+        let stmt = parse_statement("SELECT MIN(quantity) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(5));
+
+        // Test MAX on integer column with NULL
+        let stmt = parse_statement("SELECT MAX(quantity) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(50));
+
+        // Test MIN on text column
+        let stmt = parse_statement("SELECT MIN(product) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("Chair".to_string()));
+
+        // Test MAX on text column
+        let stmt = parse_statement("SELECT MAX(product) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("Mouse".to_string()));
+
+        // Test MIN on date column with NULL
+        let stmt = parse_statement("SELECT MIN(created_date) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()));
+
+        // Test MAX on date column with NULL
+        let stmt = parse_statement("SELECT MAX(created_date) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Date(NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()));
+
+        // Test MIN/MAX with GROUP BY
+        let stmt = parse_statement("SELECT category, MIN(price), MAX(price) FROM products GROUP BY category ORDER BY category");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        
+        // Electronics: MIN=29.99, MAX=999.99 (NULL price excluded)
+        assert_eq!(result.rows[0][0], Value::Text("Electronics".to_string()));
+        assert_eq!(result.rows[0][1], Value::Double(29.99));
+        assert_eq!(result.rows[0][2], Value::Double(999.99));
+        
+        // Furniture: MIN=149.99, MAX=299.99
+        assert_eq!(result.rows[1][0], Value::Text("Furniture".to_string()));
+        assert_eq!(result.rows[1][1], Value::Double(149.99));
+        assert_eq!(result.rows[1][2], Value::Double(299.99));
+
+        // Test MIN/MAX on column with all NULLs
+        let stmt = parse_statement("SELECT MIN(price) FROM products WHERE price IS NULL");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Null);
+
+        // Test multiple aggregates together
+        let stmt = parse_statement("SELECT COUNT(*), MIN(price), MAX(price), AVG(price), SUM(price) FROM products");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(5)); // COUNT(*)
+        assert_eq!(result.rows[0][1], Value::Double(29.99)); // MIN(price)
+        assert_eq!(result.rows[0][2], Value::Double(999.99)); // MAX(price)
+        // AVG and SUM will exclude the NULL price
     }
 
     #[tokio::test]
