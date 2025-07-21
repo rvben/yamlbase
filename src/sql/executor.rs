@@ -1467,6 +1467,93 @@ impl QueryExecutor {
                     })
                 }
             }
+            "UPPER" => {
+                // For SELECT without FROM, handle string literals
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "UPPER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "UPPER function requires single argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "UPPER function requires exactly one argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "UPPER function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "LOWER" => {
+                // For SELECT without FROM, handle string literals
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LOWER requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "LOWER function requires single argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "LOWER function requires exactly one argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "LOWER function requires arguments".to_string(),
+                    ))
+                }
+            }
+            "TRIM" => {
+                // For SELECT without FROM, handle string literals
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)) = &args.args[0] {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            match &str_val {
+                                Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                                Value::Null => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "TRIM requires string argument".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "TRIM function requires single argument".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "TRIM function requires exactly one argument".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "TRIM function requires arguments".to_string(),
+                    ))
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Function '{}' is not implemented",
                 func_name
