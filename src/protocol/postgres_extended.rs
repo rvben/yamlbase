@@ -587,7 +587,7 @@ fn extract_columns_and_types_from_select(
                             }
                             "SUM" => {
                                 columns.push(func_name.clone());
-                                types.push(SqlType::Text); // SUM returns formatted text for monetary values
+                                types.push(SqlType::Double); // SUM returns numeric value
                             }
                             "AVG" => {
                                 columns.push(func_name.clone());
@@ -620,7 +620,7 @@ fn extract_columns_and_types_from_select(
 
                         match func_name.as_str() {
                             "COUNT" => types.push(SqlType::BigInt), // COUNT returns i64
-                            "SUM" => types.push(SqlType::Text),
+                            "SUM" => types.push(SqlType::Double),
                             "AVG" => types.push(SqlType::Double),
                             _ => types.push(SqlType::Text),
                         }

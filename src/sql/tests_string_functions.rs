@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::database::{Database, Value};
     use crate::database::storage::Storage;
+    use crate::database::{Database, Value};
     use crate::sql::{QueryExecutor, parse_sql};
     use std::sync::Arc;
 
@@ -30,7 +30,11 @@ mod tests {
         if let Err(ref e) = result {
             println!("Error executing POSITION query: {:?}", e);
         }
-        assert!(result.is_ok(), "Failed to execute POSITION query: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to execute POSITION query: {:?}",
+            result
+        );
         let query_result = result.unwrap();
         assert_eq!(query_result.rows[0][0], Value::Integer(7)); // "World" starts at position 7
 
@@ -52,8 +56,8 @@ mod tests {
         assert!(result.is_ok());
         let query_result = result.unwrap();
         assert_eq!(query_result.rows[0][0], Value::Integer(0)); // Not found returns 0
-        
-        // Test with longer strings  
+
+        // Test with longer strings
         let queries = parse_sql("SELECT LEFT('Testing String Functions', 7)").unwrap();
         let result = executor.execute(&queries[0]).await;
         assert!(result.is_ok());
@@ -64,7 +68,10 @@ mod tests {
         let result = executor.execute(&queries[0]).await;
         assert!(result.is_ok());
         let query_result = result.unwrap();
-        assert_eq!(query_result.rows[0][0], Value::Text("Functions".to_string()));
+        assert_eq!(
+            query_result.rows[0][0],
+            Value::Text("Functions".to_string())
+        );
 
         let queries = parse_sql("SELECT POSITION('String', 'Testing String Functions')").unwrap();
         let result = executor.execute(&queries[0]).await;

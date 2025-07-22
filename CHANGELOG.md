@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-07-22
+
+### Added
+- **Advanced SQL Features**:
+  - Subquery support for IN/NOT IN operators (e.g., `WHERE id IN (SELECT ...)`
+  - EXISTS and NOT EXISTS subqueries for complex filtering
+  - UNION, INTERSECT, and EXCEPT set operations with proper duplicate handling
+  - BETWEEN operator for range comparisons
+  - Enhanced date/time functions:
+    - Extended EXTRACT function with fields: QUARTER, WEEK, DOW, DOY, CENTURY, DECADE, EPOCH, and more
+    - DATE_PART function as PostgreSQL-compatible alias for EXTRACT
+  - Math functions: ROUND, CEIL/CEILING, FLOOR, ABS, MOD
+  - String functions: LEFT, RIGHT, POSITION, CONCAT
+  - Improved function evaluation in different contexts (SELECT, WHERE, expressions)
+
+### Fixed
+- PostgreSQL protocol SUM aggregate function type encoding (was returning TEXT, now correctly returns DOUBLE)
+- Set operation (UNION/INTERSECT/EXCEPT) column type inference
+- Function implementations now work correctly in all SQL contexts
+
+### Changed
+- Significantly expanded SQL compatibility for more complex queries
+- Improved type handling for aggregate functions in PostgreSQL protocol
+
 ## [0.2.0] - 2025-07-15
 
 ### Added
@@ -204,6 +228,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.3.0]: https://github.com/rvben/yamlbase/releases/tag/v0.3.0
 [0.2.0]: https://github.com/rvben/yamlbase/releases/tag/v0.2.0
 [0.1.0]: https://github.com/rvben/yamlbase/releases/tag/v0.1.0
 [0.0.6]: https://github.com/rvben/yamlbase/releases/tag/v0.0.6

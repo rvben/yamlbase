@@ -1,11 +1,11 @@
-use chrono::{self, Datelike, NaiveDate};
+use chrono::{self, Datelike, NaiveDate, Timelike};
 use regex::Regex;
 use rust_decimal::prelude::*;
 use sqlparser::ast::{
     BinaryOperator, DataType, DateTimeField, DuplicateTreatment, Expr, Function, FunctionArg,
     FunctionArgExpr, FunctionArguments, GroupByExpr, JoinConstraint, JoinOperator, OrderByExpr,
-    Query, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins, UnaryOperator,
-    With,
+    Query, Select, SelectItem, SetExpr, SetOperator, SetQuantifier, Statement, TableFactor,
+    TableWithJoins, UnaryOperator, With,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -120,8 +120,17 @@ impl QueryExecutor {
 
         match &query.body.as_ref() {
             SetExpr::Select(select) => self.execute_select(&db, select, query).await,
+            SetExpr::SetOperation {
+                op,
+                set_quantifier,
+                left,
+                right,
+            } => {
+                self.execute_set_operation(op, set_quantifier, left, right, query)
+                    .await
+            }
             _ => Err(YamlBaseError::NotImplemented(
-                "Only simple SELECT queries are supported".to_string(),
+                "Only SELECT and UNION/EXCEPT/INTERSECT queries are supported".to_string(),
             )),
         }
     }
@@ -257,6 +266,116 @@ impl QueryExecutor {
         })
     }
 
+    async fn execute_set_operation(
+        &self,
+        op: &SetOperator,
+        set_quantifier: &SetQuantifier,
+        left: &SetExpr,
+        right: &SetExpr,
+        query: &Query,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing set operation: {:?}", op);
+
+        // Execute left and right sides by extracting their results directly
+        let db_arc = self.storage.database();
+        let db = db_arc.read().await;
+
+        let left_result = match left {
+            SetExpr::Select(select) => {
+                let left_query = Query {
+                    with: None,
+                    body: Box::new(SetExpr::Select(select.clone())),
+                    order_by: None,
+                    limit: None,
+                    limit_by: vec![],
+                    offset: None,
+                    fetch: None,
+                    locks: vec![],
+                    for_clause: None,
+                    format_clause: None,
+                    settings: None,
+                };
+                self.execute_select(&db, select, &left_query).await?
+            }
+            _ => {
+                return Err(YamlBaseError::NotImplemented(
+                    "Nested set operations not yet supported".to_string(),
+                ));
+            }
+        };
+
+        let right_result = match right {
+            SetExpr::Select(select) => {
+                let right_query = Query {
+                    with: None,
+                    body: Box::new(SetExpr::Select(select.clone())),
+                    order_by: None,
+                    limit: None,
+                    limit_by: vec![],
+                    offset: None,
+                    fetch: None,
+                    locks: vec![],
+                    for_clause: None,
+                    format_clause: None,
+                    settings: None,
+                };
+                self.execute_select(&db, select, &right_query).await?
+            }
+            _ => {
+                return Err(YamlBaseError::NotImplemented(
+                    "Nested set operations not yet supported".to_string(),
+                ));
+            }
+        };
+
+        // Check that column counts match
+        if left_result.columns.len() != right_result.columns.len() {
+            return Err(YamlBaseError::Database {
+                message: format!(
+                    "UNION/EXCEPT/INTERSECT requires matching column counts: left has {}, right has {}",
+                    left_result.columns.len(),
+                    right_result.columns.len()
+                ),
+            });
+        }
+
+        // Perform the set operation
+        let mut result_rows = match op {
+            SetOperator::Union => {
+                self.perform_union(left_result.rows, right_result.rows, set_quantifier)?
+            }
+            SetOperator::Except => {
+                self.perform_except(left_result.rows, right_result.rows, set_quantifier)?
+            }
+            SetOperator::Intersect => {
+                self.perform_intersect(left_result.rows, right_result.rows, set_quantifier)?
+            }
+        };
+
+        // Apply ORDER BY if present
+        if let Some(order_by) = &query.order_by {
+            // Create column info for sort_rows
+            let col_info: Vec<(String, usize)> = left_result
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(idx, name)| (name.clone(), idx))
+                .collect();
+            result_rows = self.sort_rows(result_rows, &order_by.exprs, &col_info)?;
+        }
+
+        // Apply LIMIT if present
+        if let Some(limit_expr) = &query.limit {
+            result_rows = self.apply_limit(result_rows, limit_expr)?;
+        }
+
+        Ok(QueryResult {
+            columns: left_result.columns,
+            column_types: left_result.column_types,
+            rows: result_rows,
+        })
+    }
+
     async fn execute_select_without_from(&self, select: &Select) -> crate::Result<QueryResult> {
         debug!("Executing SELECT without FROM");
         let mut columns = Vec::new();
@@ -372,23 +491,8 @@ impl QueryExecutor {
             }
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT expression
-                let date_val = self.evaluate_constant_expr(expr)?;
-
-                let date_str = match &date_val {
-                    Value::Text(s) => s,
-                    Value::Date(d) => {
-                        // Convert date to string for processing
-                        let formatted = d.format("%Y-%m-%d").to_string();
-                        return self.evaluate_extract_from_date(field, &formatted);
-                    }
-                    _ => {
-                        return Err(YamlBaseError::Database {
-                            message: "EXTRACT requires date argument".to_string(),
-                        });
-                    }
-                };
-
-                self.evaluate_extract_from_date(field, date_str)
+                let val = self.evaluate_constant_expr(expr)?;
+                self.evaluate_extract_from_value(field, &val)
             }
             Expr::TypedString { data_type, value } => {
                 // Handle DATE '2025-01-01' and similar typed strings
@@ -499,7 +603,9 @@ impl QueryExecutor {
                     }),
                 }
             }
-            Expr::Cast { expr, data_type, .. } => {
+            Expr::Cast {
+                expr, data_type, ..
+            } => {
                 // Handle CAST expression
                 let value = self.evaluate_constant_expr(expr)?;
                 self.cast_value(value, data_type)
@@ -1291,36 +1397,8 @@ impl QueryExecutor {
             }
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT expression
-                let date_val = self.get_expr_value(expr, row, table)?;
-
-                let date_str = match &date_val {
-                    Value::Text(s) => s,
-                    Value::Date(d) => &d.format("%Y-%m-%d").to_string(),
-                    _ => {
-                        return Err(YamlBaseError::Database {
-                            message: "EXTRACT requires date argument".to_string(),
-                        });
-                    }
-                };
-
-                if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                    use sqlparser::ast::DateTimeField;
-                    let result = match field {
-                        DateTimeField::Day => date.day() as i64,
-                        DateTimeField::Month => date.month() as i64,
-                        DateTimeField::Year => date.year() as i64,
-                        _ => {
-                            return Err(YamlBaseError::Database {
-                                message: format!("EXTRACT field '{:?}' not supported", field),
-                            });
-                        }
-                    };
-                    Ok(Value::Integer(result))
-                } else {
-                    Err(YamlBaseError::Database {
-                        message: "Invalid date format for EXTRACT".to_string(),
-                    })
-                }
+                let val = self.get_expr_value(expr, row, table)?;
+                self.evaluate_extract_from_value(field, &val)
             }
             Expr::Trim { expr, .. } => {
                 // Handle TRIM expression
@@ -1410,7 +1488,9 @@ impl QueryExecutor {
                     }),
                 }
             }
-            Expr::Cast { expr, data_type, .. } => {
+            Expr::Cast {
+                expr, data_type, ..
+            } => {
                 // Handle CAST expression
                 let value = self.get_expr_value(expr, row, table)?;
                 self.cast_value(value, data_type)
@@ -1546,28 +1626,111 @@ impl QueryExecutor {
         }
     }
 
+    fn evaluate_extract_from_value(
+        &self,
+        field: &DateTimeField,
+        value: &Value,
+    ) -> crate::Result<Value> {
+        match value {
+            Value::Date(date) => self.evaluate_extract_from_date(field, date),
+            Value::Timestamp(ts) => self.evaluate_extract_from_timestamp(field, ts),
+            Value::Text(s) => {
+                // Try to parse as date or timestamp
+                if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    self.evaluate_extract_from_date(field, &date)
+                } else if let Ok(ts) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                {
+                    self.evaluate_extract_from_timestamp(field, &ts)
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "Invalid date/timestamp format for EXTRACT".to_string(),
+                    })
+                }
+            }
+            _ => Err(YamlBaseError::Database {
+                message: "EXTRACT requires date or timestamp argument".to_string(),
+            }),
+        }
+    }
+
     fn evaluate_extract_from_date(
         &self,
         field: &DateTimeField,
-        date_str: &str,
+        date: &chrono::NaiveDate,
     ) -> crate::Result<Value> {
-        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-            let result = match field {
-                DateTimeField::Day => date.day() as i64,
-                DateTimeField::Month => date.month() as i64,
-                DateTimeField::Year => date.year() as i64,
-                _ => {
-                    return Err(YamlBaseError::Database {
-                        message: format!("EXTRACT field '{:?}' not supported", field),
-                    });
-                }
-            };
-            Ok(Value::Integer(result))
-        } else {
-            Err(YamlBaseError::Database {
-                message: "Invalid date format for EXTRACT".to_string(),
-            })
-        }
+        let result = match field {
+            DateTimeField::Day => date.day() as i64,
+            DateTimeField::Month => date.month() as i64,
+            DateTimeField::Year => date.year() as i64,
+            DateTimeField::Quarter => ((date.month() - 1) / 3 + 1) as i64,
+            DateTimeField::Week(_) => date.iso_week().week() as i64,
+            DateTimeField::DayOfWeek => date.weekday().num_days_from_sunday() as i64,
+            DateTimeField::DayOfYear => date.ordinal() as i64,
+            DateTimeField::Dow => date.weekday().num_days_from_sunday() as i64, // PostgreSQL DOW (0=Sunday)
+            DateTimeField::Doy => date.ordinal() as i64,
+            DateTimeField::Isodow => date.weekday().number_from_monday() as i64, // ISO DOW (1=Monday)
+            DateTimeField::IsoWeek => date.iso_week().week() as i64,
+            DateTimeField::Isoyear => date.iso_week().year() as i64,
+            DateTimeField::Century => ((date.year() - 1) / 100 + 1) as i64,
+            DateTimeField::Decade => (date.year() / 10) as i64,
+            DateTimeField::Epoch => {
+                // Days since Unix epoch (1970-01-01)
+                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                (*date - epoch).num_days()
+            }
+            _ => {
+                return Err(YamlBaseError::Database {
+                    message: format!("EXTRACT field '{:?}' not supported for date values", field),
+                });
+            }
+        };
+        Ok(Value::Integer(result))
+    }
+
+    fn evaluate_extract_from_timestamp(
+        &self,
+        field: &DateTimeField,
+        ts: &chrono::NaiveDateTime,
+    ) -> crate::Result<Value> {
+        let result = match field {
+            // Date parts
+            DateTimeField::Day => ts.day() as i64,
+            DateTimeField::Month => ts.month() as i64,
+            DateTimeField::Year => ts.year() as i64,
+            DateTimeField::Quarter => ((ts.month() - 1) / 3 + 1) as i64,
+            DateTimeField::Week(_) => ts.date().iso_week().week() as i64,
+            DateTimeField::DayOfWeek => ts.date().weekday().num_days_from_sunday() as i64,
+            DateTimeField::DayOfYear => ts.date().ordinal() as i64,
+            DateTimeField::Dow => ts.date().weekday().num_days_from_sunday() as i64,
+            DateTimeField::Doy => ts.date().ordinal() as i64,
+            DateTimeField::Isodow => ts.date().weekday().number_from_monday() as i64,
+            DateTimeField::IsoWeek => ts.date().iso_week().week() as i64,
+            DateTimeField::Isoyear => ts.date().iso_week().year() as i64,
+            DateTimeField::Century => ((ts.year() - 1) / 100 + 1) as i64,
+            DateTimeField::Decade => (ts.year() / 10) as i64,
+
+            // Time parts
+            DateTimeField::Hour => ts.hour() as i64,
+            DateTimeField::Minute => ts.minute() as i64,
+            DateTimeField::Second => ts.second() as i64,
+            DateTimeField::Milliseconds => (ts.and_utc().timestamp_subsec_millis() % 1000) as i64,
+            DateTimeField::Microseconds => {
+                (ts.and_utc().timestamp_subsec_micros() % 1000000) as i64
+            }
+
+            // Epoch
+            DateTimeField::Epoch => ts.and_utc().timestamp(),
+
+            _ => {
+                return Err(YamlBaseError::Database {
+                    message: format!(
+                        "EXTRACT field '{:?}' not supported for timestamp values",
+                        field
+                    ),
+                });
+            }
+        };
+        Ok(Value::Integer(result))
     }
 
     fn evaluate_function_with_row(
@@ -1958,7 +2121,8 @@ impl QueryExecutor {
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "LEFT requires string and integer arguments".to_string(),
+                                    message: "LEFT requires string and integer arguments"
+                                        .to_string(),
                                 }),
                             }
                         } else {
@@ -1992,13 +2156,18 @@ impl QueryExecutor {
                                 (Value::Text(s), Value::Integer(len)) => {
                                     let length = if len < 0 { 0 } else { len as usize };
                                     let chars: Vec<char> = s.chars().collect();
-                                    let start = if length >= chars.len() { 0 } else { chars.len() - length };
+                                    let start = if length >= chars.len() {
+                                        0
+                                    } else {
+                                        chars.len() - length
+                                    };
                                     let result: String = chars[start..].iter().collect();
                                     Ok(Value::Text(result))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "RIGHT requires string and integer arguments".to_string(),
+                                    message: "RIGHT requires string and integer arguments"
+                                        .to_string(),
                                 }),
                             }
                         } else {
@@ -2034,19 +2203,21 @@ impl QueryExecutor {
                                     // Use character-based position, not byte-based
                                     let haystack_chars: Vec<char> = haystack.chars().collect();
                                     let needle_chars: Vec<char> = needle.chars().collect();
-                                    
+
                                     if needle_chars.is_empty() {
                                         // Empty string is found at position 1
                                         return Ok(Value::Integer(1));
                                     }
-                                    
+
                                     // Find the needle in the haystack using character positions
-                                    for i in 0..=haystack_chars.len().saturating_sub(needle_chars.len()) {
+                                    for i in
+                                        0..=haystack_chars.len().saturating_sub(needle_chars.len())
+                                    {
                                         if haystack_chars[i..].starts_with(&needle_chars) {
                                             return Ok(Value::Integer((i + 1) as i64));
                                         }
                                     }
-                                    
+
                                     Ok(Value::Integer(0))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
@@ -2343,6 +2514,74 @@ impl QueryExecutor {
                     })
                 }
             }
+            "DATE_PART" => {
+                // DATE_PART('field', date) - PostgreSQL-style date field extraction
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(field_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            // Get the field name
+                            let field_name = match self.get_expr_value(field_expr, row, table)? {
+                                Value::Text(s) => s,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_PART field must be a string".to_string(),
+                                    });
+                                }
+                            };
+
+                            // Get the date/timestamp value
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+
+                            // Map string field name to DateTimeField
+                            use sqlparser::ast::DateTimeField;
+                            let field = match field_name.to_lowercase().as_str() {
+                                "year" => DateTimeField::Year,
+                                "month" => DateTimeField::Month,
+                                "day" => DateTimeField::Day,
+                                "hour" => DateTimeField::Hour,
+                                "minute" => DateTimeField::Minute,
+                                "second" => DateTimeField::Second,
+                                "quarter" => DateTimeField::Quarter,
+                                "week" => DateTimeField::Week(None),
+                                "dow" => DateTimeField::Dow,
+                                "doy" => DateTimeField::Doy,
+                                "epoch" => DateTimeField::Epoch,
+                                "century" => DateTimeField::Century,
+                                "decade" => DateTimeField::Decade,
+                                "isodow" => DateTimeField::Isodow,
+                                "isoyear" => DateTimeField::Isoyear,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Unsupported DATE_PART field: {}",
+                                            field_name
+                                        ),
+                                    });
+                                }
+                            };
+
+                            // Evaluate extraction using existing logic
+                            self.evaluate_extract_from_value(&field, &date_val)
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for DATE_PART".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_PART requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_PART requires arguments".to_string(),
+                    })
+                }
+            }
             // For functions that don't need row context, delegate to constant version
             _ => self.evaluate_constant_function(func),
         }
@@ -2376,6 +2615,74 @@ impl QueryExecutor {
                 let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                 Ok(Value::Text(now))
             }
+            "DATE_PART" => {
+                // DATE_PART('field', date) - PostgreSQL-style date field extraction
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(field_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            // Get the field name
+                            let field_name = match self.evaluate_constant_expr(field_expr)? {
+                                Value::Text(s) => s,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_PART field must be a string".to_string(),
+                                    });
+                                }
+                            };
+
+                            // Get the date/timestamp value
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+
+                            // Map string field name to DateTimeField
+                            use sqlparser::ast::DateTimeField;
+                            let field = match field_name.to_lowercase().as_str() {
+                                "year" => DateTimeField::Year,
+                                "month" => DateTimeField::Month,
+                                "day" => DateTimeField::Day,
+                                "hour" => DateTimeField::Hour,
+                                "minute" => DateTimeField::Minute,
+                                "second" => DateTimeField::Second,
+                                "quarter" => DateTimeField::Quarter,
+                                "week" => DateTimeField::Week(None),
+                                "dow" => DateTimeField::Dow,
+                                "doy" => DateTimeField::Doy,
+                                "epoch" => DateTimeField::Epoch,
+                                "century" => DateTimeField::Century,
+                                "decade" => DateTimeField::Decade,
+                                "isodow" => DateTimeField::Isodow,
+                                "isoyear" => DateTimeField::Isoyear,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Unsupported DATE_PART field: {}",
+                                            field_name
+                                        ),
+                                    });
+                                }
+                            };
+
+                            // Evaluate extraction using existing logic
+                            self.evaluate_extract_from_value(&field, &date_val)
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for DATE_PART".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_PART requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_PART requires arguments".to_string(),
+                    })
+                }
+            }
             "ADD_MONTHS" => {
                 // ADD_MONTHS(date, n) - adds n months to date
                 if let FunctionArguments::List(args) = &func.args {
@@ -2391,12 +2698,10 @@ impl QueryExecutor {
                             // Parse date
                             let date = match &date_val {
                                 Value::Date(d) => *d,
-                                Value::Text(s) => {
-                                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-                                        .map_err(|_| YamlBaseError::Database {
-                                            message: format!("Invalid date format: {}", s),
-                                        })?
-                                }
+                                Value::Text(s) => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    .map_err(|_| YamlBaseError::Database {
+                                        message: format!("Invalid date format: {}", s),
+                                    })?,
                                 _ => {
                                     return Err(YamlBaseError::Database {
                                         message: "ADD_MONTHS requires date as first argument"
@@ -2450,29 +2755,23 @@ impl QueryExecutor {
 
                             let date = match &date_val {
                                 Value::Date(d) => *d,
-                                Value::Text(s) => {
-                                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-                                        .map_err(|_| YamlBaseError::Database {
-                                            message: format!("Invalid date format: {}", s),
-                                        })?
-                                }
+                                Value::Text(s) => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    .map_err(|_| YamlBaseError::Database {
+                                        message: format!("Invalid date format: {}", s),
+                                    })?,
                                 _ => {
                                     return Err(YamlBaseError::Database {
                                         message: "LAST_DAY requires date argument".to_string(),
                                     });
                                 }
                             };
-                            
+
                             // Get first day of next month
                             let next_month = if date.month() == 12 {
                                 chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
                             } else {
-                                chrono::NaiveDate::from_ymd_opt(
-                                    date.year(),
-                                    date.month() + 1,
-                                    1,
-                                )
-                                .unwrap()
+                                chrono::NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
+                                    .unwrap()
                             };
                             // Subtract one day to get last day of current month
                             let last_day = next_month - chrono::Duration::days(1);
@@ -2874,7 +3173,8 @@ impl QueryExecutor {
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "LEFT requires string and integer arguments".to_string(),
+                                    message: "LEFT requires string and integer arguments"
+                                        .to_string(),
                                 }),
                             }
                         } else {
@@ -2908,13 +3208,18 @@ impl QueryExecutor {
                                 (Value::Text(s), Value::Integer(len)) => {
                                     let length = if len < 0 { 0 } else { len as usize };
                                     let chars: Vec<char> = s.chars().collect();
-                                    let start = if length >= chars.len() { 0 } else { chars.len() - length };
+                                    let start = if length >= chars.len() {
+                                        0
+                                    } else {
+                                        chars.len() - length
+                                    };
                                     let result: String = chars[start..].iter().collect();
                                     Ok(Value::Text(result))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "RIGHT requires string and integer arguments".to_string(),
+                                    message: "RIGHT requires string and integer arguments"
+                                        .to_string(),
                                 }),
                             }
                         } else {
@@ -2950,19 +3255,21 @@ impl QueryExecutor {
                                     // Use character-based position, not byte-based
                                     let haystack_chars: Vec<char> = haystack.chars().collect();
                                     let needle_chars: Vec<char> = needle.chars().collect();
-                                    
+
                                     if needle_chars.is_empty() {
                                         // Empty string is found at position 1
                                         return Ok(Value::Integer(1));
                                     }
-                                    
+
                                     // Find the needle in the haystack using character positions
-                                    for i in 0..=haystack_chars.len().saturating_sub(needle_chars.len()) {
+                                    for i in
+                                        0..=haystack_chars.len().saturating_sub(needle_chars.len())
+                                    {
                                         if haystack_chars[i..].starts_with(&needle_chars) {
                                             return Ok(Value::Integer((i + 1) as i64));
                                         }
                                     }
-                                    
+
                                     Ok(Value::Integer(0))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
@@ -3259,15 +3566,22 @@ impl QueryExecutor {
                         {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
                             let format_val = self.evaluate_constant_expr(format_expr)?;
-                            
+
                             // Get the date
                             let date = match &date_val {
                                 Value::Date(d) => *d,
                                 Value::Text(s) => {
                                     // Try to parse as date or datetime
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -3277,21 +3591,24 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_FORMAT requires date as first argument".to_string(),
+                                        message: "DATE_FORMAT requires date as first argument"
+                                            .to_string(),
                                     });
                                 }
                             };
-                            
+
                             // Get the format string
                             let format_str = match &format_val {
                                 Value::Text(s) => s,
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_FORMAT requires string format as second argument".to_string(),
+                                        message:
+                                            "DATE_FORMAT requires string format as second argument"
+                                                .to_string(),
                                     });
                                 }
                             };
-                            
+
                             // Convert MySQL format to chrono format
                             let chrono_format = self.mysql_to_chrono_format(format_str);
                             let formatted = date.format(&chrono_format).to_string();
@@ -3322,109 +3639,106 @@ impl QueryExecutor {
     fn mysql_to_chrono_format(&self, mysql_format: &str) -> String {
         // Convert MySQL date format specifiers to chrono format
         // This is a simplified version - MySQL has many more format specifiers
-        mysql_format
-            .replace("%Y", "%Y")      // 4-digit year (same)
-            .replace("%y", "%y")      // 2-digit year (same)
-            .replace("%m", "%m")      // Month as number (01-12) (same)
-            .replace("%c", "%-m")     // Month as number (1-12)
-            .replace("%M", "%B")      // Month name (January, February, etc.)
-            .replace("%b", "%b")      // Abbreviated month name (Jan, Feb, etc.)
-            .replace("%d", "%d")      // Day of month (01-31) (same)
-            .replace("%e", "%-d")     // Day of month (1-31)
-            .replace("%D", "%dth")    // Day with suffix (1st, 2nd, 3rd, etc.) - approximation
-            .replace("%W", "%A")      // Weekday name (Monday, Tuesday, etc.)
-            .replace("%w", "%w")      // Day of week (0=Sunday, 6=Saturday) (same)
-            .replace("%H", "%H")      // Hour (00-23) (same)
-            .replace("%h", "%I")      // Hour (01-12)
-            .replace("%I", "%I")      // Hour (01-12) (same)
-            .replace("%k", "%-H")     // Hour (0-23)
-            .replace("%l", "%-I")     // Hour (1-12)
-            .replace("%i", "%M")      // Minutes (00-59)
-            .replace("%s", "%S")      // Seconds (00-59)
-            .replace("%p", "%p")      // AM/PM (same)
+        let mut result = mysql_format.to_string();
+
+        // Replace only the ones that are different
+        result = result
+            .replace("%c", "%-m") // Month as number (1-12)
+            .replace("%M", "%B") // Month name (January, February, etc.)
+            .replace("%e", "%-d") // Day of month (1-31)
+            .replace("%D", "%dth") // Day with suffix (1st, 2nd, 3rd, etc.) - approximation
+            .replace("%W", "%A") // Weekday name (Monday, Tuesday, etc.)
+            .replace("%h", "%I") // Hour (01-12)
+            .replace("%k", "%-H") // Hour (0-23)
+            .replace("%l", "%-I") // Hour (1-12)
+            .replace("%i", "%M") // Minutes (00-59)
+            .replace("%s", "%S") // Seconds (00-59)
             .replace("%r", "%I:%M:%S %p") // Time 12-hour format
-            .replace("%T", "%H:%M:%S")    // Time 24-hour format
-            .replace("%%", "%")           // Literal %
+            .replace("%T", "%H:%M:%S") // Time 24-hour format
+            .replace("%%", "%"); // Literal %
+
+        // These are the same in both formats, so no need to replace:
+        // %Y - 4-digit year
+        // %y - 2-digit year
+        // %m - Month as number (01-12)
+        // %b - Abbreviated month name
+        // %d - Day of month (01-31)
+        // %w - Day of week (0=Sunday, 6=Saturday)
+        // %H - Hour (00-23)
+        // %I - Hour (01-12)
+        // %p - AM/PM
+
+        result
     }
 
     fn cast_value(&self, value: Value, data_type: &DataType) -> crate::Result<Value> {
         use sqlparser::ast::DataType;
-        
+
         match data_type {
-            DataType::Int(_) | DataType::Integer(_) | DataType::BigInt(_) => {
-                match value {
-                    Value::Integer(i) => Ok(Value::Integer(i)),
-                    Value::Double(d) => Ok(Value::Integer(d as i64)),
-                    Value::Float(f) => Ok(Value::Integer(f as i64)),
-                    Value::Text(s) => {
-                        s.trim().parse::<i64>()
-                            .map(Value::Integer)
-                            .map_err(|_| YamlBaseError::Database {
-                                message: format!("Cannot cast '{}' to INTEGER", s),
-                            })
+            DataType::Int(_) | DataType::Integer(_) | DataType::BigInt(_) => match value {
+                Value::Integer(i) => Ok(Value::Integer(i)),
+                Value::Double(d) => Ok(Value::Integer(d as i64)),
+                Value::Float(f) => Ok(Value::Integer(f as i64)),
+                Value::Text(s) => s.trim().parse::<i64>().map(Value::Integer).map_err(|_| {
+                    YamlBaseError::Database {
+                        message: format!("Cannot cast '{}' to INTEGER", s),
                     }
-                    Value::Boolean(b) => Ok(Value::Integer(if b { 1 } else { 0 })),
-                    Value::Null => Ok(Value::Null),
-                    _ => Err(YamlBaseError::Database {
-                        message: format!("Cannot cast {:?} to INTEGER", value),
-                    }),
-                }
-            }
+                }),
+                Value::Boolean(b) => Ok(Value::Integer(if b { 1 } else { 0 })),
+                Value::Null => Ok(Value::Null),
+                _ => Err(YamlBaseError::Database {
+                    message: format!("Cannot cast {:?} to INTEGER", value),
+                }),
+            },
             DataType::Float(_) | DataType::Real => {
                 match value {
                     Value::Integer(i) => Ok(Value::Float(i as f32)),
                     Value::Double(d) => Ok(Value::Float(d as f32)),
                     Value::Float(f) => Ok(Value::Float(f)),
-                    Value::Text(s) => {
-                        s.trim().parse::<f32>()
-                            .map(Value::Float)
-                            .map_err(|_| YamlBaseError::Database {
-                                message: format!("Cannot cast '{}' to FLOAT", s),
-                            })
-                    }
+                    Value::Text(s) => s.trim().parse::<f32>().map(Value::Float).map_err(|_| {
+                        YamlBaseError::Database {
+                            message: format!("Cannot cast '{}' to FLOAT", s),
+                        }
+                    }),
                     Value::Null => Ok(Value::Null),
                     _ => Err(YamlBaseError::Database {
                         message: format!("Cannot cast {:?} to FLOAT", value),
                     }),
                 }
             }
-            DataType::Double | DataType::DoublePrecision => {
-                match value {
-                    Value::Integer(i) => Ok(Value::Double(i as f64)),
-                    Value::Double(d) => Ok(Value::Double(d)),
-                    Value::Float(f) => Ok(Value::Double(f as f64)),
-                    Value::Text(s) => {
-                        s.trim().parse::<f64>()
-                            .map(Value::Double)
-                            .map_err(|_| YamlBaseError::Database {
-                                message: format!("Cannot cast '{}' to DOUBLE", s),
-                            })
+            DataType::Double | DataType::DoublePrecision => match value {
+                Value::Integer(i) => Ok(Value::Double(i as f64)),
+                Value::Double(d) => Ok(Value::Double(d)),
+                Value::Float(f) => Ok(Value::Double(f as f64)),
+                Value::Text(s) => s.trim().parse::<f64>().map(Value::Double).map_err(|_| {
+                    YamlBaseError::Database {
+                        message: format!("Cannot cast '{}' to DOUBLE", s),
                     }
-                    Value::Null => Ok(Value::Null),
-                    _ => Err(YamlBaseError::Database {
-                        message: format!("Cannot cast {:?} to DOUBLE", value),
-                    }),
-                }
-            }
-            DataType::Varchar(_) | DataType::Char(_) | DataType::Text => {
-                match value {
-                    Value::Integer(i) => Ok(Value::Text(i.to_string())),
-                    Value::Double(d) => Ok(Value::Text(d.to_string())),
-                    Value::Float(f) => Ok(Value::Text(f.to_string())),
-                    Value::Boolean(b) => Ok(Value::Text(b.to_string())),
-                    Value::Text(s) => Ok(Value::Text(s)),
-                    Value::Date(d) => Ok(Value::Text(d.format("%Y-%m-%d").to_string())),
-                    Value::Null => Ok(Value::Null),
-                    _ => Ok(Value::Text(format!("{:?}", value))),
-                }
-            }
+                }),
+                Value::Null => Ok(Value::Null),
+                _ => Err(YamlBaseError::Database {
+                    message: format!("Cannot cast {:?} to DOUBLE", value),
+                }),
+            },
+            DataType::Varchar(_) | DataType::Char(_) | DataType::Text => match value {
+                Value::Integer(i) => Ok(Value::Text(i.to_string())),
+                Value::Double(d) => Ok(Value::Text(d.to_string())),
+                Value::Float(f) => Ok(Value::Text(f.to_string())),
+                Value::Boolean(b) => Ok(Value::Text(b.to_string())),
+                Value::Text(s) => Ok(Value::Text(s)),
+                Value::Date(d) => Ok(Value::Text(d.format("%Y-%m-%d").to_string())),
+                Value::Null => Ok(Value::Null),
+                _ => Ok(Value::Text(format!("{:?}", value))),
+            },
             DataType::Date => {
                 match value {
                     Value::Text(s) => {
                         // Try to parse various date formats
                         if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
                             Ok(Value::Date(date))
-                        } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                        } else if let Ok(datetime) =
+                            chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                        {
                             Ok(Value::Date(datetime.date()))
                         } else {
                             Err(YamlBaseError::Database {
@@ -3439,24 +3753,22 @@ impl QueryExecutor {
                     }),
                 }
             }
-            DataType::Boolean => {
-                match value {
-                    Value::Boolean(b) => Ok(Value::Boolean(b)),
-                    Value::Integer(i) => Ok(Value::Boolean(i != 0)),
-                    Value::Double(d) => Ok(Value::Boolean(d != 0.0)),
-                    Value::Float(f) => Ok(Value::Boolean(f != 0.0)),
-                    Value::Text(s) => {
-                        let s_lower = s.to_lowercase();
-                        Ok(Value::Boolean(
-                            s_lower == "true" || s_lower == "1" || s_lower == "yes" || s_lower == "on"
-                        ))
-                    }
-                    Value::Null => Ok(Value::Null),
-                    _ => Err(YamlBaseError::Database {
-                        message: format!("Cannot cast {:?} to BOOLEAN", value),
-                    }),
+            DataType::Boolean => match value {
+                Value::Boolean(b) => Ok(Value::Boolean(b)),
+                Value::Integer(i) => Ok(Value::Boolean(i != 0)),
+                Value::Double(d) => Ok(Value::Boolean(d != 0.0)),
+                Value::Float(f) => Ok(Value::Boolean(f != 0.0)),
+                Value::Text(s) => {
+                    let s_lower = s.to_lowercase();
+                    Ok(Value::Boolean(
+                        s_lower == "true" || s_lower == "1" || s_lower == "yes" || s_lower == "on",
+                    ))
                 }
-            }
+                Value::Null => Ok(Value::Null),
+                _ => Err(YamlBaseError::Database {
+                    message: format!("Cannot cast {:?} to BOOLEAN", value),
+                }),
+            },
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "CAST to {:?} is not supported",
                 data_type
@@ -3546,26 +3858,27 @@ impl QueryExecutor {
                 let mut result = self
                     .execute_group_by_aggregate(select, &select.group_by, &filtered_rows, table)
                     .await?;
-                
+
                 // Apply ORDER BY to GROUP BY results
                 if let Some(order_by) = &_query.order_by {
                     // Create column info for sorting
-                    let col_info: Vec<(String, usize)> = result.columns
+                    let col_info: Vec<(String, usize)> = result
+                        .columns
                         .iter()
                         .enumerate()
                         .map(|(idx, name)| (name.clone(), idx))
                         .collect();
-                    
+
                     let sorted_rows = self.sort_rows(result.rows, &order_by.exprs, &col_info)?;
                     result.rows = sorted_rows;
                 }
-                
+
                 // Apply LIMIT and OFFSET
                 if let Some(limit_expr) = &_query.limit {
                     let limit_rows = self.apply_limit(result.rows, limit_expr)?;
                     result.rows = limit_rows;
                 }
-                
+
                 return Ok(result);
             }
             GroupByExpr::All(_) => {
@@ -4388,7 +4701,9 @@ impl QueryExecutor {
         let mut result = Vec::new();
 
         match join_type {
-            JoinOperator::Inner(constraint) | JoinOperator::LeftOuter(constraint) | JoinOperator::RightOuter(constraint) => {
+            JoinOperator::Inner(constraint)
+            | JoinOperator::LeftOuter(constraint)
+            | JoinOperator::RightOuter(constraint) => {
                 // For INNER, LEFT JOIN, and RIGHT JOIN
                 let is_left_join = matches!(join_type, JoinOperator::LeftOuter(_));
                 let is_right_join = matches!(join_type, JoinOperator::RightOuter(_));
@@ -4443,13 +4758,13 @@ impl QueryExecutor {
                 if is_right_join {
                     // Track which right rows were matched
                     let mut matched_right_indices = std::collections::HashSet::new();
-                    
+
                     // First pass: find all matches (we need to redo this for RIGHT JOIN)
                     result.clear(); // Clear previous results as we need to rebuild for RIGHT JOIN
-                    
+
                     for (right_idx, right_row) in right_table.rows.iter().enumerate() {
                         let mut row_matched = false;
-                        
+
                         for left_row in &left_rows {
                             // Combine rows for evaluation
                             let mut combined_row = left_row.clone();
@@ -4482,7 +4797,7 @@ impl QueryExecutor {
                                 row_matched = true;
                             }
                         }
-                        
+
                         // If this right row had no matches, add it with NULLs for left columns
                         if !row_matched {
                             let mut combined_row = vec![];
@@ -5106,8 +5421,10 @@ impl QueryExecutor {
                             FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
                         ) = (&args.args[0], &args.args[1])
                         {
-                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            let len_val = self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
+                            let str_val =
+                                self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            let len_val =
+                                self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
 
                             match (str_val, len_val) {
                                 (Value::Text(s), Value::Integer(len)) => {
@@ -5117,7 +5434,8 @@ impl QueryExecutor {
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "LEFT requires string and integer arguments".to_string(),
+                                    message: "LEFT requires string and integer arguments"
+                                        .to_string(),
                                 }),
                             }
                         } else {
@@ -5144,20 +5462,27 @@ impl QueryExecutor {
                             FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
                         ) = (&args.args[0], &args.args[1])
                         {
-                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
-                            let len_val = self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
+                            let str_val =
+                                self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            let len_val =
+                                self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
 
                             match (str_val, len_val) {
                                 (Value::Text(s), Value::Integer(len)) => {
                                     let length = if len < 0 { 0 } else { len as usize };
                                     let chars: Vec<char> = s.chars().collect();
-                                    let start = if length >= chars.len() { 0 } else { chars.len() - length };
+                                    let start = if length >= chars.len() {
+                                        0
+                                    } else {
+                                        chars.len() - length
+                                    };
                                     let result: String = chars[start..].iter().collect();
                                     Ok(Value::Text(result))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
-                                    message: "RIGHT requires string and integer arguments".to_string(),
+                                    message: "RIGHT requires string and integer arguments"
+                                        .to_string(),
                                 }),
                             }
                         } else {
@@ -5184,8 +5509,14 @@ impl QueryExecutor {
                             FunctionArg::Unnamed(FunctionArgExpr::Expr(haystack_expr)),
                         ) = (&args.args[0], &args.args[1])
                         {
-                            let needle_val = self.get_join_expr_value(needle_expr, row, tables, table_aliases)?;
-                            let haystack_val = self.get_join_expr_value(haystack_expr, row, tables, table_aliases)?;
+                            let needle_val =
+                                self.get_join_expr_value(needle_expr, row, tables, table_aliases)?;
+                            let haystack_val = self.get_join_expr_value(
+                                haystack_expr,
+                                row,
+                                tables,
+                                table_aliases,
+                            )?;
 
                             match (needle_val, haystack_val) {
                                 (Value::Text(needle), Value::Text(haystack)) => {
@@ -5193,19 +5524,21 @@ impl QueryExecutor {
                                     // Use character-based position, not byte-based
                                     let haystack_chars: Vec<char> = haystack.chars().collect();
                                     let needle_chars: Vec<char> = needle.chars().collect();
-                                    
+
                                     if needle_chars.is_empty() {
                                         // Empty string is found at position 1
                                         return Ok(Value::Integer(1));
                                     }
-                                    
+
                                     // Find the needle in the haystack using character positions
-                                    for i in 0..=haystack_chars.len().saturating_sub(needle_chars.len()) {
+                                    for i in
+                                        0..=haystack_chars.len().saturating_sub(needle_chars.len())
+                                    {
                                         if haystack_chars[i..].starts_with(&needle_chars) {
                                             return Ok(Value::Integer((i + 1) as i64));
                                         }
                                     }
-                                    
+
                                     Ok(Value::Integer(0))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
@@ -5346,22 +5679,8 @@ impl QueryExecutor {
             }
             Expr::Extract { field, expr, .. } => {
                 // Handle EXTRACT in JOIN conditions
-                let date_val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
-
-                let date_str = match &date_val {
-                    Value::Text(s) => s,
-                    Value::Date(d) => {
-                        let formatted = d.format("%Y-%m-%d").to_string();
-                        return self.evaluate_extract_from_date(field, &formatted);
-                    }
-                    _ => {
-                        return Err(YamlBaseError::Database {
-                            message: "EXTRACT requires date argument".to_string(),
-                        });
-                    }
-                };
-
-                self.evaluate_extract_from_date(field, date_str)
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                self.evaluate_extract_from_value(field, &val)
             }
             Expr::Trim { expr, .. } => {
                 // Handle TRIM expression
@@ -5672,6 +5991,108 @@ impl QueryExecutor {
             )),
         }
     }
+
+    fn perform_union(
+        &self,
+        mut left_rows: Vec<Vec<Value>>,
+        right_rows: Vec<Vec<Value>>,
+        set_quantifier: &SetQuantifier,
+    ) -> crate::Result<Vec<Vec<Value>>> {
+        match set_quantifier {
+            SetQuantifier::All => {
+                // UNION ALL - keep all rows including duplicates
+                left_rows.extend(right_rows);
+                Ok(left_rows)
+            }
+            SetQuantifier::None
+            | SetQuantifier::Distinct
+            | SetQuantifier::DistinctByName
+            | SetQuantifier::ByName
+            | SetQuantifier::AllByName => {
+                // UNION DISTINCT (default) - remove duplicates
+                // None means no explicit quantifier, which defaults to DISTINCT
+                left_rows.extend(right_rows);
+                self.apply_distinct(left_rows)
+            }
+        }
+    }
+
+    fn perform_except(
+        &self,
+        left_rows: Vec<Vec<Value>>,
+        right_rows: Vec<Vec<Value>>,
+        set_quantifier: &SetQuantifier,
+    ) -> crate::Result<Vec<Vec<Value>>> {
+        match set_quantifier {
+            SetQuantifier::All => {
+                // EXCEPT ALL - remove one occurrence from left for each in right
+                let mut result = left_rows.clone();
+                let mut right_multiset = right_rows.clone();
+
+                result.retain(|left_row| {
+                    if let Some(pos) = right_multiset.iter().position(|r| r == left_row) {
+                        right_multiset.remove(pos);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                Ok(result)
+            }
+            SetQuantifier::None
+            | SetQuantifier::Distinct
+            | SetQuantifier::DistinctByName
+            | SetQuantifier::ByName
+            | SetQuantifier::AllByName => {
+                // EXCEPT DISTINCT (default) - remove all occurrences
+                // None means no explicit quantifier, which defaults to DISTINCT
+                let mut result = self.apply_distinct(left_rows)?;
+                let right_set = self.apply_distinct(right_rows)?;
+
+                result.retain(|row| !right_set.contains(row));
+                Ok(result)
+            }
+        }
+    }
+
+    fn perform_intersect(
+        &self,
+        left_rows: Vec<Vec<Value>>,
+        right_rows: Vec<Vec<Value>>,
+        set_quantifier: &SetQuantifier,
+    ) -> crate::Result<Vec<Vec<Value>>> {
+        match set_quantifier {
+            SetQuantifier::All => {
+                // INTERSECT ALL - keep minimum occurrences
+                let mut result = Vec::new();
+                let mut right_multiset = right_rows.clone();
+
+                for left_row in &left_rows {
+                    if let Some(pos) = right_multiset.iter().position(|r| r == left_row) {
+                        result.push(left_row.clone());
+                        right_multiset.remove(pos);
+                    }
+                }
+                Ok(result)
+            }
+            SetQuantifier::None
+            | SetQuantifier::Distinct
+            | SetQuantifier::DistinctByName
+            | SetQuantifier::ByName
+            | SetQuantifier::AllByName => {
+                // INTERSECT DISTINCT (default) - keep only distinct common rows
+                // None means no explicit quantifier, which defaults to DISTINCT
+                let left_set = self.apply_distinct(left_rows)?;
+                let right_set = self.apply_distinct(right_rows)?;
+
+                let result = left_set
+                    .into_iter()
+                    .filter(|row| right_set.contains(row))
+                    .collect();
+                Ok(result)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5729,6 +6150,9 @@ mod tests {
             .unwrap();
         table
             .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+            .unwrap();
+        table
+            .insert_row(vec![Value::Integer(3), Value::Text("Charlie".to_string())])
             .unwrap();
 
         db.add_table(table).unwrap();
@@ -5885,11 +6309,13 @@ mod tests {
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.columns[0], "id");
         assert_eq!(result.columns[1], "name");
-        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows.len(), 3);
         assert_eq!(result.rows[0][0], Value::Integer(1));
         assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
         assert_eq!(result.rows[1][0], Value::Integer(2));
         assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+        assert_eq!(result.rows[2][0], Value::Integer(3));
+        assert_eq!(result.rows[2][1], Value::Text("Charlie".to_string()));
     }
 
     #[tokio::test]
@@ -6758,7 +7184,7 @@ mod tests {
     async fn test_current_date_and_timestamp() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test 1: CURRENT_DATE returns Date value
         let stmt = parse_statement("SELECT CURRENT_DATE");
         let result = executor.execute(&stmt).await.unwrap();
@@ -6791,11 +7217,13 @@ mod tests {
         assert_eq!(result.columns[0], "id");
         assert_eq!(result.columns[1], "name");
         assert_eq!(result.columns[2], "column_1"); // Generated column name
-        assert_eq!(result.rows.len(), 2); // Two users in test db
+        assert_eq!(result.rows.len(), 3); // Three users in test db
         // All rows should have the same current date
         assert!(matches!(result.rows[0][2], Value::Date(_)));
         assert!(matches!(result.rows[1][2], Value::Date(_)));
+        assert!(matches!(result.rows[2][2], Value::Date(_)));
         assert_eq!(result.rows[0][2], result.rows[1][2]);
+        assert_eq!(result.rows[0][2], result.rows[2][2]);
 
         // Test 4: CURRENT_TIMESTAMP with table data
         let stmt = parse_statement("SELECT name, CURRENT_TIMESTAMP FROM users WHERE id = 1");
@@ -6819,7 +7247,7 @@ mod tests {
     async fn test_date_format_function() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test 1: Basic date formatting
         let stmt = parse_statement("SELECT DATE_FORMAT(DATE '2025-07-15', '%Y-%m-%d')");
         let result = executor.execute(&stmt).await.unwrap();
@@ -6843,7 +7271,10 @@ mod tests {
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         // July 15, 2025 is a Tuesday
-        assert_eq!(result.rows[0][0], Value::Text("Tuesday, 15 July 2025".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text("Tuesday, 15 July 2025".to_string())
+        );
 
         // Test 5: With CURRENT_DATE
         let stmt = parse_statement("SELECT DATE_FORMAT(CURRENT_DATE, '%Y-%m-%d')");
@@ -8882,7 +9313,7 @@ mod tests {
     #[tokio::test]
     async fn test_is_null_is_not_null_operators() {
         let mut db = Database::new("test_db".to_string());
-        
+
         // Create test table with nullable columns
         let columns = vec![
             Column {
@@ -8933,47 +9364,57 @@ mod tests {
         ];
 
         let mut table = Table::new("users".to_string(), columns);
-        
+
         // Add test data with various NULL values
-        table.insert_row(vec![
-            Value::Integer(1),
-            Value::Text("Alice".to_string()),
-            Value::Text("alice@example.com".to_string()),
-            Value::Integer(25),
-            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(2),
-            Value::Text("Bob".to_string()),
-            Value::Null,  // NULL email
-            Value::Integer(30),
-            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(3),
-            Value::Null,  // NULL name
-            Value::Text("charlie@example.com".to_string()),
-            Value::Null,  // NULL age
-            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 3).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(4),
-            Value::Text("David".to_string()),
-            Value::Text("david@example.com".to_string()),
-            Value::Integer(35),
-            Value::Null,  // NULL created_at
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(5),
-            Value::Null,  // NULL name
-            Value::Null,  // NULL email
-            Value::Null,  // NULL age
-            Value::Null,  // NULL created_at
-        ]).unwrap();
+        table
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Text("Alice".to_string()),
+                Value::Text("alice@example.com".to_string()),
+                Value::Integer(25),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Text("Bob".to_string()),
+                Value::Null, // NULL email
+                Value::Integer(30),
+                Value::Date(NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Null, // NULL name
+                Value::Text("charlie@example.com".to_string()),
+                Value::Null, // NULL age
+                Value::Date(NaiveDate::from_ymd_opt(2024, 1, 3).unwrap()),
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(4),
+                Value::Text("David".to_string()),
+                Value::Text("david@example.com".to_string()),
+                Value::Integer(35),
+                Value::Null, // NULL created_at
+            ])
+            .unwrap();
+
+        table
+            .insert_row(vec![
+                Value::Integer(5),
+                Value::Null, // NULL name
+                Value::Null, // NULL email
+                Value::Null, // NULL age
+                Value::Null, // NULL created_at
+            ])
+            .unwrap();
 
         db.add_table(table).unwrap();
         let db = Arc::new(RwLock::new(db));
@@ -8996,14 +9437,16 @@ mod tests {
 
         // Test multiple NULL checks
         // Both ID 3 and ID 5 have NULL name and NULL age
-        let stmt = parse_statement("SELECT * FROM users WHERE name IS NULL AND age IS NULL ORDER BY id");
+        let stmt =
+            parse_statement("SELECT * FROM users WHERE name IS NULL AND age IS NULL ORDER BY id");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 2); // IDs 3, 5
         assert_eq!(result.rows[0][0], Value::Integer(3));
         assert_eq!(result.rows[1][0], Value::Integer(5));
 
         // Test IS NULL with OR
-        let stmt = parse_statement("SELECT * FROM users WHERE name IS NULL OR age IS NULL ORDER BY id");
+        let stmt =
+            parse_statement("SELECT * FROM users WHERE name IS NULL OR age IS NULL ORDER BY id");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 2); // IDs 3, 5
         assert_eq!(result.rows[0][0], Value::Integer(3));
@@ -9011,16 +9454,19 @@ mod tests {
 
         // Test combining IS NULL with other conditions
         // Note: NULL > 25 evaluates to false, so Charlie (ID 3) with NULL age won't match
-        let stmt = parse_statement("SELECT * FROM users WHERE email IS NOT NULL AND age > 25 ORDER BY id");
+        let stmt =
+            parse_statement("SELECT * FROM users WHERE email IS NOT NULL AND age > 25 ORDER BY id");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1); // Only ID 4 (David, age 35)
         assert_eq!(result.rows[0][0], Value::Integer(4));
-        
+
         // Test with OR to include NULL ages
-        let stmt = parse_statement("SELECT * FROM users WHERE email IS NOT NULL AND (age > 29 OR age IS NULL) ORDER BY id");
+        let stmt = parse_statement(
+            "SELECT * FROM users WHERE email IS NOT NULL AND (age > 29 OR age IS NULL) ORDER BY id",
+        );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 2); // IDs 3, 4
-        
+
         // Test COUNT with IS NULL
         let stmt = parse_statement("SELECT COUNT(*) FROM users WHERE created_at IS NULL");
         let result = executor.execute(&stmt).await.unwrap();
@@ -9041,114 +9487,124 @@ mod tests {
         let db = Arc::new(RwLock::new(Database::new("test_db".to_string())));
         {
             let mut db_write = db.write().await;
-        
-        // Create test table
-        let columns = vec![
-            Column {
-                name: "id".to_string(),
-                sql_type: crate::yaml::schema::SqlType::Integer,
-                primary_key: true,
-                nullable: false,
-                unique: true,
-                default: None,
-                references: None,
-            },
-            Column {
-                name: "product".to_string(),
-                sql_type: crate::yaml::schema::SqlType::Varchar(50),
-                primary_key: false,
-                nullable: false,
-                unique: false,
-                default: None,
-                references: None,
-            },
-            Column {
-                name: "price".to_string(),
-                sql_type: crate::yaml::schema::SqlType::Double,
-                primary_key: false,
-                nullable: true,
-                unique: false,
-                default: None,
-                references: None,
-            },
-            Column {
-                name: "quantity".to_string(),
-                sql_type: crate::yaml::schema::SqlType::Integer,
-                primary_key: false,
-                nullable: true,
-                unique: false,
-                default: None,
-                references: None,
-            },
-            Column {
-                name: "category".to_string(),
-                sql_type: crate::yaml::schema::SqlType::Varchar(50),
-                primary_key: false,
-                nullable: false,
-                unique: false,
-                default: None,
-                references: None,
-            },
-            Column {
-                name: "created_date".to_string(),
-                sql_type: crate::yaml::schema::SqlType::Date,
-                primary_key: false,
-                nullable: true,
-                unique: false,
-                default: None,
-                references: None,
-            },
-        ];
 
-        let mut table = Table::new("products".to_string(), columns);
-        
-        // Add test data
-        table.insert_row(vec![
-            Value::Integer(1),
-            Value::Text("Laptop".to_string()),
-            Value::Double(999.99),
-            Value::Integer(10),
-            Value::Text("Electronics".to_string()),
-            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(2),
-            Value::Text("Mouse".to_string()),
-            Value::Double(29.99),
-            Value::Integer(50),
-            Value::Text("Electronics".to_string()),
-            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 20).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(3),
-            Value::Text("Desk".to_string()),
-            Value::Double(299.99),
-            Value::Integer(5),
-            Value::Text("Furniture".to_string()),
-            Value::Date(NaiveDate::from_ymd_opt(2024, 2, 1).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(4),
-            Value::Text("Chair".to_string()),
-            Value::Double(149.99),
-            Value::Null,  // NULL quantity
-            Value::Text("Furniture".to_string()),
-            Value::Date(NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()),
-        ]).unwrap();
-        
-        table.insert_row(vec![
-            Value::Integer(5),
-            Value::Text("Monitor".to_string()),
-            Value::Null,  // NULL price
-            Value::Integer(15),
-            Value::Text("Electronics".to_string()),
-            Value::Null,  // NULL created_date
-        ]).unwrap();
+            // Create test table
+            let columns = vec![
+                Column {
+                    name: "id".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Integer,
+                    primary_key: true,
+                    nullable: false,
+                    unique: true,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "product".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                    primary_key: false,
+                    nullable: false,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "price".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Double,
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "quantity".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Integer,
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "category".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(50),
+                    primary_key: false,
+                    nullable: false,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "created_date".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Date,
+                    primary_key: false,
+                    nullable: true,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
 
-        db_write.add_table(table).unwrap();
+            let mut table = Table::new("products".to_string(), columns);
+
+            // Add test data
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Laptop".to_string()),
+                    Value::Double(999.99),
+                    Value::Integer(10),
+                    Value::Text("Electronics".to_string()),
+                    Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
+                ])
+                .unwrap();
+
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Mouse".to_string()),
+                    Value::Double(29.99),
+                    Value::Integer(50),
+                    Value::Text("Electronics".to_string()),
+                    Value::Date(NaiveDate::from_ymd_opt(2024, 1, 20).unwrap()),
+                ])
+                .unwrap();
+
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Desk".to_string()),
+                    Value::Double(299.99),
+                    Value::Integer(5),
+                    Value::Text("Furniture".to_string()),
+                    Value::Date(NaiveDate::from_ymd_opt(2024, 2, 1).unwrap()),
+                ])
+                .unwrap();
+
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Text("Chair".to_string()),
+                    Value::Double(149.99),
+                    Value::Null, // NULL quantity
+                    Value::Text("Furniture".to_string()),
+                    Value::Date(NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()),
+                ])
+                .unwrap();
+
+            table
+                .insert_row(vec![
+                    Value::Integer(5),
+                    Value::Text("Monitor".to_string()),
+                    Value::Null, // NULL price
+                    Value::Integer(15),
+                    Value::Text("Electronics".to_string()),
+                    Value::Null, // NULL created_date
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
         }
         let executor = create_test_executor_from_arc(db).await;
 
@@ -9192,24 +9648,32 @@ mod tests {
         let stmt = parse_statement("SELECT MIN(created_date) FROM products");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap())
+        );
 
         // Test MAX on date column with NULL
         let stmt = parse_statement("SELECT MAX(created_date) FROM products");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], Value::Date(NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Date(NaiveDate::from_ymd_opt(2024, 2, 10).unwrap())
+        );
 
         // Test MIN/MAX with GROUP BY
-        let stmt = parse_statement("SELECT category, MIN(price), MAX(price) FROM products GROUP BY category ORDER BY category");
+        let stmt = parse_statement(
+            "SELECT category, MIN(price), MAX(price) FROM products GROUP BY category ORDER BY category",
+        );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 2);
-        
+
         // Electronics: MIN=29.99, MAX=999.99 (NULL price excluded)
         assert_eq!(result.rows[0][0], Value::Text("Electronics".to_string()));
         assert_eq!(result.rows[0][1], Value::Double(29.99));
         assert_eq!(result.rows[0][2], Value::Double(999.99));
-        
+
         // Furniture: MIN=149.99, MAX=299.99
         assert_eq!(result.rows[1][0], Value::Text("Furniture".to_string()));
         assert_eq!(result.rows[1][1], Value::Double(149.99));
@@ -9222,7 +9686,9 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Null);
 
         // Test multiple aggregates together
-        let stmt = parse_statement("SELECT COUNT(*), MIN(price), MAX(price), AVG(price), SUM(price) FROM products");
+        let stmt = parse_statement(
+            "SELECT COUNT(*), MIN(price), MAX(price), AVG(price), SUM(price) FROM products",
+        );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(5)); // COUNT(*)
@@ -9414,61 +9880,64 @@ mod tests {
     async fn test_cast_function() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test 1: Cast integer to text
         let stmt = parse_statement("SELECT CAST(123 AS VARCHAR)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("123".to_string()));
-        
+
         // Test 2: Cast text to integer
         let stmt = parse_statement("SELECT CAST('456' AS INTEGER)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(456));
-        
+
         // Test 3: Cast float to integer (truncates)
         let stmt = parse_statement("SELECT CAST(123.789 AS INTEGER)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(123));
-        
+
         // Test 4: Cast integer to float
         let stmt = parse_statement("SELECT CAST(123 AS FLOAT)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Float(123.0));
-        
+
         // Test 5: Cast text to double
         let stmt = parse_statement("SELECT CAST('123.456' AS DOUBLE)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Double(123.456));
-        
+
         // Test 6: Cast text to date
         let stmt = parse_statement("SELECT CAST('2025-07-15' AS DATE)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], Value::Date(NaiveDate::from_ymd_opt(2025, 7, 15).unwrap()));
-        
+        assert_eq!(
+            result.rows[0][0],
+            Value::Date(NaiveDate::from_ymd_opt(2025, 7, 15).unwrap())
+        );
+
         // Test 7: Cast boolean to integer
         let stmt = parse_statement("SELECT CAST(TRUE AS INTEGER)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Integer(1));
-        
+
         // Test 8: Cast integer to boolean
         let stmt = parse_statement("SELECT CAST(1 AS BOOLEAN)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Boolean(true));
-        
+
         // Test 9: Cast NULL
         let stmt = parse_statement("SELECT CAST(NULL AS INTEGER)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Null);
-        
+
         // Test 10: Cast in WHERE clause
         let stmt = parse_statement("SELECT name FROM users WHERE CAST(id AS VARCHAR) = '1'");
         let result = executor.execute(&stmt).await.unwrap();
@@ -9481,18 +9950,24 @@ mod tests {
         let db = Arc::new(RwLock::new(Database::new("test_db".to_string())));
         {
             let mut db_write = db.write().await;
-            
+
             // Create users table
             let users_columns = vec![
                 create_column("id", crate::yaml::schema::SqlType::Integer, true),
                 create_column("name", crate::yaml::schema::SqlType::Text, false),
             ];
             let mut users_table = Table::new("users".to_string(), users_columns);
-            
-            users_table.insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())]).unwrap();
-            users_table.insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())]).unwrap();
-            users_table.insert_row(vec![Value::Integer(3), Value::Text("Charlie".to_string())]).unwrap();
-            
+
+            users_table
+                .insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+                .unwrap();
+            users_table
+                .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+                .unwrap();
+            users_table
+                .insert_row(vec![Value::Integer(3), Value::Text("Charlie".to_string())])
+                .unwrap();
+
             // Create orders table
             let orders_columns = vec![
                 create_column("id", crate::yaml::schema::SqlType::Integer, true),
@@ -9500,20 +9975,38 @@ mod tests {
                 create_column("amount", crate::yaml::schema::SqlType::Integer, false),
             ];
             let mut orders_table = Table::new("orders".to_string(), orders_columns);
-            
-            orders_table.insert_row(vec![Value::Integer(1), Value::Integer(1), Value::Integer(100)]).unwrap();
-            orders_table.insert_row(vec![Value::Integer(2), Value::Integer(1), Value::Integer(200)]).unwrap();
-            orders_table.insert_row(vec![Value::Integer(3), Value::Integer(2), Value::Integer(300)]).unwrap();
+
+            orders_table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Integer(1),
+                    Value::Integer(100),
+                ])
+                .unwrap();
+            orders_table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Integer(1),
+                    Value::Integer(200),
+                ])
+                .unwrap();
+            orders_table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Integer(2),
+                    Value::Integer(300),
+                ])
+                .unwrap();
             // Note: Charlie (id=3) has no orders
-            
+
             db_write.add_table(users_table).unwrap();
             db_write.add_table(orders_table).unwrap();
         }
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test 1: Basic LEFT JOIN - all users including those without orders
         let stmt = parse_statement(
-            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id ORDER BY u.id, o.id"
+            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id ORDER BY u.id, o.id",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 4); // Alice (2 orders), Bob (1 order), Charlie (0 orders)
@@ -9525,10 +10018,10 @@ mod tests {
         assert_eq!(result.rows[2][1], Value::Integer(300));
         assert_eq!(result.rows[3][0], Value::Text("Charlie".to_string()));
         assert_eq!(result.rows[3][1], Value::Null); // No orders for Charlie
-        
+
         // Test 2: LEFT JOIN with WHERE on left table
         let stmt = parse_statement(
-            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id >= 2 ORDER BY u.id"
+            "SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id >= 2 ORDER BY u.id",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 2); // Bob and Charlie
@@ -9536,10 +10029,10 @@ mod tests {
         assert_eq!(result.rows[0][1], Value::Integer(300));
         assert_eq!(result.rows[1][0], Value::Text("Charlie".to_string()));
         assert_eq!(result.rows[1][1], Value::Null);
-        
+
         // Test 3: LEFT JOIN with NULL values
         let stmt = parse_statement(
-            "SELECT u.id, u.name, o.id as order_id FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id = 3"
+            "SELECT u.id, u.name, o.id as order_id FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.id = 3",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
@@ -9556,41 +10049,55 @@ mod tests {
             let columns = vec![
                 create_column("id", crate::yaml::schema::SqlType::Integer, true),
                 create_column("name", crate::yaml::schema::SqlType::Varchar(50), false),
-                create_column("department", crate::yaml::schema::SqlType::Varchar(50), false),
+                create_column(
+                    "department",
+                    crate::yaml::schema::SqlType::Varchar(50),
+                    false,
+                ),
                 create_column("salary", crate::yaml::schema::SqlType::Integer, false),
             ];
             let mut table = Table::new("employees".to_string(), columns);
 
-            table.insert_row(vec![
-                Value::Integer(1),
-                Value::Text("Alice".to_string()),
-                Value::Text("Engineering".to_string()),
-                Value::Integer(100000),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(2),
-                Value::Text("Bob".to_string()),
-                Value::Text("Sales".to_string()),
-                Value::Integer(80000),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(3),
-                Value::Text("Charlie".to_string()),
-                Value::Text("Marketing".to_string()),
-                Value::Integer(90000),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(4),
-                Value::Text("David".to_string()),
-                Value::Text("Engineering".to_string()),
-                Value::Integer(110000),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(5),
-                Value::Text("Eve".to_string()),
-                Value::Text("HR".to_string()),
-                Value::Integer(75000),
-            ]).unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("Alice".to_string()),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(100000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("Bob".to_string()),
+                    Value::Text("Sales".to_string()),
+                    Value::Integer(80000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("Charlie".to_string()),
+                    Value::Text("Marketing".to_string()),
+                    Value::Integer(90000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Text("David".to_string()),
+                    Value::Text("Engineering".to_string()),
+                    Value::Integer(110000),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(5),
+                    Value::Text("Eve".to_string()),
+                    Value::Text("HR".to_string()),
+                    Value::Integer(75000),
+                ])
+                .unwrap();
 
             db_write.add_table(table).unwrap();
         }
@@ -9598,7 +10105,7 @@ mod tests {
 
         // Test 1: IN with string values
         let stmt = parse_statement(
-            "SELECT name, department FROM employees WHERE department IN ('Engineering', 'Sales') ORDER BY id"
+            "SELECT name, department FROM employees WHERE department IN ('Engineering', 'Sales') ORDER BY id",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 3);
@@ -9608,7 +10115,7 @@ mod tests {
 
         // Test 2: NOT IN with string values
         let stmt = parse_statement(
-            "SELECT name, department FROM employees WHERE department NOT IN ('Engineering', 'Sales') ORDER BY id"
+            "SELECT name, department FROM employees WHERE department NOT IN ('Engineering', 'Sales') ORDER BY id",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 2);
@@ -9617,7 +10124,7 @@ mod tests {
 
         // Test 3: IN with integer values
         let stmt = parse_statement(
-            "SELECT name, salary FROM employees WHERE salary IN (80000, 90000, 100000) ORDER BY id"
+            "SELECT name, salary FROM employees WHERE salary IN (80000, 90000, 100000) ORDER BY id",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 3);
@@ -9626,16 +10133,14 @@ mod tests {
         assert_eq!(result.rows[2][0], Value::Text("Charlie".to_string()));
 
         // Test 4: IN with single value
-        let stmt = parse_statement(
-            "SELECT name FROM employees WHERE id IN (3)"
-        );
+        let stmt = parse_statement("SELECT name FROM employees WHERE id IN (3)");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Text("Charlie".to_string()));
 
         // Test 5: NOT IN with no matches (should return all rows)
         let stmt = parse_statement(
-            "SELECT name FROM employees WHERE department NOT IN ('NonExistent') ORDER BY id"
+            "SELECT name FROM employees WHERE department NOT IN ('NonExistent') ORDER BY id",
         );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 5);
@@ -9660,26 +10165,33 @@ mod tests {
             ];
             let mut table = Table::new("strings".to_string(), columns);
 
-            table.insert_row(vec![
-                Value::Integer(1),
-                Value::Text("  spaces around  ".to_string()),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(2),
-                Value::Text("  left spaces".to_string()),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(3),
-                Value::Text("right spaces  ".to_string()),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(4),
-                Value::Text("hello world".to_string()),
-            ]).unwrap();
-            table.insert_row(vec![
-                Value::Integer(5),
-                Value::Null,
-            ]).unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Text("  spaces around  ".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Text("  left spaces".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Text("right spaces  ".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(4),
+                    Value::Text("hello world".to_string()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(5), Value::Null])
+                .unwrap();
 
             db_write.add_table(table).unwrap();
         }
@@ -9701,18 +10213,21 @@ mod tests {
         assert_eq!(result.rows[0][0], Value::Text("right spaces".to_string()));
 
         // Test REPLACE
-        let stmt = parse_statement("SELECT REPLACE(text_data, 'world', 'universe') FROM strings WHERE id = 4");
+        let stmt = parse_statement(
+            "SELECT REPLACE(text_data, 'world', 'universe') FROM strings WHERE id = 4",
+        );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("hello universe".to_string()));
 
         // Test with NULL values
-        let stmt = parse_statement("SELECT TRIM(text_data), LTRIM(text_data), RTRIM(text_data), REPLACE(text_data, 'a', 'b') FROM strings WHERE id = 5");
+        let stmt = parse_statement(
+            "SELECT TRIM(text_data), LTRIM(text_data), RTRIM(text_data), REPLACE(text_data, 'a', 'b') FROM strings WHERE id = 5",
+        );
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Null);
         assert_eq!(result.rows[0][1], Value::Null);
         assert_eq!(result.rows[0][2], Value::Null);
         assert_eq!(result.rows[0][3], Value::Null);
-
     }
 
     #[tokio::test]
@@ -9847,5 +10362,337 @@ mod tests {
         assert_eq!(result.rows.len(), 1); // Only the keyboard order
         assert_eq!(result.rows[0][0], Value::Null); // No user for this order
         assert_eq!(result.rows[0][1], Value::Text("Keyboard".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_union() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test basic UNION
+        let stmt = parse_statement(
+            "SELECT id, name FROM users WHERE id = 1
+             UNION
+             SELECT id, name FROM users WHERE id = 2",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Integer(2));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+
+        // Test UNION with duplicates (should remove them)
+        let stmt = parse_statement(
+            "SELECT name FROM users WHERE id = 1
+             UNION
+             SELECT name FROM users WHERE id = 1",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1); // Duplicate removed
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+
+        // Test UNION ALL (should keep duplicates)
+        let stmt = parse_statement(
+            "SELECT name FROM users WHERE id = 1
+             UNION ALL
+             SELECT name FROM users WHERE id = 1",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // Duplicates kept
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Text("Alice".to_string()));
+
+        // Test UNION with ORDER BY
+        let stmt = parse_statement(
+            "SELECT id, name FROM users WHERE id = 2
+             UNION
+             SELECT id, name FROM users WHERE id = 1
+             ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(1)); // Ordered by id
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Integer(2));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+
+        // Test UNION with LIMIT
+        let stmt = parse_statement(
+            "SELECT id, name FROM users
+             UNION
+             SELECT id, name FROM users
+             LIMIT 2",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // Limited to 2 rows
+    }
+
+    #[tokio::test]
+    async fn test_except() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test basic EXCEPT
+        let stmt = parse_statement(
+            "SELECT id, name FROM users
+             EXCEPT
+             SELECT id, name FROM users WHERE id = 2",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 2); // Alice and Charlie, but not Bob
+        assert!(result.rows.iter().any(|r| r[0] == Value::Integer(1)));
+        assert!(result.rows.iter().any(|r| r[0] == Value::Integer(3)));
+        assert!(!result.rows.iter().any(|r| r[0] == Value::Integer(2)));
+
+        // Test EXCEPT ALL with proper duplicate data
+        let db2 = create_test_database().await;
+        {
+            let mut db_write = db2.write().await;
+            let columns = vec![
+                Column {
+                    name: "id".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Integer,
+                    primary_key: true,
+                    nullable: false,
+                    unique: true,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "value".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Varchar(100),
+                    primary_key: false,
+                    nullable: false,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+            let mut table = Table::new("test_except".to_string(), columns);
+            // Add rows with duplicates
+            table
+                .insert_row(vec![Value::Integer(1), Value::Text("A".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(2), Value::Text("B".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(3), Value::Text("A".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(4), Value::Text("C".to_string())])
+                .unwrap();
+            table
+                .insert_row(vec![Value::Integer(5), Value::Text("B".to_string())])
+                .unwrap();
+            db_write.add_table(table).unwrap();
+        }
+        let executor2 = create_test_executor_from_arc(db2).await;
+
+        let stmt = parse_statement(
+            "SELECT value FROM test_except WHERE id <= 3
+             EXCEPT ALL
+             SELECT value FROM test_except WHERE id >= 3",
+        );
+        let result = executor2.execute(&stmt).await.unwrap();
+        // Left side has: A, B, A
+        // Right side has: A, C, B
+        // Result should be: A (one A removed, one B removed, one A remains)
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("A".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_intersect() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test basic INTERSECT
+        let stmt = parse_statement(
+            "SELECT id FROM users WHERE id <= 2
+             INTERSECT
+             SELECT id FROM users WHERE id >= 2",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 1); // Only id=2 is in both
+        assert_eq!(result.rows[0][0], Value::Integer(2));
+
+        // Test INTERSECT with no common elements
+        let stmt = parse_statement(
+            "SELECT id FROM users WHERE id = 1
+             INTERSECT
+             SELECT id FROM users WHERE id = 3",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 0); // No common elements
+    }
+
+    #[tokio::test]
+    async fn test_union_column_mismatch() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test UNION with different column counts - should fail
+        let stmt = parse_statement(
+            "SELECT id FROM users
+             UNION
+             SELECT id, name FROM users",
+        );
+        let result = executor.execute(&stmt).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("matching column counts")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_extract_functions() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test EXTRACT with various fields from a date
+        let test_date = "DATE '2025-07-15'";
+
+        // Test YEAR
+        let stmt = parse_statement(&format!("SELECT EXTRACT(YEAR FROM {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(2025));
+
+        // Test QUARTER
+        let stmt = parse_statement(&format!("SELECT EXTRACT(QUARTER FROM {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(3)); // July is Q3
+
+        // Test DOW (day of week, 0=Sunday)
+        let stmt = parse_statement(&format!("SELECT EXTRACT(DOW FROM {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(2)); // Tuesday
+
+        // Test DOY (day of year)
+        let stmt = parse_statement(&format!("SELECT EXTRACT(DOY FROM {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(196)); // July 15 is the 196th day
+
+        // Test CENTURY
+        let stmt = parse_statement(&format!("SELECT EXTRACT(CENTURY FROM {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(21)); // 21st century
+
+        // Test DECADE
+        let stmt = parse_statement(&format!("SELECT EXTRACT(DECADE FROM {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(202)); // 2020s decade
+    }
+
+    #[tokio::test]
+    async fn test_date_part_function() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test DATE_PART with various fields
+        let test_date = "DATE '2025-07-15'";
+
+        // Test year
+        let stmt = parse_statement(&format!("SELECT DATE_PART('year', {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(2025));
+
+        // Test month
+        let stmt = parse_statement(&format!("SELECT DATE_PART('month', {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(7));
+
+        // Test day
+        let stmt = parse_statement(&format!("SELECT DATE_PART('day', {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(15));
+
+        // Test quarter
+        let stmt = parse_statement(&format!("SELECT DATE_PART('quarter', {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(3));
+
+        // Test dow
+        let stmt = parse_statement(&format!("SELECT DATE_PART('dow', {})", test_date));
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(2)); // Tuesday
+    }
+
+    #[tokio::test]
+    async fn test_extract_with_table_data() {
+        let db = Arc::new(RwLock::new(Database::new("test_db".to_string())));
+        {
+            let mut db_write = db.write().await;
+
+            // Create a table with date columns
+            let columns = vec![
+                Column {
+                    name: "id".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Integer,
+                    primary_key: true,
+                    nullable: false,
+                    unique: true,
+                    default: None,
+                    references: None,
+                },
+                Column {
+                    name: "event_date".to_string(),
+                    sql_type: crate::yaml::schema::SqlType::Date,
+                    primary_key: false,
+                    nullable: false,
+                    unique: false,
+                    default: None,
+                    references: None,
+                },
+            ];
+
+            let mut table = Table::new("events".to_string(), columns);
+            table
+                .insert_row(vec![
+                    Value::Integer(1),
+                    Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 15).unwrap()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(2),
+                    Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 7, 4).unwrap()),
+                ])
+                .unwrap();
+            table
+                .insert_row(vec![
+                    Value::Integer(3),
+                    Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 12, 25).unwrap()),
+                ])
+                .unwrap();
+
+            db_write.add_table(table).unwrap();
+        }
+
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Test EXTRACT on table data
+        let stmt = parse_statement(
+            "SELECT id, EXTRACT(MONTH FROM event_date) as month FROM events ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][1], Value::Integer(1)); // January
+        assert_eq!(result.rows[1][1], Value::Integer(7)); // July
+        assert_eq!(result.rows[2][1], Value::Integer(12)); // December
+
+        // Test DATE_PART on table data
+        let stmt = parse_statement(
+            "SELECT id, DATE_PART('quarter', event_date) as quarter FROM events ORDER BY id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][1], Value::Integer(1)); // Q1
+        assert_eq!(result.rows[1][1], Value::Integer(3)); // Q3
+        assert_eq!(result.rows[2][1], Value::Integer(4)); // Q4
     }
 }
