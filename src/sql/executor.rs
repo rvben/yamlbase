@@ -2031,10 +2031,23 @@ impl QueryExecutor {
                             match (needle_val, haystack_val) {
                                 (Value::Text(needle), Value::Text(haystack)) => {
                                     // SQL POSITION is 1-indexed, 0 means not found
-                                    match haystack.find(&needle) {
-                                        Some(pos) => Ok(Value::Integer((pos + 1) as i64)),
-                                        None => Ok(Value::Integer(0)),
+                                    // Use character-based position, not byte-based
+                                    let haystack_chars: Vec<char> = haystack.chars().collect();
+                                    let needle_chars: Vec<char> = needle.chars().collect();
+                                    
+                                    if needle_chars.is_empty() {
+                                        // Empty string is found at position 1
+                                        return Ok(Value::Integer(1));
                                     }
+                                    
+                                    // Find the needle in the haystack using character positions
+                                    for i in 0..=haystack_chars.len().saturating_sub(needle_chars.len()) {
+                                        if haystack_chars[i..].starts_with(&needle_chars) {
+                                            return Ok(Value::Integer((i + 1) as i64));
+                                        }
+                                    }
+                                    
+                                    Ok(Value::Integer(0))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
@@ -2934,10 +2947,23 @@ impl QueryExecutor {
                             match (needle_val, haystack_val) {
                                 (Value::Text(needle), Value::Text(haystack)) => {
                                     // SQL POSITION is 1-indexed, 0 means not found
-                                    match haystack.find(&needle) {
-                                        Some(pos) => Ok(Value::Integer((pos + 1) as i64)),
-                                        None => Ok(Value::Integer(0)),
+                                    // Use character-based position, not byte-based
+                                    let haystack_chars: Vec<char> = haystack.chars().collect();
+                                    let needle_chars: Vec<char> = needle.chars().collect();
+                                    
+                                    if needle_chars.is_empty() {
+                                        // Empty string is found at position 1
+                                        return Ok(Value::Integer(1));
                                     }
+                                    
+                                    // Find the needle in the haystack using character positions
+                                    for i in 0..=haystack_chars.len().saturating_sub(needle_chars.len()) {
+                                        if haystack_chars[i..].starts_with(&needle_chars) {
+                                            return Ok(Value::Integer((i + 1) as i64));
+                                        }
+                                    }
+                                    
+                                    Ok(Value::Integer(0))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {
@@ -5164,10 +5190,23 @@ impl QueryExecutor {
                             match (needle_val, haystack_val) {
                                 (Value::Text(needle), Value::Text(haystack)) => {
                                     // SQL POSITION is 1-indexed, 0 means not found
-                                    match haystack.find(&needle) {
-                                        Some(pos) => Ok(Value::Integer((pos + 1) as i64)),
-                                        None => Ok(Value::Integer(0)),
+                                    // Use character-based position, not byte-based
+                                    let haystack_chars: Vec<char> = haystack.chars().collect();
+                                    let needle_chars: Vec<char> = needle.chars().collect();
+                                    
+                                    if needle_chars.is_empty() {
+                                        // Empty string is found at position 1
+                                        return Ok(Value::Integer(1));
                                     }
+                                    
+                                    // Find the needle in the haystack using character positions
+                                    for i in 0..=haystack_chars.len().saturating_sub(needle_chars.len()) {
+                                        if haystack_chars[i..].starts_with(&needle_chars) {
+                                            return Ok(Value::Integer((i + 1) as i64));
+                                        }
+                                    }
+                                    
+                                    Ok(Value::Integer(0))
                                 }
                                 (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                                 _ => Err(YamlBaseError::Database {

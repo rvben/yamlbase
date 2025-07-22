@@ -135,9 +135,7 @@ mod comprehensive_tests {
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("🎉🎊".to_string()));
         assert_eq!(result.rows[0][1], Value::Text("🎈".to_string()));
-        // Note: POSITION currently returns byte position + 1, not character position
-        // This is a known limitation that could be fixed in the future
-        assert_eq!(result.rows[0][2], Value::Integer(5)); // 🎊 is at byte position 4 (+ 1 for 1-indexing)
+        assert_eq!(result.rows[0][2], Value::Integer(2)); // 🎊 is at character position 2
 
         // Test with whitespace strings
         let query = parse_sql("SELECT LEFT('   ', 2), LENGTH(LEFT('   ', 2))").unwrap();
