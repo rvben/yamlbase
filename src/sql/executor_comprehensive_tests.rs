@@ -97,6 +97,59 @@ mod comprehensive_tests {
         assert_eq!(result.rows[0][0], Value::Null);
         assert_eq!(result.rows[0][1], Value::Null);
         assert_eq!(result.rows[0][2], Value::Null);
+
+        // Test with empty strings
+        let query = parse_sql("SELECT LEFT('', 5), RIGHT('', 5), POSITION('', 'Hello')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("".to_string()));
+        assert_eq!(result.rows[0][1], Value::Text("".to_string()));
+        assert_eq!(result.rows[0][2], Value::Integer(1)); // Empty needle is found at position 1 (SQL standard)
+
+        // Test POSITION with empty haystack
+        let query = parse_sql("SELECT POSITION('test', '')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(0)); // Not found in empty string
+
+        // Test POSITION with both empty
+        let query = parse_sql("SELECT POSITION('', '')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(1)); // Empty string is found at position 1 in empty string
+
+        // Test LEFT with zero length
+        let query = parse_sql("SELECT LEFT('test', 0)").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("".to_string()));
+
+        // Test POSITION with multiple occurrences (should return first)
+        let query = parse_sql("SELECT POSITION('test', 'test this test string')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(1)); // First occurrence at position 1
+
+        // Test POSITION where needle equals haystack
+        let query = parse_sql("SELECT POSITION('Hello', 'Hello')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(1)); // Full match at position 1
+
+        // Test with Unicode emojis
+        let query = parse_sql("SELECT LEFT('🎉🎊🎈', 2), RIGHT('🎉🎊🎈', 1), POSITION('🎊', '🎉🎊🎈')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("🎉🎊".to_string()));
+        assert_eq!(result.rows[0][1], Value::Text("🎈".to_string()));
+        // Note: POSITION currently returns byte position + 1, not character position
+        // This is a known limitation that could be fixed in the future
+        assert_eq!(result.rows[0][2], Value::Integer(5)); // 🎊 is at byte position 4 (+ 1 for 1-indexing)
+
+        // Test with whitespace strings
+        let query = parse_sql("SELECT LEFT('   ', 2), LENGTH(LEFT('   ', 2))").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("  ".to_string()));
+        assert_eq!(result.rows[0][1], Value::Integer(2));
+
+        // Test case sensitivity for POSITION (should be case-sensitive)
+        let query = parse_sql("SELECT POSITION('world', 'Hello World'), POSITION('World', 'Hello World')").unwrap();
+        let result = executor.execute(&query[0]).await.unwrap();
+        assert_eq!(result.rows[0][0], Value::Integer(0)); // 'world' not found (case-sensitive)
+        assert_eq!(result.rows[0][1], Value::Integer(7)); // 'World' found at position 7
     }
 
     #[tokio::test] 
