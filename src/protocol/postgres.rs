@@ -381,7 +381,11 @@ impl PostgresProtocol {
             buf.put_u8(0); // Null terminator
             buf.put_u32(0); // Table OID
             buf.put_u16(i as u16); // Column number
-            buf.put_u32(25); // Type OID (text)
+            
+            // For simple protocol, we always send text format, so declare as text
+            // to match the text data we send
+            buf.put_u32(25); // text OID
+            
             buf.put_i16(-1); // Type size
             buf.put_i32(-1); // Type modifier
             buf.put_i16(0); // Format code (text)
