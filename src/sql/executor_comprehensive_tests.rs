@@ -1,17 +1,18 @@
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod comprehensive_tests {
-    use crate::database::{Database, Table, Column, Value};
     use crate::database::storage::Storage;
+    use crate::database::{Column, Database, Table, Value};
     use crate::sql::{QueryExecutor, parse_sql};
     use crate::yaml::schema::SqlType;
-    use std::sync::Arc;
     use chrono::Datelike;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_string_functions_comprehensive() {
         // Create test database
         let mut db = Database::new("test_db".to_string());
-        
+
         // Create a test table with string data
         let columns = vec![
             Column {
@@ -33,16 +34,19 @@ mod comprehensive_tests {
                 references: None,
             },
         ];
-        
+
         let mut table = Table::new("test_strings".to_string(), columns);
         table.rows = vec![
             vec![Value::Integer(1), Value::Text("Hello World".to_string())],
             vec![Value::Integer(2), Value::Text("Testing".to_string())],
             vec![Value::Integer(3), Value::Null],
             vec![Value::Integer(4), Value::Text("".to_string())],
-            vec![Value::Integer(5), Value::Text("🎉 Unicode 测试".to_string())],
+            vec![
+                Value::Integer(5),
+                Value::Text("🎉 Unicode 测试".to_string()),
+            ],
         ];
-        
+
         db.add_table(table).unwrap();
         let storage = Storage::new(db);
         let storage_arc = Arc::new(storage);
@@ -66,7 +70,7 @@ mod comprehensive_tests {
         // Note: Table-based string function tests are commented out because
         // the current implementation doesn't support column references inside
         // these functions. This would need to be implemented in evaluate_function_with_row
-        
+
         // Test edge cases with negative lengths
         let query = parse_sql("SELECT LEFT('test', -10)").unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
@@ -92,7 +96,8 @@ mod comprehensive_tests {
         assert_eq!(result.rows[0][1], Value::Text("  hello".to_string()));
 
         // Test string functions with NULL values
-        let query = parse_sql("SELECT LEFT(NULL, 5), RIGHT(NULL, 5), POSITION('test', NULL)").unwrap();
+        let query =
+            parse_sql("SELECT LEFT(NULL, 5), RIGHT(NULL, 5), POSITION('test', NULL)").unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Null);
         assert_eq!(result.rows[0][1], Value::Null);
@@ -131,7 +136,9 @@ mod comprehensive_tests {
         assert_eq!(result.rows[0][0], Value::Integer(1)); // Full match at position 1
 
         // Test with Unicode emojis
-        let query = parse_sql("SELECT LEFT('🎉🎊🎈', 2), RIGHT('🎉🎊🎈', 1), POSITION('🎊', '🎉🎊🎈')").unwrap();
+        let query =
+            parse_sql("SELECT LEFT('🎉🎊🎈', 2), RIGHT('🎉🎊🎈', 1), POSITION('🎊', '🎉🎊🎈')")
+                .unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("🎉🎊".to_string()));
         assert_eq!(result.rows[0][1], Value::Text("🎈".to_string()));
@@ -144,13 +151,15 @@ mod comprehensive_tests {
         assert_eq!(result.rows[0][1], Value::Integer(2));
 
         // Test case sensitivity for POSITION (should be case-sensitive)
-        let query = parse_sql("SELECT POSITION('world', 'Hello World'), POSITION('World', 'Hello World')").unwrap();
+        let query =
+            parse_sql("SELECT POSITION('world', 'Hello World'), POSITION('World', 'Hello World')")
+                .unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(0)); // 'world' not found (case-sensitive)
         assert_eq!(result.rows[0][1], Value::Integer(7)); // 'World' found at position 7
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_math_functions_comprehensive() {
         let db = Database::new("test_db".to_string());
         let storage = Storage::new(db);
@@ -158,7 +167,8 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc);
 
         // Test ROUND with different decimal places
-        let query = parse_sql("SELECT ROUND(3.14159), ROUND(3.14159, 2), ROUND(3.14159, 4)").unwrap();
+        let query =
+            parse_sql("SELECT ROUND(3.14159), ROUND(3.14159, 2), ROUND(3.14159, 4)").unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Double(3.0));
         assert_eq!(result.rows[0][1], Value::Double(3.14));
@@ -208,11 +218,16 @@ mod comprehensive_tests {
         let result = executor.execute(&query[0]).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Division by zero") || err_msg.contains("division by zero"), 
-                "Expected division by zero error, got: {}", err_msg);
+        assert!(
+            err_msg.contains("Division by zero") || err_msg.contains("division by zero"),
+            "Expected division by zero error, got: {}",
+            err_msg
+        );
 
         // Test with NULL values
-        let query = parse_sql("SELECT ROUND(NULL), CEIL(NULL), FLOOR(NULL), ABS(NULL), MOD(NULL, 2)").unwrap();
+        let query =
+            parse_sql("SELECT ROUND(NULL), CEIL(NULL), FLOOR(NULL), ABS(NULL), MOD(NULL, 2)")
+                .unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Null);
         assert_eq!(result.rows[0][1], Value::Null);
@@ -229,7 +244,10 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc);
 
         // Test casting to INTEGER
-        let query = parse_sql("SELECT CAST('123' AS INTEGER), CAST(45.67 AS INTEGER), CAST(true AS INTEGER)").unwrap();
+        let query = parse_sql(
+            "SELECT CAST('123' AS INTEGER), CAST(45.67 AS INTEGER), CAST(true AS INTEGER)",
+        )
+        .unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Integer(123));
         assert_eq!(result.rows[0][1], Value::Integer(45));
@@ -242,7 +260,9 @@ mod comprehensive_tests {
         assert_eq!(result.rows[0][1], Value::Double(42.0));
 
         // Test casting to TEXT/VARCHAR
-        let query = parse_sql("SELECT CAST(123 AS TEXT), CAST(45.67 AS VARCHAR), CAST(true AS TEXT)").unwrap();
+        let query =
+            parse_sql("SELECT CAST(123 AS TEXT), CAST(45.67 AS VARCHAR), CAST(true AS TEXT)")
+                .unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Text("123".to_string()));
         assert_eq!(result.rows[0][1], Value::Text("45.67".to_string()));
@@ -269,7 +289,9 @@ mod comprehensive_tests {
         assert_eq!(result.rows[0][3], Value::Boolean(false));
 
         // Test NULL casting
-        let query = parse_sql("SELECT CAST(NULL AS INTEGER), CAST(NULL AS TEXT), CAST(NULL AS DATE)").unwrap();
+        let query =
+            parse_sql("SELECT CAST(NULL AS INTEGER), CAST(NULL AS TEXT), CAST(NULL AS DATE)")
+                .unwrap();
         let result = executor.execute(&query[0]).await.unwrap();
         assert_eq!(result.rows[0][0], Value::Null);
         assert_eq!(result.rows[0][1], Value::Null);
@@ -288,7 +310,7 @@ mod comprehensive_tests {
     #[tokio::test]
     async fn test_subquery_placeholders() {
         let mut db = Database::new("test_db".to_string());
-        
+
         // Create users table
         let users_columns = vec![
             Column {
@@ -310,14 +332,14 @@ mod comprehensive_tests {
                 references: None,
             },
         ];
-        
+
         let mut users_table = Table::new("users".to_string(), users_columns);
         users_table.rows = vec![
             vec![Value::Integer(1), Value::Text("Alice".to_string())],
             vec![Value::Integer(2), Value::Text("Bob".to_string())],
         ];
-        
-        // Create orders table  
+
+        // Create orders table
         let orders_columns = vec![
             Column {
                 name: "id".to_string(),
@@ -338,22 +360,23 @@ mod comprehensive_tests {
                 references: None,
             },
         ];
-        
+
         let mut orders_table = Table::new("orders".to_string(), orders_columns);
         orders_table.rows = vec![
             vec![Value::Integer(1), Value::Integer(1)],
             vec![Value::Integer(2), Value::Integer(1)],
         ];
-        
+
         db.add_table(users_table).unwrap();
         db.add_table(orders_table).unwrap();
-        
+
         let storage = Storage::new(db);
         let storage_arc = Arc::new(storage);
         let executor = QueryExecutor::new(storage_arc);
 
         // Test IN subquery placeholder
-        let query = parse_sql("SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)").unwrap();
+        let query =
+            parse_sql("SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)").unwrap();
         let result = executor.execute(&query[0]).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -372,6 +395,9 @@ mod comprehensive_tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         // NOT EXISTS gets parsed as UnaryOp { op: Not, expr: Exists(...) }
-        assert!(err.contains("Unary operator Not not supported") || err.contains("Expression type not supported"));
+        assert!(
+            err.contains("Unary operator Not not supported")
+                || err.contains("Expression type not supported")
+        );
     }
 }

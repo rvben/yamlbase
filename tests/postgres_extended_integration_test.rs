@@ -321,12 +321,12 @@ tables:
 
     assert_eq!(pending_count, 2);
 
-    let pending_total: String = client
+    let pending_total: f64 = client
         .query_one(&stmt2, &[&"pending"])
         .expect("Failed to sum pending orders")
         .get(0);
 
-    assert_eq!(pending_total, "179.98");
+    assert_eq!(pending_total, 179.98);
 
     // Test LIKE with prepared statement
     let rows = client

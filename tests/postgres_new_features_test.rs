@@ -3,7 +3,6 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::Duration;
 use tempfile::NamedTempFile;
-use chrono;
 
 /// Get the path to the yamlbase binary, preferring pre-built binaries over cargo run
 fn get_yamlbase_command() -> (String, Vec<String>) {
@@ -96,40 +95,48 @@ fn get_free_port() -> u16 {
 }
 
 fn wait_for_postgres_port(port: u16) {
-    println!("Waiting for PostgreSQL server to start on port {}", port);
+    println!("Waiting for PostgreSQL server to start on port {port}");
     for i in 1..=30 {
-        match std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
+        match std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
             Ok(_) => {
-                println!("Successfully connected after {} attempts", i);
+                println!("Successfully connected after {i} attempts");
                 thread::sleep(Duration::from_millis(100)); // Give the server a bit more time
                 return;
             }
             Err(e) => {
-                println!("Connection attempt {}: {}", i, e);
+                println!("Connection attempt {i}: {e}");
                 thread::sleep(Duration::from_millis(200));
             }
         }
     }
-    panic!("Failed to connect to PostgreSQL server on port {}", port);
+    panic!("Failed to connect to PostgreSQL server on port {port}");
 }
 
 fn execute_query(port: u16, query: &str) -> String {
     let output = Command::new("psql")
         .args([
-            "-h", "localhost",
-            "-p", &port.to_string(),
-            "-U", "yamlbase",
-            "-d", "test_db",
-            "-t",  // Tuples only (no headers)
-            "-A",  // Unaligned output (no column padding)
-            "-c", query,
+            "-h",
+            "localhost",
+            "-p",
+            &port.to_string(),
+            "-U",
+            "yamlbase",
+            "-d",
+            "test_db",
+            "-t", // Tuples only (no headers)
+            "-A", // Unaligned output (no column padding)
+            "-c",
+            query,
         ])
         .env("PGPASSWORD", "password")
         .output()
         .expect("Failed to execute psql");
 
     if !output.status.success() {
-        panic!("psql query failed: {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "psql query failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     String::from_utf8(output.stdout)
@@ -166,28 +173,28 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     // Test string functions
     let result = execute_query(server.port, "SELECT LEFT('Hello World', 5)");
     assert_eq!(result, "Hello");
-    
+
     let result = execute_query(server.port, "SELECT RIGHT('Hello World', 5)");
     assert_eq!(result, "World");
-    
+
     let result = execute_query(server.port, "SELECT POSITION('World', 'Hello World')");
     assert_eq!(result, "7");
-    
+
     let result = execute_query(server.port, "SELECT POSITION('🎊', '🎉🎊🎈')");
     assert_eq!(result, "2"); // Character position
-    
+
     // Test LTRIM - psql trims trailing whitespace, so test with concatenation
     let result = execute_query(server.port, "SELECT CONCAT(LTRIM('  hello  '), 'X')");
     assert_eq!(result, "hello  X");
-    
+
     // Test RTRIM
     let result = execute_query(server.port, "SELECT CONCAT('X', RTRIM('  hello  '))");
     assert_eq!(result, "X  hello");
-    
+
     let result = execute_query(server.port, "SELECT CONCAT('Hello', ' ', 'World')");
     assert_eq!(result, "Hello World");
 }
@@ -220,26 +227,29 @@ tables:
     // Test math functions
     let result = execute_query(server.port, "SELECT ROUND(3.14159)");
     assert_eq!(result, "3");
-    
+
     let result = execute_query(server.port, "SELECT ROUND(3.14159, 2)");
     assert_eq!(result, "3.14");
-    
+
     let result = execute_query(server.port, "SELECT CEIL(3.1)");
     assert_eq!(result, "4");
-    
+
     let result = execute_query(server.port, "SELECT FLOOR(3.9)");
     assert_eq!(result, "3");
-    
+
     let result = execute_query(server.port, "SELECT ABS(-5)");
     assert_eq!(result, "5");
-    
+
     let result = execute_query(server.port, "SELECT ABS(-3.14)");
     assert_eq!(result, "3.14");
-    
+
     let result = execute_query(server.port, "SELECT MOD(10, 3)");
     assert_eq!(result, "1");
-    
-    let result = execute_query(server.port, "SELECT ROUND(value, 1) FROM numbers WHERE id = 1");
+
+    let result = execute_query(
+        server.port,
+        "SELECT ROUND(value, 1) FROM numbers WHERE id = 1",
+    );
     assert_eq!(result, "3.1");
 }
 
@@ -261,26 +271,26 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     // Test CAST function
     let result = execute_query(server.port, "SELECT CAST('123' AS INTEGER)");
     assert_eq!(result, "123");
-    
+
     let result = execute_query(server.port, "SELECT CAST(45.67 AS INTEGER)");
     assert_eq!(result, "45");
-    
+
     let result = execute_query(server.port, "SELECT CAST('3.14' AS FLOAT)");
     assert_eq!(result, "3.14");
-    
+
     let result = execute_query(server.port, "SELECT CAST(42 AS TEXT)");
     assert_eq!(result, "42");
-    
+
     let result = execute_query(server.port, "SELECT CAST('2025-01-15' AS DATE)");
     assert_eq!(result, "2025-01-15");
-    
+
     let result = execute_query(server.port, "SELECT CAST(1 AS BOOLEAN)");
     assert_eq!(result, "true");
-    
+
     let result = execute_query(server.port, "SELECT CAST('true' AS BOOLEAN)");
     assert_eq!(result, "true");
 }
@@ -325,11 +335,11 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     // Test RIGHT JOIN - just verify we can execute it without error
     let result = execute_query(
         server.port,
-        "SELECT d.name FROM employees e RIGHT JOIN departments d ON e.dept_id = d.id WHERE e.name IS NULL"
+        "SELECT d.name FROM employees e RIGHT JOIN departments d ON e.dept_id = d.id WHERE e.name IS NULL",
     );
     assert_eq!(result, "Marketing"); // Only Marketing has no employees
 }
@@ -356,12 +366,12 @@ tables:
 "#;
 
     let server = TestServer::start_postgres(yaml);
-    
+
     // Test date functions
     let result = execute_query(server.port, "SELECT CURRENT_DATE");
     let today = chrono::Local::now().naive_local().date();
     assert_eq!(result, today.to_string());
-    
+
     let result = execute_query(server.port, "SELECT CURRENT_TIMESTAMP");
     // Parse timestamp and check it's recent
     let current_timestamp = chrono::NaiveDateTime::parse_from_str(&result, "%Y-%m-%d %H:%M:%S")
@@ -369,11 +379,11 @@ tables:
     let now = chrono::Local::now().naive_local();
     // Check that timestamp is within 1 minute of now
     assert!((current_timestamp.and_utc().timestamp() - now.and_utc().timestamp()).abs() < 60);
-    
+
     // Test DATE_FORMAT with column values
     let result = execute_query(server.port, "SELECT event_date FROM events WHERE id = 1");
     assert_eq!(result, "2025-01-15");
-    
+
     // Test DATE_FORMAT with literal date
     let result = execute_query(server.port, "SELECT DATE_FORMAT('2025-01-15', '%d/%m/%Y')");
     assert_eq!(result, "15/01/2025");
