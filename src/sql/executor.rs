@@ -1939,6 +1939,124 @@ impl QueryExecutor {
                     })
                 }
             }
+            "LEFT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            let len_val = self.evaluate_constant_expr(len_expr)?;
+
+                            match (str_val, len_val) {
+                                (Value::Text(s), Value::Integer(len)) => {
+                                    let length = if len < 0 { 0 } else { len as usize };
+                                    let result: String = s.chars().take(length).collect();
+                                    Ok(Value::Text(result))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LEFT requires string and integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for LEFT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LEFT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LEFT requires arguments".to_string(),
+                    })
+                }
+            }
+            "RIGHT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            let len_val = self.evaluate_constant_expr(len_expr)?;
+
+                            match (str_val, len_val) {
+                                (Value::Text(s), Value::Integer(len)) => {
+                                    let length = if len < 0 { 0 } else { len as usize };
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let start = if length >= chars.len() { 0 } else { chars.len() - length };
+                                    let result: String = chars[start..].iter().collect();
+                                    Ok(Value::Text(result))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "RIGHT requires string and integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for RIGHT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "RIGHT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "RIGHT requires arguments".to_string(),
+                    })
+                }
+            }
+            "POSITION" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(needle_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(haystack_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let needle_val = self.evaluate_constant_expr(needle_expr)?;
+                            let haystack_val = self.evaluate_constant_expr(haystack_expr)?;
+
+                            match (needle_val, haystack_val) {
+                                (Value::Text(needle), Value::Text(haystack)) => {
+                                    // SQL POSITION is 1-indexed, 0 means not found
+                                    match haystack.find(&needle) {
+                                        Some(pos) => Ok(Value::Integer((pos + 1) as i64)),
+                                        None => Ok(Value::Integer(0)),
+                                    }
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "POSITION requires string arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for POSITION".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "POSITION requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "POSITION requires arguments".to_string(),
+                    })
+                }
+            }
             "REPLACE" => {
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 3 {
@@ -2722,6 +2840,124 @@ impl QueryExecutor {
                     Err(YamlBaseError::NotImplemented(
                         "CONCAT function requires arguments".to_string(),
                     ))
+                }
+            }
+            "LEFT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            let len_val = self.evaluate_constant_expr(len_expr)?;
+
+                            match (str_val, len_val) {
+                                (Value::Text(s), Value::Integer(len)) => {
+                                    let length = if len < 0 { 0 } else { len as usize };
+                                    let result: String = s.chars().take(length).collect();
+                                    Ok(Value::Text(result))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LEFT requires string and integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for LEFT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LEFT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LEFT requires arguments".to_string(),
+                    })
+                }
+            }
+            "RIGHT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let str_val = self.evaluate_constant_expr(str_expr)?;
+                            let len_val = self.evaluate_constant_expr(len_expr)?;
+
+                            match (str_val, len_val) {
+                                (Value::Text(s), Value::Integer(len)) => {
+                                    let length = if len < 0 { 0 } else { len as usize };
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let start = if length >= chars.len() { 0 } else { chars.len() - length };
+                                    let result: String = chars[start..].iter().collect();
+                                    Ok(Value::Text(result))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "RIGHT requires string and integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for RIGHT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "RIGHT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "RIGHT requires arguments".to_string(),
+                    })
+                }
+            }
+            "POSITION" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(needle_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(haystack_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let needle_val = self.evaluate_constant_expr(needle_expr)?;
+                            let haystack_val = self.evaluate_constant_expr(haystack_expr)?;
+
+                            match (needle_val, haystack_val) {
+                                (Value::Text(needle), Value::Text(haystack)) => {
+                                    // SQL POSITION is 1-indexed, 0 means not found
+                                    match haystack.find(&needle) {
+                                        Some(pos) => Ok(Value::Integer((pos + 1) as i64)),
+                                        None => Ok(Value::Integer(0)),
+                                    }
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "POSITION requires string arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for POSITION".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "POSITION requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "POSITION requires arguments".to_string(),
+                    })
                 }
             }
             "REPLACE" => {
@@ -4833,6 +5069,124 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "CONCAT requires arguments".to_string(),
+                    })
+                }
+            }
+            "LEFT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            let len_val = self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
+
+                            match (str_val, len_val) {
+                                (Value::Text(s), Value::Integer(len)) => {
+                                    let length = if len < 0 { 0 } else { len as usize };
+                                    let result: String = s.chars().take(length).collect();
+                                    Ok(Value::Text(result))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "LEFT requires string and integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for LEFT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "LEFT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "LEFT requires arguments".to_string(),
+                    })
+                }
+            }
+            "RIGHT" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(str_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(len_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let str_val = self.get_join_expr_value(str_expr, row, tables, table_aliases)?;
+                            let len_val = self.get_join_expr_value(len_expr, row, tables, table_aliases)?;
+
+                            match (str_val, len_val) {
+                                (Value::Text(s), Value::Integer(len)) => {
+                                    let length = if len < 0 { 0 } else { len as usize };
+                                    let chars: Vec<char> = s.chars().collect();
+                                    let start = if length >= chars.len() { 0 } else { chars.len() - length };
+                                    let result: String = chars[start..].iter().collect();
+                                    Ok(Value::Text(result))
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "RIGHT requires string and integer arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for RIGHT".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "RIGHT requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "RIGHT requires arguments".to_string(),
+                    })
+                }
+            }
+            "POSITION" => {
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 2 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(needle_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(haystack_expr)),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let needle_val = self.get_join_expr_value(needle_expr, row, tables, table_aliases)?;
+                            let haystack_val = self.get_join_expr_value(haystack_expr, row, tables, table_aliases)?;
+
+                            match (needle_val, haystack_val) {
+                                (Value::Text(needle), Value::Text(haystack)) => {
+                                    // SQL POSITION is 1-indexed, 0 means not found
+                                    match haystack.find(&needle) {
+                                        Some(pos) => Ok(Value::Integer((pos + 1) as i64)),
+                                        None => Ok(Value::Integer(0)),
+                                    }
+                                }
+                                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                                _ => Err(YamlBaseError::Database {
+                                    message: "POSITION requires string arguments".to_string(),
+                                }),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid arguments for POSITION".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "POSITION requires exactly 2 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "POSITION requires arguments".to_string(),
                     })
                 }
             }
