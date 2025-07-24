@@ -4,8 +4,10 @@ use tracing::{error, info};
 
 use crate::config::Config;
 use crate::database::Storage;
-use crate::protocol::Connection;
 use crate::yaml::{FileWatcher, parse_yaml_database};
+
+mod connection_manager;
+pub use connection_manager::{ConnectionManager, ConnectionStats};
 
 #[cfg(test)]
 mod tests;
@@ -51,20 +53,29 @@ impl Server {
             self.setup_hot_reload()?;
         }
 
+        // Create connection manager for stable connection handling
+        let connection_manager = ConnectionManager::new(
+            self.config.clone(),
+            Arc::new(self.storage.clone())
+        );
+
+        // Start background monitoring for connection stability
+        let _monitoring_handle = connection_manager.start_monitoring();
+
         // Start listening
         let listener = TcpListener::bind(&addr).await?;
-        info!("Server listening on {}", addr);
+        info!("Server listening on {} with connection stability features", addr);
 
-        // Accept connections
+        // Accept connections with enhanced stability handling
         loop {
-            let (stream, addr) = listener.accept().await?;
-            info!("New connection from {}", addr);
+            let (stream, client_addr) = listener.accept().await?;
+            let client_addr_str = client_addr.to_string();
+            info!("New connection from {}", client_addr_str);
 
-            let connection = Connection::new(self.config.clone(), Arc::new(self.storage.clone()));
-
+            let manager = connection_manager.clone();
             tokio::spawn(async move {
-                if let Err(e) = connection.handle(stream).await {
-                    error!("Connection error: {}", e);
+                if let Err(e) = manager.handle_connection(stream, client_addr_str.clone()).await {
+                    error!("Connection error from {}: {}", client_addr_str, e);
                 }
             });
         }

@@ -1,6 +1,7 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Parser, Serialize, Deserialize)]
 #[command(name = "yamlbase")]
@@ -58,6 +59,25 @@ pub struct Config {
 
     #[arg(long, help = "Database name")]
     pub database: Option<String>,
+
+    // Connection management settings (not exposed via CLI - configured via YAML)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[clap(skip)]
+    pub max_connections: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "humantime_serde")]
+    #[clap(skip)]
+    pub connection_timeout: Option<Duration>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "humantime_serde")]
+    #[clap(skip)]
+    pub idle_timeout: Option<Duration>,
+
+    #[serde(default)]
+    #[clap(skip)]
+    pub enable_keepalive: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, clap::ValueEnum)]
