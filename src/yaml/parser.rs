@@ -187,7 +187,9 @@ fn parse_value(yaml_value: &serde_yaml::Value, sql_type: &SqlType) -> crate::Res
             let json_str = serde_json::to_string(yaml_value).map_err(|e| {
                 crate::YamlBaseError::TypeConversion(format!("Cannot convert to JSON: {}", e))
             })?;
-            Ok(DbValue::Json(serde_json::from_str(&json_str).unwrap()))
+            Ok(DbValue::Json(serde_json::from_str(&json_str).map_err(|e| {
+                crate::YamlBaseError::TypeConversion(format!("Invalid JSON structure: {}", e))
+            })?))
         }
 
         _ => Err(crate::YamlBaseError::TypeConversion(format!(
