@@ -617,38 +617,113 @@ impl MySqlProtocol {
         eof_packet.put_u16_le(SERVER_STATUS_AUTOCOMMIT); // status flags
         self.write_packet(stream, state, &eof_packet).await?;
 
-        // Send rows
+        // Send rows with intelligent batching for performance
         debug!("Sending {} rows", rows.len());
-        for (idx, row) in rows.iter().enumerate() {
-            debug!("Sending row {} with {} values", idx, row.len());
-            let mut row_packet = BytesMut::new();
-            for (col_idx, value) in row.iter().enumerate() {
-                if *value == "NULL" {
-                    debug!("  Column {}: NULL", col_idx);
-                    row_packet.put_u8(0xfb); // NULL value
-                } else {
-                    let bytes = value.as_bytes();
-                    debug!("  Column {}: '{}' ({} bytes)", col_idx, value, bytes.len());
-                    // MySQL uses length-encoded strings for result rows
-                    if bytes.len() < 251 {
-                        row_packet.put_u8(bytes.len() as u8);
-                    } else if bytes.len() < 65536 {
-                        row_packet.put_u8(0xfc);
-                        row_packet.put_u16_le(bytes.len() as u16);
-                    } else if bytes.len() < 16777216 {
-                        row_packet.put_u8(0xfd);
-                        row_packet.put_u8((bytes.len() & 0xff) as u8);
-                        row_packet.put_u8(((bytes.len() >> 8) & 0xff) as u8);
-                        row_packet.put_u8(((bytes.len() >> 16) & 0xff) as u8);
-                    } else {
-                        row_packet.put_u8(0xfe);
-                        row_packet.put_u64_le(bytes.len() as u64);
+        const BATCH_SIZE_THRESHOLD: usize = 100; // Process in batches for large result sets
+        const MAX_BATCH_MEMORY: usize = 8 * 1024 * 1024; // 8MB batch limit
+        
+        if rows.len() > BATCH_SIZE_THRESHOLD {
+            // Large result set - send in optimized batches
+            debug!("Large result set detected, using batch processing");
+            let mut batch_start = 0;
+            
+            while batch_start < rows.len() {
+                let mut batch_size = 0;
+                let mut batch_memory = 0;
+                
+                // Calculate optimal batch size based on memory usage
+                for i in batch_start..rows.len() {
+                    let estimated_row_size: usize = rows[i].iter()
+                        .map(|v| if *v == "NULL" { 1 } else { v.len() + 5 }) // +5 for length encoding overhead
+                        .sum();
+                    
+                    if batch_memory + estimated_row_size > MAX_BATCH_MEMORY && batch_size > 0 {
+                        break;
                     }
-                    row_packet.put_slice(bytes);
+                    
+                    batch_memory += estimated_row_size;
+                    batch_size += 1;
+                    
+                    if batch_size >= BATCH_SIZE_THRESHOLD {
+                        break;
+                    }
                 }
+                
+                let batch_end = std::cmp::min(batch_start + batch_size, rows.len());
+                debug!(
+                    "Processing batch: rows {}-{} ({} rows, ~{} bytes)",
+                    batch_start, batch_end - 1, batch_end - batch_start, batch_memory
+                );
+                
+                // Send this batch
+                for (idx, row) in rows[batch_start..batch_end].iter().enumerate() {
+                    let global_idx = batch_start + idx;
+                    debug!("Sending row {} with {} values", global_idx, row.len());
+                    let mut row_packet = BytesMut::new();
+                    for (col_idx, value) in row.iter().enumerate() {
+                        if *value == "NULL" {
+                            debug!("  Column {}: NULL", col_idx);
+                            row_packet.put_u8(0xfb); // NULL value
+                        } else {
+                            let bytes = value.as_bytes();
+                            debug!("  Column {}: '{}' ({} bytes)", col_idx, value, bytes.len());
+                            // MySQL uses length-encoded strings for result rows
+                            if bytes.len() < 251 {
+                                row_packet.put_u8(bytes.len() as u8);
+                            } else if bytes.len() < 65536 {
+                                row_packet.put_u8(0xfc);
+                                row_packet.put_u16_le(bytes.len() as u16);
+                            } else if bytes.len() < 16777216 {
+                                row_packet.put_u8(0xfd);
+                                row_packet.put_u8((bytes.len() & 0xff) as u8);
+                                row_packet.put_u8(((bytes.len() >> 8) & 0xff) as u8);
+                                row_packet.put_u8(((bytes.len() >> 16) & 0xff) as u8);
+                            } else {
+                                row_packet.put_u8(0xfe);
+                                row_packet.put_u64_le(bytes.len() as u64);
+                            }
+                            row_packet.put_slice(bytes);
+                        }
+                    }
+                    debug!("Row packet size: {} bytes", row_packet.len());
+                    self.write_packet(stream, state, &row_packet).await?;
+                }
+                
+                batch_start = batch_end;
             }
-            debug!("Row packet size: {} bytes", row_packet.len());
-            self.write_packet(stream, state, &row_packet).await?;
+        } else {
+            // Small result set - use original direct sending
+            for (idx, row) in rows.iter().enumerate() {
+                debug!("Sending row {} with {} values", idx, row.len());
+                let mut row_packet = BytesMut::new();
+                for (col_idx, value) in row.iter().enumerate() {
+                    if *value == "NULL" {
+                        debug!("  Column {}: NULL", col_idx);
+                        row_packet.put_u8(0xfb); // NULL value
+                    } else {
+                        let bytes = value.as_bytes();
+                        debug!("  Column {}: '{}' ({} bytes)", col_idx, value, bytes.len());
+                        // MySQL uses length-encoded strings for result rows
+                        if bytes.len() < 251 {
+                            row_packet.put_u8(bytes.len() as u8);
+                        } else if bytes.len() < 65536 {
+                            row_packet.put_u8(0xfc);
+                            row_packet.put_u16_le(bytes.len() as u16);
+                        } else if bytes.len() < 16777216 {
+                            row_packet.put_u8(0xfd);
+                            row_packet.put_u8((bytes.len() & 0xff) as u8);
+                            row_packet.put_u8(((bytes.len() >> 8) & 0xff) as u8);
+                            row_packet.put_u8(((bytes.len() >> 16) & 0xff) as u8);
+                        } else {
+                            row_packet.put_u8(0xfe);
+                            row_packet.put_u64_le(bytes.len() as u64);
+                        }
+                        row_packet.put_slice(bytes);
+                    }
+                }
+                debug!("Row packet size: {} bytes", row_packet.len());
+                self.write_packet(stream, state, &row_packet).await?;
+            }
         }
 
         // Send EOF packet after rows
@@ -721,30 +796,76 @@ impl MySqlProtocol {
         state: &mut ConnectionState,
         payload: &[u8],
     ) -> crate::Result<()> {
-        let mut packet = BytesMut::with_capacity(4 + payload.len());
+        const MAX_PACKET_SIZE: usize = 0xffffff; // 16MB - 1 (maximum MySQL packet size)
+        
+        if payload.len() <= MAX_PACKET_SIZE {
+            // Single packet - original logic
+            let mut packet = BytesMut::with_capacity(4 + payload.len());
 
-        // Length (3 bytes)
-        packet.put_u8((payload.len() & 0xff) as u8);
-        packet.put_u8(((payload.len() >> 8) & 0xff) as u8);
-        packet.put_u8(((payload.len() >> 16) & 0xff) as u8);
+            // Length (3 bytes)
+            packet.put_u8((payload.len() & 0xff) as u8);
+            packet.put_u8(((payload.len() >> 8) & 0xff) as u8);
+            packet.put_u8(((payload.len() >> 16) & 0xff) as u8);
 
-        // Sequence ID
-        packet.put_u8(state.sequence_id);
+            // Sequence ID
+            packet.put_u8(state.sequence_id);
 
-        debug!(
-            "Writing packet: len={}, seq={}, first_bytes={:?}",
-            payload.len(),
-            state.sequence_id,
-            &payload[..std::cmp::min(20, payload.len())]
-        );
+            debug!(
+                "Writing single packet: len={}, seq={}, first_bytes={:?}",
+                payload.len(),
+                state.sequence_id,
+                &payload[..std::cmp::min(20, payload.len())]
+            );
 
-        state.sequence_id = state.sequence_id.wrapping_add(1);
+            state.sequence_id = state.sequence_id.wrapping_add(1);
 
-        // Payload
-        packet.put_slice(payload);
+            // Payload
+            packet.put_slice(payload);
 
-        stream.write_all(&packet).await?;
-        stream.flush().await?;
+            stream.write_all(&packet).await?;
+            stream.flush().await?;
+        } else {
+            // Large payload - split into multiple packets
+            debug!(
+                "Splitting large payload: total_len={}, max_packet_size={}",
+                payload.len(),
+                MAX_PACKET_SIZE
+            );
+            
+            let mut offset = 0;
+            while offset < payload.len() {
+                let chunk_size = std::cmp::min(MAX_PACKET_SIZE, payload.len() - offset);
+                let chunk = &payload[offset..offset + chunk_size];
+                
+                let mut packet = BytesMut::with_capacity(4 + chunk_size);
+
+                // Length (3 bytes)
+                packet.put_u8((chunk_size & 0xff) as u8);
+                packet.put_u8(((chunk_size >> 8) & 0xff) as u8);
+                packet.put_u8(((chunk_size >> 16) & 0xff) as u8);
+
+                // Sequence ID
+                packet.put_u8(state.sequence_id);
+
+                debug!(
+                    "Writing packet chunk: len={}, seq={}, offset={}, total_remaining={}",
+                    chunk_size,
+                    state.sequence_id,
+                    offset,
+                    payload.len() - offset
+                );
+
+                state.sequence_id = state.sequence_id.wrapping_add(1);
+
+                // Payload chunk
+                packet.put_slice(chunk);
+
+                stream.write_all(&packet).await?;
+                stream.flush().await?;
+                
+                offset += chunk_size;
+            }
+        }
 
         Ok(())
     }
