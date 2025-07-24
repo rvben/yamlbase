@@ -140,6 +140,24 @@ fn benchmark_limit(c: &mut Criterion) {
     });
 }
 
+fn benchmark_cte(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let db = create_test_database();
+    let storage = Arc::new(Storage::new(db));
+    let executor = rt.block_on(QueryExecutor::new(storage)).unwrap();
+
+    c.bench_function("cte", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let sql = "WITH active_users AS (SELECT * FROM users WHERE active = true) SELECT * FROM active_users WHERE age > 30 ORDER BY id LIMIT 10";
+                let statements = parse_sql(sql).unwrap();
+                let result = executor.execute(&statements[0]).await.unwrap();
+                black_box(result);
+            });
+        });
+    });
+}
+
 fn benchmark_sql_parsing(c: &mut Criterion) {
     c.bench_function("sql_parsing", |b| {
         b.iter(|| {
@@ -156,6 +174,7 @@ criterion_group!(
     benchmark_where_clause,
     benchmark_order_by,
     benchmark_limit,
+    benchmark_cte,
     benchmark_sql_parsing
 );
 criterion_main!(benches);
