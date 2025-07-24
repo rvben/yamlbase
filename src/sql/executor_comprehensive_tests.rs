@@ -1031,4 +1031,182 @@ mod comprehensive_tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_mysql_date_functions() {
+        // Test MySQL date functions (DATE, YEAR, MONTH, DAY) - Priority 3.1
+        let mut db = Database::new("test_db".to_string());
+
+        // Create events table with date/datetime data
+        let events_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: SqlType::Integer,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: true,
+                references: None,
+            },
+            Column {
+                name: "event_date".to_string(),
+                sql_type: SqlType::Date,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+            Column {
+                name: "event_datetime".to_string(),
+                sql_type: SqlType::Timestamp,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+            Column {
+                name: "event_text".to_string(),
+                sql_type: SqlType::Varchar(20),
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+        ];
+
+        let mut events_table = Table::new("events".to_string(), events_columns);
+        events_table.rows = vec![
+            vec![
+                Value::Integer(1), 
+                Value::Date(chrono::NaiveDate::from_ymd_opt(2023, 12, 25).unwrap()),
+                Value::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(1703520000, 0).unwrap()), // 2023-12-25 12:00:00
+                Value::Text("2023-11-15".to_string())
+            ],
+            vec![
+                Value::Integer(2), 
+                Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 6, 15).unwrap()),
+                Value::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(1718445600, 0).unwrap()), // 2024-06-15 08:00:00  
+                Value::Text("2024-03-20 14:30:00".to_string())
+            ],
+        ];
+
+        db.add_table(events_table).unwrap();
+
+        let storage = Storage::new(db);
+        let storage_arc = Arc::new(storage);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
+
+        // Test 1: DATE function - extract date from datetime
+        let date_query = parse_sql(r#"
+            SELECT 
+                id, 
+                DATE(event_datetime) as extracted_date,
+                DATE(event_text) as parsed_date
+            FROM events 
+            ORDER BY id
+        "#).unwrap();
+
+        let result = executor.execute(&date_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ DATE function works! Got {} rows", res.rows.len());
+                println!("Result: {:?}", res);
+                
+                assert_eq!(res.rows.len(), 2);
+                assert_eq!(res.columns, vec!["id", "extracted_date", "parsed_date"]);
+                
+                // Check first row
+                if let [Value::Integer(1), Value::Date(date1), Value::Date(date2)] = &res.rows[0][..] {
+                    assert_eq!(*date1, chrono::NaiveDate::from_ymd_opt(2023, 12, 25).unwrap());
+                    assert_eq!(*date2, chrono::NaiveDate::from_ymd_opt(2023, 11, 15).unwrap());
+                } else {
+                    panic!("Unexpected row format: {:?}", res.rows[0]);
+                }
+            }
+            Err(e) => {
+                println!("❌ DATE function failed: {}", e);
+                panic!("DATE function should work: {}", e);
+            }
+        }
+
+        // Test 2: YEAR, MONTH, DAY functions
+        let ymd_query = parse_sql(r#"
+            SELECT 
+                id,
+                YEAR(event_date) as year_val,
+                MONTH(event_date) as month_val,
+                DAY(event_date) as day_val,
+                YEAR(event_datetime) as datetime_year,
+                MONTH(event_text) as text_month
+            FROM events 
+            ORDER BY id
+        "#).unwrap();
+
+        let result = executor.execute(&ymd_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ YEAR, MONTH, DAY functions work! Got {} rows", res.rows.len());
+                println!("Result: {:?}", res);
+                
+                assert_eq!(res.rows.len(), 2);
+                assert_eq!(res.columns, vec!["id", "year_val", "month_val", "day_val", "datetime_year", "text_month"]);
+                
+                // Check first row: 2023-12-25
+                if let [Value::Integer(1), Value::Integer(year), Value::Integer(month), Value::Integer(day), Value::Integer(dt_year), Value::Integer(text_month)] = &res.rows[0][..] {
+                    assert_eq!(*year, 2023);
+                    assert_eq!(*month, 12);
+                    assert_eq!(*day, 25);
+                    assert_eq!(*dt_year, 2023); // From datetime
+                    assert_eq!(*text_month, 11); // From text "2023-11-15"
+                } else {
+                    panic!("Unexpected row format: {:?}", res.rows[0]);
+                }
+                
+                // Check second row: 2024-06-15
+                if let [Value::Integer(2), Value::Integer(year), Value::Integer(month), Value::Integer(day), Value::Integer(dt_year), Value::Integer(text_month)] = &res.rows[1][..] {
+                    assert_eq!(*year, 2024);
+                    assert_eq!(*month, 6);
+                    assert_eq!(*day, 15);
+                    assert_eq!(*dt_year, 2024); // From datetime
+                    assert_eq!(*text_month, 3); // From text "2024-03-20 14:30:00"
+                } else {
+                    panic!("Unexpected row format: {:?}", res.rows[1]);
+                }
+            }
+            Err(e) => {
+                println!("❌ YEAR, MONTH, DAY functions failed: {}", e);
+                panic!("YEAR, MONTH, DAY functions should work: {}", e);
+            }
+        }
+
+        // Test 3: Date functions in WHERE clauses for filtering
+        let where_query = parse_sql(r#"
+            SELECT id, event_date 
+            FROM events 
+            WHERE YEAR(event_date) = 2023 AND MONTH(event_date) = 12
+        "#).unwrap();
+
+        let result = executor.execute(&where_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ Date functions in WHERE clause work! Got {} rows", res.rows.len());
+                println!("Result: {:?}", res);
+                
+                // Should get only the December 2023 event
+                assert_eq!(res.rows.len(), 1);
+                if let [Value::Integer(1), Value::Date(_)] = &res.rows[0][..] {
+                    // Correct - got the 2023-12-25 event
+                } else {
+                    panic!("Unexpected row format: {:?}", res.rows[0]);
+                }
+            }
+            Err(e) => {
+                println!("❌ Date functions in WHERE clause failed: {}", e);
+                panic!("Date functions in WHERE should work: {}", e);
+            }
+        }
+    }
 }

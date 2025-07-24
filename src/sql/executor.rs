@@ -2599,6 +2599,161 @@ impl QueryExecutor {
                     })
                 }
             }
+            "DATE" => {
+                // MySQL DATE function - extracts date part from datetime
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Date(d)),
+                                Value::Timestamp(ts) => {
+                                    // Extract just the date part from timestamp
+                                    Ok(Value::Date(ts.date()))
+                                }
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Date(date))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Date(datetime.date()))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for DATE".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE requires arguments".to_string(),
+                    })
+                }
+            }
+            "YEAR" => {
+                // MySQL YEAR function - extracts year from date/datetime
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Integer(d.year() as i64)),
+                                Value::Timestamp(ts) => Ok(Value::Integer(ts.year() as i64)),
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Integer(date.year() as i64))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Integer(datetime.year() as i64))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for YEAR".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "YEAR requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "YEAR requires arguments".to_string(),
+                    })
+                }
+            }
+            "MONTH" => {
+                // MySQL MONTH function - extracts month from date/datetime (1-12)
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Integer(d.month() as i64)),
+                                Value::Timestamp(ts) => Ok(Value::Integer(ts.month() as i64)),
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Integer(date.month() as i64))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Integer(datetime.month() as i64))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for MONTH".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "MONTH requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "MONTH requires arguments".to_string(),
+                    })
+                }
+            }
+            "DAY" => {
+                // MySQL DAY function - extracts day from date/datetime (1-31)
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Integer(d.day() as i64)),
+                                Value::Timestamp(ts) => Ok(Value::Integer(ts.day() as i64)),
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Integer(date.day() as i64))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Integer(datetime.day() as i64))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for DAY".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DAY requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DAY requires arguments".to_string(),
+                    })
+                }
+            }
             // For functions that don't need row context, delegate to constant version
             _ => self.evaluate_constant_function(func),
         }
@@ -3649,6 +3804,161 @@ impl QueryExecutor {
             "DATABASE" => {
                 // Return current database name
                 Ok(Value::Text(self.database_name.clone()))
+            }
+            "DATE" => {
+                // MySQL DATE function - extracts date part from datetime
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Date(d)),
+                                Value::Timestamp(ts) => {
+                                    // Extract just the date part from timestamp
+                                    Ok(Value::Date(ts.date()))
+                                }
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Date(date))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Date(datetime.date()))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for DATE".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE requires arguments".to_string(),
+                    })
+                }
+            }
+            "YEAR" => {
+                // MySQL YEAR function - extracts year from date/datetime
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Integer(d.year() as i64)),
+                                Value::Timestamp(ts) => Ok(Value::Integer(ts.year() as i64)),
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Integer(date.year() as i64))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Integer(datetime.year() as i64))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for YEAR".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "YEAR requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "YEAR requires arguments".to_string(),
+                    })
+                }
+            }
+            "MONTH" => {
+                // MySQL MONTH function - extracts month from date/datetime (1-12)
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Integer(d.month() as i64)),
+                                Value::Timestamp(ts) => Ok(Value::Integer(ts.month() as i64)),
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Integer(date.month() as i64))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Integer(datetime.month() as i64))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for MONTH".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "MONTH requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "MONTH requires arguments".to_string(),
+                    })
+                }
+            }
+            "DAY" => {
+                // MySQL DAY function - extracts day from date/datetime (1-31)
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 1 {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            match date_val {
+                                Value::Date(d) => Ok(Value::Integer(d.day() as i64)),
+                                Value::Timestamp(ts) => Ok(Value::Integer(ts.day() as i64)),
+                                Value::Text(s) => {
+                                    // Try to parse text as date
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                        Ok(Value::Integer(date.day() as i64))
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                        Ok(Value::Integer(datetime.day() as i64))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Null => Ok(Value::Null),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "Invalid argument for DAY".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DAY requires exactly 1 argument".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DAY requires arguments".to_string(),
+                    })
+                }
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Function '{}' is not implemented",
