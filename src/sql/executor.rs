@@ -6914,6 +6914,20 @@ impl QueryExecutor {
                     }
                     count += 1;
                 }
+                Value::Decimal(d) => {
+                    // Convert Decimal to f64 for summing
+                    let decimal_f64 = d.to_string().parse::<f64>()
+                        .map_err(|_| YamlBaseError::Database { 
+                            message: "Failed to convert Decimal to f64 for SUM calculation".to_string() 
+                        })?;
+                    if !has_float {
+                        sum_float = sum_int as f64 + decimal_f64;
+                        has_float = true;
+                    } else {
+                        sum_float += decimal_f64;
+                    }
+                    count += 1;
+                }
                 Value::Null => {} // Skip NULL values
                 _ => {
                     return Err(YamlBaseError::Database { message: "SUM can only be applied to numeric columns".to_string() });
@@ -6947,6 +6961,15 @@ impl QueryExecutor {
                 }
                 Value::Double(d) => {
                     sum += d;
+                    count += 1;
+                }
+                Value::Decimal(d) => {
+                    // Convert Decimal to f64 for averaging
+                    let decimal_f64 = d.to_string().parse::<f64>()
+                        .map_err(|_| YamlBaseError::Database { 
+                            message: "Failed to convert Decimal to f64 for AVG calculation".to_string() 
+                        })?;
+                    sum += decimal_f64;
                     count += 1;
                 }
                 Value::Null => {} // Skip NULL values
