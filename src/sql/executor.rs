@@ -2754,6 +2754,10 @@ impl QueryExecutor {
                     })
                 }
             }
+            "DATEADD" | "DATEDIFF" | "DATE_ADD" | "DATE_SUB" => {
+                // Date arithmetic functions - delegate to constant function handler
+                self.evaluate_constant_function(func)
+            }
             // For functions that don't need row context, delegate to constant version
             _ => self.evaluate_constant_function(func),
         }
@@ -3957,6 +3961,412 @@ impl QueryExecutor {
                 } else {
                     Err(YamlBaseError::Database {
                         message: "DAY requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATEADD" => {
+                // DATEADD(datepart, number, date) - SQL Server style
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(datepart_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(number_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let datepart_val = self.evaluate_constant_expr(datepart_expr)?;
+                            let number_val = self.evaluate_constant_expr(number_expr)?;
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+
+                            // Get datepart (year, month, day, hour, minute, second)
+                            let datepart = match &datepart_val {
+                                Value::Text(s) => s.to_lowercase(),
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEADD requires datepart as first argument (year, month, day, hour, minute, second)".to_string(),
+                                }),
+                            };
+
+                            // Get number to add
+                            let number = match &number_val {
+                                Value::Integer(n) => *n,
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEADD requires integer as second argument".to_string(),
+                                }),
+                            };
+
+                            // Parse date
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Timestamp(ts) => ts.date(),
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEADD requires date as third argument".to_string(),
+                                }),
+                            };
+
+                            // Add the specified interval
+                            let result = match datepart.as_str() {
+                                "year" | "yy" | "yyyy" => {
+                                    if number >= 0 {
+                                        date + chrono::Months::new((number * 12) as u32)
+                                    } else {
+                                        date - chrono::Months::new(((-number) * 12) as u32)
+                                    }
+                                }
+                                "month" | "mm" | "m" => {
+                                    if number >= 0 {
+                                        date + chrono::Months::new(number as u32)
+                                    } else {
+                                        date - chrono::Months::new((-number) as u32)
+                                    }
+                                }
+                                "day" | "dd" | "d" => {
+                                    if number >= 0 {
+                                        date + chrono::Days::new(number as u64)
+                                    } else {
+                                        date - chrono::Days::new((-number) as u64)
+                                    }
+                                }
+                                "week" | "ww" | "wk" => {
+                                    if number >= 0 {
+                                        date + chrono::Days::new((number * 7) as u64)
+                                    } else {
+                                        date - chrono::Days::new((-number * 7) as u64)
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: format!("Unsupported datepart: {} (supported: year, month, day, week)", datepart),
+                                }),
+                            };
+
+                            Ok(Value::Date(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATEADD requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATEADD requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATEADD requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATEDIFF" => {
+                // DATEDIFF(datepart, startdate, enddate) - calculates difference between dates
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(datepart_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(start_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(end_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let datepart_val = self.evaluate_constant_expr(datepart_expr)?;
+                            let start_val = self.evaluate_constant_expr(start_expr)?;
+                            let end_val = self.evaluate_constant_expr(end_expr)?;
+
+                            // Get datepart
+                            let datepart = match &datepart_val {
+                                Value::Text(s) => s.to_lowercase(),
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEDIFF requires datepart as first argument".to_string(),
+                                }),
+                            };
+
+                            // Parse start date
+                            let start_date = match &start_val {
+                                Value::Date(d) => *d,
+                                Value::Timestamp(ts) => ts.date(),
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid start date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEDIFF requires date as second argument".to_string(),
+                                }),
+                            };
+
+                            // Parse end date
+                            let end_date = match &end_val {
+                                Value::Date(d) => *d,
+                                Value::Timestamp(ts) => ts.date(),
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid end date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEDIFF requires date as third argument".to_string(),
+                                }),
+                            };
+
+                            // Calculate difference
+                            let result = match datepart.as_str() {
+                                "day" | "dd" | "d" => {
+                                    (end_date - start_date).num_days()
+                                }
+                                "week" | "ww" | "wk" => {
+                                    (end_date - start_date).num_weeks()
+                                }
+                                "month" | "mm" | "m" => {
+                                    let years_diff = end_date.year() - start_date.year();
+                                    let months_diff = end_date.month0() as i32 - start_date.month0() as i32;
+                                    (years_diff * 12 + months_diff) as i64
+                                }
+                                "year" | "yy" | "yyyy" => {
+                                    (end_date.year() - start_date.year()) as i64
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: format!("Unsupported datepart: {} (supported: day, week, month, year)", datepart),
+                                }),
+                            };
+
+                            Ok(Value::Integer(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATEDIFF requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATEDIFF requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATEDIFF requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATE_ADD" => {
+                // DATE_ADD(date, INTERVAL value unit) - MySQL style
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(value_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(unit_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            let value_val = self.evaluate_constant_expr(value_expr)?;
+                            let unit_val = self.evaluate_constant_expr(unit_expr)?;
+
+                            // Parse date
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Timestamp(ts) => ts.date(),
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATE_ADD requires date as first argument".to_string(),
+                                }),
+                            };
+
+                            // Get value to add
+                            let value = match &value_val {
+                                Value::Integer(n) => *n,
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATE_ADD requires integer as second argument".to_string(),
+                                }),
+                            };
+
+                            // Get unit
+                            let unit = match &unit_val {
+                                Value::Text(s) => s.to_uppercase(),
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATE_ADD requires unit as third argument".to_string(),
+                                }),
+                            };
+
+                            // Add the specified interval
+                            let result = match unit.as_str() {
+                                "YEAR" => {
+                                    if value >= 0 {
+                                        date + chrono::Months::new((value * 12) as u32)
+                                    } else {
+                                        date - chrono::Months::new(((-value) * 12) as u32)
+                                    }
+                                }
+                                "MONTH" => {
+                                    if value >= 0 {
+                                        date + chrono::Months::new(value as u32)
+                                    } else {
+                                        date - chrono::Months::new((-value) as u32)
+                                    }
+                                }
+                                "DAY" => {
+                                    if value >= 0 {
+                                        date + chrono::Days::new(value as u64)
+                                    } else {
+                                        date - chrono::Days::new((-value) as u64)
+                                    }
+                                }
+                                "WEEK" => {
+                                    if value >= 0 {
+                                        date + chrono::Days::new((value * 7) as u64)
+                                    } else {
+                                        date - chrono::Days::new((-value * 7) as u64)
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
+                                }),
+                            };
+
+                            Ok(Value::Date(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATE_ADD requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_ADD requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_ADD requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATE_SUB" => {
+                // DATE_SUB(date, INTERVAL value unit) - MySQL style subtraction
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(value_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(unit_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let date_val = self.evaluate_constant_expr(date_expr)?;
+                            let value_val = self.evaluate_constant_expr(value_expr)?;
+                            let unit_val = self.evaluate_constant_expr(unit_expr)?;
+
+                            // Parse date
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Timestamp(ts) => ts.date(),
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATE_SUB requires date as first argument".to_string(),
+                                }),
+                            };
+
+                            // Get value to subtract
+                            let value = match &value_val {
+                                Value::Integer(n) => *n,
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATE_SUB requires integer as second argument".to_string(),
+                                }),
+                            };
+
+                            // Get unit
+                            let unit = match &unit_val {
+                                Value::Text(s) => s.to_uppercase(),
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATE_SUB requires unit as third argument".to_string(),
+                                }),
+                            };
+
+                            // Subtract the specified interval (reverse of DATE_ADD)
+                            let result = match unit.as_str() {
+                                "YEAR" => {
+                                    if value >= 0 {
+                                        date - chrono::Months::new((value * 12) as u32)
+                                    } else {
+                                        date + chrono::Months::new(((-value) * 12) as u32)
+                                    }
+                                }
+                                "MONTH" => {
+                                    if value >= 0 {
+                                        date - chrono::Months::new(value as u32)
+                                    } else {
+                                        date + chrono::Months::new((-value) as u32)
+                                    }
+                                }
+                                "DAY" => {
+                                    if value >= 0 {
+                                        date - chrono::Days::new(value as u64)
+                                    } else {
+                                        date + chrono::Days::new((-value) as u64)
+                                    }
+                                }
+                                "WEEK" => {
+                                    if value >= 0 {
+                                        date - chrono::Days::new((value * 7) as u64)
+                                    } else {
+                                        date + chrono::Days::new((-value * 7) as u64)
+                                    }
+                                }
+                                _ => return Err(YamlBaseError::Database {
+                                    message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
+                                }),
+                            };
+
+                            Ok(Value::Date(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATE_SUB requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_SUB requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_SUB requires arguments".to_string(),
                     })
                 }
             }
@@ -6868,8 +7278,58 @@ impl QueryExecutor {
                         return Err(YamlBaseError::Database { message: format!("Column '{}' not found in joined result", qualified_name) });
                     }
                 }
+                // Support for complex expressions in aggregates
+                Expr::BinaryOp { left, op, right } => {
+                    // Evaluate binary operations like price * quantity, amount + tax, etc.
+                    let left_val = self.extract_column_values_for_aggregate(left, &[row.clone()], column_mapping)?;
+                    let right_val = self.extract_column_values_for_aggregate(right, &[row.clone()], column_mapping)?;
+                    
+                    if left_val.is_empty() || right_val.is_empty() {
+                        return Err(YamlBaseError::Database { message: "Invalid operands in aggregate expression".to_string() });
+                    }
+                    
+                    self.evaluate_arithmetic_operation(&left_val[0], op, &right_val[0])?
+                }
+                Expr::Value(val) => {
+                    // Support literal values in aggregate expressions (e.g., SUM(price * 1.1))
+                    match val {
+                        sqlparser::ast::Value::Number(n, _) => {
+                            if let Ok(int_val) = n.parse::<i64>() {
+                                Value::Integer(int_val)
+                            } else if let Ok(float_val) = n.parse::<f64>() {
+                                Value::Float(float_val as f32)
+                            } else {
+                                return Err(YamlBaseError::Database { message: format!("Invalid number: {}", n) });
+                            }
+                        }
+                        sqlparser::ast::Value::SingleQuotedString(s) => Value::Text(s.clone()),
+                        sqlparser::ast::Value::Boolean(b) => Value::Boolean(*b),
+                        sqlparser::ast::Value::Null => Value::Null,
+                        _ => return Err(YamlBaseError::Database { message: "Unsupported literal value in aggregate".to_string() }),
+                    }
+                }
+                Expr::UnaryOp { op, expr } => {
+                    // Support unary operations like -price, +amount
+                    let operand_vals = self.extract_column_values_for_aggregate(expr, &[row.clone()], column_mapping)?;
+                    if operand_vals.is_empty() {
+                        return Err(YamlBaseError::Database { message: "Invalid operand in unary operation".to_string() });
+                    }
+                    
+                    match op {
+                        UnaryOperator::Plus => operand_vals[0].clone(),
+                        UnaryOperator::Minus => {
+                            match &operand_vals[0] {
+                                Value::Integer(i) => Value::Integer(-i),
+                                Value::Float(f) => Value::Float(-f),
+                                Value::Decimal(d) => Value::Decimal(-d),
+                                _ => return Err(YamlBaseError::Database { message: "Cannot apply unary minus to non-numeric value".to_string() }),
+                            }
+                        }
+                        _ => return Err(YamlBaseError::NotImplemented(format!("Unary operator {:?} not supported in aggregates", op))),
+                    }
+                }
                 _ => {
-                    return Err(YamlBaseError::NotImplemented("Complex expressions in aggregates not supported yet".to_string()));
+                    return Err(YamlBaseError::NotImplemented(format!("Expression type {:?} not yet supported in aggregates", col_expr)));
                 }
             };
             values.push(value);
@@ -6878,6 +7338,100 @@ impl QueryExecutor {
         Ok(values)
     }
     
+    // Helper method to evaluate arithmetic operations for complex expressions in aggregates
+    fn evaluate_arithmetic_operation(&self, left: &Value, op: &BinaryOperator, right: &Value) -> crate::Result<Value> {
+        match op {
+            BinaryOperator::Plus => {
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                    (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a + b)),
+                    (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 + b)),
+                    (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f32)),
+                    (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + b)),
+                    (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Decimal(a + rust_decimal::Decimal::from(*b))),
+                    _ => Err(YamlBaseError::Database { message: "Cannot add non-numeric values".to_string() }),
+                }
+            }
+            BinaryOperator::Minus => {
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+                    (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a - b)),
+                    (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 - b)),
+                    (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f32)),
+                    (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Decimal(rust_decimal::Decimal::from(*a) - b)),
+                    (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Decimal(a - rust_decimal::Decimal::from(*b))),
+                    _ => Err(YamlBaseError::Database { message: "Cannot subtract non-numeric values".to_string() }),
+                }
+            }
+            BinaryOperator::Multiply => {
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+                    (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a * b)),
+                    (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 * b)),
+                    (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a * *b as f32)),
+                    (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Decimal(rust_decimal::Decimal::from(*a) * b)),
+                    (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Decimal(a * rust_decimal::Decimal::from(*b))),
+                    _ => Err(YamlBaseError::Database { message: "Cannot multiply non-numeric values".to_string() }),
+                }
+            }
+            BinaryOperator::Divide => {
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => {
+                        if *b == 0 {
+                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
+                        } else {
+                            Ok(Value::Float(*a as f32 / *b as f32))
+                        }
+                    }
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
+                        } else {
+                            Ok(Value::Float(a / b))
+                        }
+                    }
+                    (Value::Decimal(a), Value::Decimal(b)) => {
+                        if *b == rust_decimal::Decimal::ZERO {
+                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
+                        } else {
+                            Ok(Value::Decimal(a / b))
+                        }
+                    }
+                    (Value::Integer(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
+                        } else {
+                            Ok(Value::Float(*a as f32 / b))
+                        }
+                    }
+                    (Value::Float(a), Value::Integer(b)) => {
+                        if *b == 0 {
+                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
+                        } else {
+                            Ok(Value::Float(a / *b as f32))
+                        }
+                    }
+                    _ => Err(YamlBaseError::Database { message: "Cannot divide non-numeric values".to_string() }),
+                }
+            }
+            BinaryOperator::Modulo => {
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => {
+                        if *b == 0 {
+                            Err(YamlBaseError::Database { message: "Modulo by zero".to_string() })
+                        } else {
+                            Ok(Value::Integer(a % b))
+                        }
+                    }
+                    _ => Err(YamlBaseError::Database { message: "Modulo operation only supported for integers".to_string() }),
+                }
+            }
+            _ => Err(YamlBaseError::NotImplemented(format!("Binary operator {:?} not supported in aggregates", op))),
+        }
+    }
     
     // Calculate SUM of numeric values
     fn calculate_sum(&self, values: &[Value]) -> crate::Result<Value> {
@@ -7431,8 +7985,61 @@ impl QueryExecutor {
             ).await;
         }
 
+        // Handle multi-table cases (comma-separated tables for Cartesian products)
+        if select.from.len() > 1 {
+            debug!("Handling multi-table CTE query with {} tables", select.from.len());
+            
+            // Get the first table as the base
+            let first_table_data = self.get_table_data_from_context(context, &select.from[0].relation).await?;
+            let mut result_rows = first_table_data.rows;
+            let mut result_columns = first_table_data.columns;
+
+            // Process each additional table to create Cartesian product
+            for table_ref in &select.from[1..] {
+                let table_data = self.get_table_data_from_context(context, &table_ref.relation).await?;
+                
+                // Create Cartesian product between current result and new table
+                let mut new_rows = Vec::new();
+                let mut new_columns = result_columns.clone();
+                
+                // Add columns from the new table (with potential prefixing to avoid conflicts)
+                for col in &table_data.columns {
+                    if !new_columns.contains(col) {
+                        new_columns.push(col.clone());
+                    } else {
+                        // Add table prefix to avoid column name conflicts
+                        if let TableFactor::Table { name, .. } = &table_ref.relation {
+                            let table_name = name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                            new_columns.push(format!("{}.{}", table_name, col));
+                        } else {
+                            new_columns.push(format!("t{}.{}", new_columns.len(), col));
+                        }
+                    }
+                }
+
+                // Generate Cartesian product rows
+                for existing_row in &result_rows {
+                    for new_row in &table_data.rows {
+                        let mut combined_row = existing_row.clone();
+                        combined_row.extend(new_row.clone());
+                        new_rows.push(combined_row);
+                    }
+                }
+
+                result_rows = new_rows;
+                result_columns = new_columns;
+            }
+
+            return self.apply_cte_query_clauses(
+                result_rows,
+                result_columns,
+                select,
+                query,
+            ).await;
+        }
+
         Err(YamlBaseError::NotImplemented(
-            "Complex multi-table CTE queries not yet fully implemented".to_string(),
+            "Empty FROM clause not supported in CTE queries".to_string(),
         ))
     }
 
