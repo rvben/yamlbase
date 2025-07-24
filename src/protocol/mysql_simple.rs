@@ -462,36 +462,49 @@ impl MySqlProtocol {
             return query.to_string();
         }
 
-        static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version|VERSION|Version)\b").unwrap()
+        static VERSION_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version|VERSION|Version)\b")
         });
 
-        static VERSION_COMMENT_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b").unwrap()
+        static VERSION_COMMENT_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b")
         });
 
-        static MAX_ALLOWED_PACKET_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:max_allowed_packet|MAX_ALLOWED_PACKET|Max_Allowed_Packet)\b").unwrap()
+        static MAX_ALLOWED_PACKET_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:max_allowed_packet|MAX_ALLOWED_PACKET|Max_Allowed_Packet)\b")
         });
 
-        static SYSTEM_VAR_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap()
+        static SYSTEM_VAR_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
+            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b")
         });
 
         let mut result = query.to_string();
 
         // First handle @@version specifically
-        result = VERSION_RE
-            .replace_all(&result, "'8.0.35-yamlbase'")
-            .to_string();
+        if let Ok(ref version_re) = *VERSION_RE {
+            result = version_re
+                .replace_all(&result, "'8.0.35-yamlbase'")
+                .to_string();
+        } else {
+            // If regex compilation failed, skip this replacement
+            debug!("Failed to compile VERSION_RE regex");
+        }
 
         // Handle @@version_comment
-        result = VERSION_COMMENT_RE.replace_all(&result, "'1'").to_string();
+        if let Ok(ref version_comment_re) = *VERSION_COMMENT_RE {
+            result = version_comment_re.replace_all(&result, "'1'").to_string();
+        } else {
+            debug!("Failed to compile VERSION_COMMENT_RE regex");
+        }
 
         // Handle @@max_allowed_packet - MySQL default is 64MB (67108864 bytes)
-        result = MAX_ALLOWED_PACKET_RE
-            .replace_all(&result, "67108864")
-            .to_string();
+        if let Ok(ref max_packet_re) = *MAX_ALLOWED_PACKET_RE {
+            result = max_packet_re
+                .replace_all(&result, "67108864")
+                .to_string();
+        } else {
+            debug!("Failed to compile MAX_ALLOWED_PACKET_RE regex");
+        }
 
         // Check if we already replaced all instances
         if !result.contains("@@") {
@@ -500,7 +513,11 @@ impl MySqlProtocol {
         }
 
         // Replace remaining system variables with '1'
-        result = SYSTEM_VAR_RE.replace_all(&result, "'1'").to_string();
+        if let Ok(ref system_var_re) = *SYSTEM_VAR_RE {
+            result = system_var_re.replace_all(&result, "'1'").to_string();
+        } else {
+            debug!("Failed to compile SYSTEM_VAR_RE regex");
+        }
 
         debug!("Preprocessed query: {} -> {}", query, result);
         result

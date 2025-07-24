@@ -121,6 +121,10 @@ impl TestServer {
             hot_reload: false,
             log_level: "info".to_string(),
             database: None,
+            max_connections: None,
+            connection_timeout: None,
+            idle_timeout: None,
+            enable_keepalive: false,
         });
 
         Self {
@@ -165,6 +169,10 @@ impl TestServer {
             hot_reload: false,
             log_level: "info".to_string(),
             database: None,
+            max_connections: None,
+            connection_timeout: None,
+            idle_timeout: None,
+            enable_keepalive: false,
         });
 
         Self {
@@ -288,6 +296,10 @@ impl TestServer {
                 hot_reload: false,
                 log_level: "info".to_string(),
                 database: None,
+                max_connections: None,
+                connection_timeout: None,
+                idle_timeout: None,
+                enable_keepalive: false,
             });
 
             Self { port, config, process: Some(process), _temp_file: Some(temp_file) }

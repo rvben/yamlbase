@@ -1726,7 +1726,10 @@ impl QueryExecutor {
             DateTimeField::Decade => (date.year() / 10) as i64,
             DateTimeField::Epoch => {
                 // Days since Unix epoch (1970-01-01)
-                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .ok_or_else(|| YamlBaseError::Database {
+                        message: "Failed to create Unix epoch date".to_string(),
+                    })?;
                 (*date - epoch).num_days()
             }
             _ => {
@@ -2978,10 +2981,15 @@ impl QueryExecutor {
 
                             // Get first day of next month
                             let next_month = if date.month() == 12 {
-                                chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).unwrap()
+                                chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
+                                    .ok_or_else(|| YamlBaseError::Database {
+                                        message: "Invalid date calculation for next year".to_string(),
+                                    })?
                             } else {
                                 chrono::NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
-                                    .unwrap()
+                                    .ok_or_else(|| YamlBaseError::Database {
+                                        message: "Invalid date calculation for next month".to_string(),
+                                    })?
                             };
                             // Subtract one day to get last day of current month
                             let last_day = next_month - chrono::Duration::days(1);
@@ -4834,8 +4842,14 @@ impl QueryExecutor {
         match expr {
             // If this is one of the GROUP BY expressions, return the group value
             _ if self.is_group_by_expr(expr, group_by_exprs) => {
-                let idx = self.get_group_by_expr_index(expr, group_by_exprs).unwrap();
-                let value = group_values[idx].clone();
+                let idx = self.get_group_by_expr_index(expr, group_by_exprs)
+                    .ok_or_else(|| YamlBaseError::Database {
+                        message: "GROUP BY expression index not found".to_string(),
+                    })?;
+                let value = group_values.get(idx).cloned()
+                    .ok_or_else(|| YamlBaseError::Database {
+                        message: "GROUP BY value index out of bounds".to_string(),
+                    })?;
                 let col_name = self.expr_to_string(expr);
                 let col_type = self.infer_value_type(&value);
                 Ok((col_name, col_type, value))
@@ -4850,8 +4864,14 @@ impl QueryExecutor {
             Expr::Identifier(ident) => {
                 // This should be one of the GROUP BY columns
                 if self.is_group_by_expr(expr, group_by_exprs) {
-                    let idx = self.get_group_by_expr_index(expr, group_by_exprs).unwrap();
-                    let value = group_values[idx].clone();
+                    let idx = self.get_group_by_expr_index(expr, group_by_exprs)
+                        .ok_or_else(|| YamlBaseError::Database {
+                            message: "GROUP BY expression index not found".to_string(),
+                        })?;
+                    let value = group_values.get(idx).cloned()
+                        .ok_or_else(|| YamlBaseError::Database {
+                            message: "GROUP BY value index out of bounds".to_string(),
+                        })?;
                     let col_type = self.infer_value_type(&value);
                     Ok((ident.value.clone(), col_type, value))
                 } else {
