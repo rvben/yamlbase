@@ -72,7 +72,7 @@ fn benchmark_simple_select(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = create_test_database();
     let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage);
+    let executor = rt.block_on(QueryExecutor::new(storage)).unwrap();
 
     c.bench_function("simple_select", |b| {
         b.iter(|| {
@@ -90,7 +90,7 @@ fn benchmark_where_clause(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = create_test_database();
     let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage);
+    let executor = rt.block_on(QueryExecutor::new(storage)).unwrap();
 
     c.bench_function("where_clause", |b| {
         b.iter(|| {
@@ -108,7 +108,7 @@ fn benchmark_order_by(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = create_test_database();
     let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage);
+    let executor = rt.block_on(QueryExecutor::new(storage)).unwrap();
 
     c.bench_function("order_by", |b| {
         b.iter(|| {
@@ -126,7 +126,7 @@ fn benchmark_limit(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let db = create_test_database();
     let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage);
+    let executor = rt.block_on(QueryExecutor::new(storage)).unwrap();
 
     c.bench_function("limit", |b| {
         b.iter(|| {
