@@ -34,6 +34,10 @@ tables:
         verbose: false,
         log_level: "error".to_string(),
         database: None,
+        max_connections: None,
+        connection_timeout: None,
+        idle_timeout: None,
+        enable_keepalive: false,
     };
 
     let server = Server::new(config).await.unwrap();
@@ -70,6 +74,10 @@ tables:
         verbose: false,
         log_level: "error".to_string(),
         database: None,
+        max_connections: None,
+        connection_timeout: None,
+        idle_timeout: None,
+        enable_keepalive: false,
     };
 
     let server = Server::new(config).await.unwrap();
