@@ -27,13 +27,14 @@ struct ConnectionState {
 }
 
 impl PostgresProtocol {
-    pub fn new(config: Arc<Config>, storage: Arc<Storage>) -> Self {
-        Self {
+    pub async fn new(config: Arc<Config>, storage: Arc<Storage>) -> crate::Result<Self> {
+        let executor = QueryExecutor::new(storage).await?;
+        Ok(Self {
             config,
-            executor: QueryExecutor::new(storage),
+            executor,
             _database_name: String::new(), // Will be set later if needed
             extended_protocol: ExtendedProtocol::new(),
-        }
+        })
     }
 
     pub async fn handle_connection(&mut self, mut stream: TcpStream) -> crate::Result<()> {

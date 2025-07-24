@@ -50,7 +50,7 @@ mod comprehensive_tests {
         db.add_table(table).unwrap();
         let storage = Storage::new(db);
         let storage_arc = Arc::new(storage);
-        let executor = QueryExecutor::new(storage_arc);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test LEFT function with constants first
         let query = parse_sql("SELECT LEFT('Hello World', 5)").unwrap();
@@ -164,7 +164,7 @@ mod comprehensive_tests {
         let db = Database::new("test_db".to_string());
         let storage = Storage::new(db);
         let storage_arc = Arc::new(storage);
-        let executor = QueryExecutor::new(storage_arc);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test ROUND with different decimal places
         let query =
@@ -241,7 +241,7 @@ mod comprehensive_tests {
         let db = Database::new("test_db".to_string());
         let storage = Storage::new(db);
         let storage_arc = Arc::new(storage);
-        let executor = QueryExecutor::new(storage_arc);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test casting to INTEGER
         let query = parse_sql(
@@ -372,7 +372,7 @@ mod comprehensive_tests {
 
         let storage = Storage::new(db);
         let storage_arc = Arc::new(storage);
-        let executor = QueryExecutor::new(storage_arc);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test IN subquery placeholder
         let query =

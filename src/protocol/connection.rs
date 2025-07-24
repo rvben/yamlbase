@@ -19,11 +19,13 @@ impl Connection {
     pub async fn handle(&self, stream: TcpStream) -> crate::Result<()> {
         match self.config.protocol {
             Protocol::Postgres => {
-                let mut protocol = PostgresProtocol::new(self.config.clone(), self.storage.clone());
+                let mut protocol =
+                    PostgresProtocol::new(self.config.clone(), self.storage.clone()).await?;
                 protocol.handle_connection(stream).await
             }
             Protocol::Mysql => {
-                let protocol = MySqlProtocol::new(self.config.clone(), self.storage.clone());
+                let protocol =
+                    MySqlProtocol::new(self.config.clone(), self.storage.clone()).await?;
                 protocol.handle_connection(stream).await
             }
             Protocol::Sqlserver => {

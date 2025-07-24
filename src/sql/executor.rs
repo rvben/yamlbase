@@ -15,6 +15,7 @@ use crate::database::{Database, Storage, Table, Value};
 
 pub struct QueryExecutor {
     storage: Arc<Storage>,
+    database_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,8 +83,16 @@ impl JoinedColumn {
 }
 
 impl QueryExecutor {
-    pub fn new(storage: Arc<Storage>) -> Self {
-        Self { storage }
+    pub async fn new(storage: Arc<Storage>) -> crate::Result<Self> {
+        let db_arc = storage.database();
+        let db = db_arc.read().await;
+        let database_name = db.name.clone();
+        drop(db);
+
+        Ok(Self {
+            storage,
+            database_name,
+        })
     }
 
     pub fn storage(&self) -> &Arc<Storage> {
@@ -3629,6 +3638,10 @@ impl QueryExecutor {
                     })
                 }
             }
+            "DATABASE" => {
+                // Return current database name
+                Ok(Value::Text(self.database_name.clone()))
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Function '{}' is not implemented",
                 func_name
@@ -6115,7 +6128,7 @@ mod tests {
         let storage = Arc::new(DbStorage::new(db_owned));
         // Wait a bit for the async index building to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        QueryExecutor::new(storage)
+        QueryExecutor::new(storage).await.unwrap()
     }
 
     async fn create_test_database() -> Arc<RwLock<Database>> {
@@ -6938,7 +6951,7 @@ mod tests {
         // Wait a bit for the async index building to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let executor = QueryExecutor::new(storage);
+        let executor = QueryExecutor::new(storage).await.unwrap();
 
         // Test 1: SELECT 1 FROM test_table
         let stmt = parse_statement("SELECT 1 FROM test_table");
@@ -7037,6 +7050,15 @@ mod tests {
         } else {
             panic!("Expected text value for NOW()");
         }
+
+        // Test 4: SELECT DATABASE() - MySQL compatibility
+        let stmt = parse_statement("SELECT DATABASE()");
+        let result = executor.execute(&stmt).await.unwrap();
+
+        assert_eq!(result.columns.len(), 1);
+        assert_eq!(result.rows.len(), 1);
+        // DATABASE() should return the current database name
+        assert_eq!(result.rows[0][0], Value::Text("test_db".to_string()));
     }
 
     #[tokio::test]
