@@ -43,6 +43,14 @@ enum JoinedColumn {
     Constant(String, Value),
 }
 
+#[derive(Debug, Clone)]
+enum CteProjectionItem {
+    // A column from the CTE result (column index)
+    Column(usize),
+    // A complex expression that needs to be evaluated
+    Expression(Expr),
+}
+
 impl JoinedColumn {
     fn get_name(&self) -> String {
         match self {
@@ -799,7 +807,7 @@ impl QueryExecutor {
         // Check if this is an aggregate query
         if self.is_aggregate_query(select) {
             return self
-                .execute_aggregate_with_joined_rows(db, select, query, &joined_rows, &all_tables)
+                .execute_aggregate_with_joined_rows(db, select, query, &joined_rows, &all_tables, &table_aliases)
                 .await;
         }
 
@@ -5938,16 +5946,816 @@ impl QueryExecutor {
     async fn execute_aggregate_with_joined_rows(
         &self,
         _db: &Database,
-        _select: &Select,
+        select: &Select,
         _query: &Query,
-        _joined_rows: &[Vec<Value>],
-        _tables: &[(String, &Table)],
+        joined_rows: &[Vec<Value>],
+        tables: &[(String, &Table)],
+        table_aliases: &std::collections::HashMap<String, String>,
     ) -> crate::Result<QueryResult> {
-        // Simplified aggregate implementation for joins
-        // Would need full implementation with proper column mapping
-        Err(YamlBaseError::NotImplemented(
-            "Aggregate queries with JOINs are not yet fully implemented".to_string(),
-        ))
+        debug!("Executing aggregate SELECT query with JOINs");
+
+        // Create a mapping of column names to their positions in joined rows
+        let mut column_mapping = std::collections::HashMap::new();
+        let mut position = 0;
+        
+        for (table_name, table) in tables {
+            for (_col_idx, column) in table.columns.iter().enumerate() {
+                let qualified_name = format!("{}.{}", table_name, column.name);
+                let unqualified_name = column.name.clone();
+                
+                column_mapping.insert(qualified_name.clone(), position);
+                // Only insert unqualified name if it doesn't already exist (avoid ambiguity)
+                column_mapping.entry(unqualified_name).or_insert(position);
+                
+                // Also add alias-based qualified names
+                for (alias, real_table_name) in table_aliases {
+                    if real_table_name == table_name {
+                        let alias_qualified_name = format!("{}.{}", alias, column.name);
+                        column_mapping.insert(alias_qualified_name, position);
+                    }
+                }
+                
+                position += 1;
+            }
+        }
+
+        // For joined aggregates, we need to apply WHERE clause filtering
+        let filtered_rows = if let Some(where_expr) = &select.selection {
+            // Apply WHERE clause filtering on joined rows
+            let mut result = Vec::new();
+            for row in joined_rows.iter() {
+                // Evaluate WHERE clause on joined row using column mapping
+                if self.evaluate_where_clause_on_joined_row(where_expr, row, &column_mapping)? {
+                    result.push(row.clone());
+                }
+            }
+            result
+        } else {
+            joined_rows.to_vec()
+        };
+
+        // Check if we have GROUP BY
+        match &select.group_by {
+            GroupByExpr::Expressions(exprs, _) if !exprs.is_empty() => {
+                // GROUP BY aggregate with JOINs
+                return self.execute_joined_group_by_aggregate(select, &select.group_by, &filtered_rows, &column_mapping, table_aliases).await;
+            }
+            GroupByExpr::All(_) => {
+                return Err(YamlBaseError::NotImplemented(
+                    "GROUP BY ALL is not supported yet".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        // Simple aggregate without GROUP BY on joined data
+        let mut columns = Vec::new();
+        let mut row_values = Vec::new();
+
+        for (idx, item) in select.projection.iter().enumerate() {
+            match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    let (col_name, value) =
+                        self.evaluate_joined_aggregate_expr(expr, &filtered_rows, &column_mapping, idx)?;
+                    columns.push(col_name);
+                    row_values.push(value);
+                }
+                SelectItem::ExprWithAlias { expr, alias } => {
+                    let (_, value) =
+                        self.evaluate_joined_aggregate_expr(expr, &filtered_rows, &column_mapping, idx)?;
+                    columns.push(alias.value.clone());
+                    row_values.push(value);
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Complex projections in joined aggregate queries are not supported".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Determine column types for aggregate results
+        let column_types = columns.iter().map(|_| crate::yaml::schema::SqlType::Integer).collect();
+
+        let result = QueryResult {
+            columns,
+            column_types,
+            rows: vec![row_values],
+        };
+
+        Ok(result)
+    }
+
+    // Helper method to evaluate aggregate expressions on joined rows
+    fn evaluate_joined_aggregate_expr(
+        &self,
+        expr: &Expr,
+        rows: &[Vec<Value>],
+        column_mapping: &std::collections::HashMap<String, usize>,
+        _idx: usize,
+    ) -> crate::Result<(String, Value)> {
+        match expr {
+            Expr::Function(func) => {
+                let func_name = func.name.0.iter()
+                    .map(|i| i.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                
+                match func_name.to_uppercase().as_str() {
+                    "COUNT" => {
+                        let count_value = Value::Integer(rows.len() as i64);
+                        Ok(("COUNT(*)".to_string(), count_value))
+                    }
+                    "SUM" => {
+                        // Extract the column name from SUM(column_name)
+                        if let FunctionArguments::List(ref args) = func.args {
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                                let sum = self.calculate_sum(&values)?;
+                                Ok((format!("SUM({})", self.expr_to_string(col_expr)), sum))
+                            } else {
+                                Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()))
+                        }
+                    }
+                    "AVG" => {
+                        if let FunctionArguments::List(ref args) = func.args {
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                                let avg = self.calculate_avg(&values)?;
+                                Ok((format!("AVG({})", self.expr_to_string(col_expr)), avg))
+                            } else {
+                                Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()))
+                        }
+                    }
+                    "MIN" => {
+                        if let FunctionArguments::List(ref args) = func.args {
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                                let min = self.calculate_min(&values)?;
+                                Ok((format!("MIN({})", self.expr_to_string(col_expr)), min))
+                            } else {
+                                Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()))
+                        }
+                    }
+                    "MAX" => {
+                        if let FunctionArguments::List(ref args) = func.args {
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                                let max = self.calculate_max(&values)?;
+                                Ok((format!("MAX({})", self.expr_to_string(col_expr)), max))
+                            } else {
+                                Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()))
+                        }
+                    }
+                    _ => {
+                        Err(YamlBaseError::NotImplemented(
+                            format!("Aggregate function {} not supported in JOINs yet", func_name)
+                        ))
+                    }
+                }
+            }
+            _ => {
+                Err(YamlBaseError::NotImplemented(
+                    "Non-function aggregates not supported in JOINs yet".to_string()
+                ))
+            }
+        }
+    }
+
+    // Helper method to execute GROUP BY aggregates on joined rows
+    async fn execute_joined_group_by_aggregate(
+        &self,
+        select: &Select,
+        group_by: &GroupByExpr,
+        rows: &[Vec<Value>],
+        column_mapping: &std::collections::HashMap<String, usize>,
+        _table_aliases: &std::collections::HashMap<String, String>,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing GROUP BY aggregate on joined rows");
+
+        let GroupByExpr::Expressions(group_exprs, _) = group_by else {
+            return Err(YamlBaseError::NotImplemented(
+                "Only simple GROUP BY expressions supported".to_string(),
+            ));
+        };
+
+        // Create groups based on GROUP BY expressions
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>> = std::collections::HashMap::new();
+        
+        for row in rows {
+            let mut group_key = Vec::new();
+            
+            // Evaluate each GROUP BY expression for this row
+            for group_expr in group_exprs {
+                let group_value = self.evaluate_joined_group_expr(group_expr, row, column_mapping)?;
+                group_key.push(group_value);
+            }
+            
+            groups.entry(group_key).or_insert_with(Vec::new).push(row.clone());
+        }
+
+        // Now aggregate each group
+        let mut result_columns = Vec::new();
+        let mut result_rows = Vec::new();
+
+        // First, determine columns from SELECT clause
+        for item in &select.projection {
+            match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    if let Expr::Identifier(ident) = expr {
+                        result_columns.push(ident.value.clone());
+                    } else if let Expr::CompoundIdentifier(parts) = expr {
+                        result_columns.push(parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join("."));
+                    } else if let Expr::Function(func) = expr {
+                        let func_name = func.name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                        result_columns.push(func_name);
+                    } else {
+                        result_columns.push(format!("expr_{}", result_columns.len()));
+                    }
+                }
+                SelectItem::ExprWithAlias { alias, .. } => {
+                    result_columns.push(alias.value.clone());
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Complex SELECT items in GROUP BY not supported".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Process each group
+        for (group_key, group_rows) in groups {
+            let mut result_row = Vec::new();
+            let mut key_idx = 0;
+
+            // Build result row for this group
+            for item in &select.projection {
+                match item {
+                    SelectItem::UnnamedExpr(expr) => {
+                        match expr {
+                            Expr::Identifier(_) | Expr::CompoundIdentifier(_) => {
+                                // This should be a GROUP BY column
+                                if key_idx < group_key.len() {
+                                    result_row.push(group_key[key_idx].clone());
+                                    key_idx += 1;
+                                } else {
+                                    result_row.push(Value::Null);
+                                }
+                            }
+                            Expr::Function(func) => {
+                                let func_name = func.name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                                match func_name.to_uppercase().as_str() {
+                                    "COUNT" => {
+                                        result_row.push(Value::Integer(group_rows.len() as i64));
+                                    }
+                                    "SUM" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let sum = self.calculate_sum(&values)?;
+                                                result_row.push(sum);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                        }
+                                    }
+                                    "AVG" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let avg = self.calculate_avg(&values)?;
+                                                result_row.push(avg);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                        }
+                                    }
+                                    "MIN" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let min = self.calculate_min(&values)?;
+                                                result_row.push(min);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                        }
+                                    }
+                                    "MAX" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let max = self.calculate_max(&values)?;
+                                                result_row.push(max);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(YamlBaseError::NotImplemented(
+                                            format!("Aggregate function {} not supported in GROUP BY JOINs yet", func_name)
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(YamlBaseError::NotImplemented(
+                                    "Complex expressions in GROUP BY SELECT not supported".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    SelectItem::ExprWithAlias { expr, .. } => {
+                        // Same logic as UnnamedExpr but use alias for column name
+                        match expr {
+                            Expr::Identifier(_) | Expr::CompoundIdentifier(_) => {
+                                if key_idx < group_key.len() {
+                                    result_row.push(group_key[key_idx].clone());
+                                    key_idx += 1;
+                                } else {
+                                    result_row.push(Value::Null);
+                                }
+                            }
+                            Expr::Function(func) => {
+                                let func_name = func.name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                                match func_name.to_uppercase().as_str() {
+                                    "COUNT" => {
+                                        result_row.push(Value::Integer(group_rows.len() as i64));
+                                    }
+                                    "SUM" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let sum = self.calculate_sum(&values)?;
+                                                result_row.push(sum);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                        }
+                                    }
+                                    "AVG" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let avg = self.calculate_avg(&values)?;
+                                                result_row.push(avg);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                        }
+                                    }
+                                    "MIN" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let min = self.calculate_min(&values)?;
+                                                result_row.push(min);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                        }
+                                    }
+                                    "MAX" => {
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                                let max = self.calculate_max(&values)?;
+                                                result_row.push(max);
+                                            } else {
+                                                return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                            }
+                                        } else {
+                                            return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(YamlBaseError::NotImplemented(
+                                            format!("Aggregate function {} not supported in GROUP BY JOINs yet", func_name)
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(YamlBaseError::NotImplemented(
+                                    "Complex expressions in GROUP BY SELECT not supported".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            "Complex SELECT items in GROUP BY not supported".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            result_rows.push(result_row);
+        }
+
+        let column_types = result_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
+
+        Ok(QueryResult {
+            columns: result_columns,
+            column_types,
+            rows: result_rows,
+        })
+    }
+
+    // Helper method to extract column values for GROUP BY aggregation
+    fn extract_group_column_values(
+        &self,
+        expr: &Expr,
+        rows: &[Vec<Value>],
+        column_mapping: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<Vec<Value>> {
+        let mut values = Vec::new();
+        for row in rows {
+            let value = self.evaluate_joined_group_expr(expr, row, column_mapping)?;
+            values.push(value);
+        }
+        Ok(values)
+    }
+
+    // Helper method to evaluate WHERE clause on joined rows
+    fn evaluate_where_clause_on_joined_row(
+        &self,
+        expr: &Expr,
+        row: &[Value],
+        column_mapping: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<bool> {
+        match expr {
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_joined_expression(left, row, column_mapping)?;
+                let right_val = self.evaluate_joined_expression(right, row, column_mapping)?;
+                
+                match op {
+                    BinaryOperator::Eq => Ok(left_val == right_val),
+                    BinaryOperator::NotEq => Ok(left_val != right_val),
+                    BinaryOperator::Lt => Ok(self.compare_values(&left_val, &right_val)? < 0),
+                    BinaryOperator::LtEq => Ok(self.compare_values(&left_val, &right_val)? <= 0),
+                    BinaryOperator::Gt => Ok(self.compare_values(&left_val, &right_val)? > 0),
+                    BinaryOperator::GtEq => Ok(self.compare_values(&left_val, &right_val)? >= 0),
+                    BinaryOperator::And => {
+                        let left_bool = self.convert_value_to_bool(&left_val);
+                        let right_bool = self.convert_value_to_bool(&right_val);
+                        Ok(left_bool && right_bool)
+                    }
+                    BinaryOperator::Or => {
+                        let left_bool = self.convert_value_to_bool(&left_val);
+                        let right_bool = self.convert_value_to_bool(&right_val);
+                        Ok(left_bool || right_bool)
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(
+                        format!("Binary operator {:?} not supported in WHERE clause for joined rows", op)
+                    )),
+                }
+            }
+            _ => {
+                // For other expressions, evaluate and convert to boolean
+                let value = self.evaluate_joined_expression(expr, row, column_mapping)?;
+                Ok(self.convert_value_to_bool(&value))
+            }
+        }
+    }
+
+    // Helper method to convert value to boolean for WHERE clause evaluation
+    fn convert_value_to_bool(&self, value: &Value) -> bool {
+        match value {
+            Value::Boolean(b) => *b,
+            Value::Null => false,
+            Value::Integer(i) => *i != 0,
+            Value::Float(f) => *f != 0.0,
+            Value::Double(d) => *d != 0.0,
+            Value::Text(s) => !s.is_empty(),
+            _ => true, // Non-null values are generally truthy
+        }
+    }
+
+    // Helper method to evaluate expressions in joined rows context
+    fn evaluate_joined_expression(
+        &self,
+        expr: &Expr,
+        row: &[Value],
+        column_mapping: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<Value> {
+        match expr {
+            Expr::Identifier(ident) => {
+                let col_name = &ident.value;
+                if let Some(&col_idx) = column_mapping.get(col_name) {
+                    Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found in joined result", col_name),
+                    })
+                }
+            }
+            Expr::CompoundIdentifier(parts) => {
+                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                if let Some(&col_idx) = column_mapping.get(&qualified_name) {
+                    Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found in joined result", qualified_name),
+                    })
+                }
+            }
+            Expr::Value(v) => Ok(self.sql_value_to_db_value(v)?),
+            _ => Err(YamlBaseError::NotImplemented(
+                format!("Expression {:?} not supported in WHERE clause for joined rows", expr)
+            )),
+        }
+    }
+
+    // Helper method to evaluate GROUP BY expressions on joined rows
+    fn evaluate_joined_group_expr(
+        &self,
+        expr: &Expr,
+        row: &[Value],
+        column_mapping: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<Value> {
+        match expr {
+            Expr::Identifier(ident) => {
+                let col_name = &ident.value;
+                if let Some(&col_idx) = column_mapping.get(col_name) {
+                    Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found in joined result", col_name),
+                    })
+                }
+            }
+            Expr::CompoundIdentifier(parts) => {
+                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                if let Some(&col_idx) = column_mapping.get(&qualified_name) {
+                    Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found in joined result", qualified_name),
+                    })
+                }
+            }
+            _ => {
+                Err(YamlBaseError::NotImplemented(
+                    "Complex GROUP BY expressions not supported yet".to_string(),
+                ))
+            }
+        }
+    }
+    
+    // Helper method to extract column values for aggregate calculations
+    fn extract_column_values_for_aggregate(
+        &self,
+        col_expr: &Expr,
+        rows: &[Vec<Value>],
+        column_mapping: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<Vec<Value>> {
+        let mut values = Vec::new();
+        
+        for row in rows {
+            let value = match col_expr {
+                Expr::Identifier(ident) => {
+                    let col_name = ident.value.clone();
+                    if let Some(&col_idx) = column_mapping.get(&col_name) {
+                        row.get(col_idx).cloned().unwrap_or(Value::Null)
+                    } else {
+                        return Err(YamlBaseError::Database { message: format!("Column '{}' not found in joined result", col_name) });
+                    }
+                }
+                Expr::CompoundIdentifier(parts) => {
+                    let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                    if let Some(&col_idx) = column_mapping.get(&qualified_name) {
+                        row.get(col_idx).cloned().unwrap_or(Value::Null)
+                    } else {
+                        return Err(YamlBaseError::Database { message: format!("Column '{}' not found in joined result", qualified_name) });
+                    }
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented("Complex expressions in aggregates not supported yet".to_string()));
+                }
+            };
+            values.push(value);
+        }
+        
+        Ok(values)
+    }
+    
+    
+    // Calculate SUM of numeric values
+    fn calculate_sum(&self, values: &[Value]) -> crate::Result<Value> {
+        let mut sum_int: i64 = 0;
+        let mut sum_float: f64 = 0.0;
+        let mut has_float = false;
+        let mut count = 0;
+        
+        for value in values {
+            match value {
+                Value::Integer(i) => {
+                    if has_float {
+                        sum_float += *i as f64;
+                    } else {
+                        sum_int += i;
+                    }
+                    count += 1;
+                }
+                Value::Float(f) => {
+                    if !has_float {
+                        sum_float = sum_int as f64 + (*f as f64);
+                        has_float = true;
+                    } else {
+                        sum_float += *f as f64;
+                    }
+                    count += 1;
+                }
+                Value::Double(d) => {
+                    if !has_float {
+                        sum_float = sum_int as f64 + d;
+                        has_float = true;
+                    } else {
+                        sum_float += d;
+                    }
+                    count += 1;
+                }
+                Value::Null => {} // Skip NULL values
+                _ => {
+                    return Err(YamlBaseError::Database { message: "SUM can only be applied to numeric columns".to_string() });
+                }
+            }
+        }
+        
+        if count == 0 {
+            Ok(Value::Null)
+        } else if has_float {
+            Ok(Value::Double(sum_float))
+        } else {
+            Ok(Value::Integer(sum_int))
+        }
+    }
+    
+    // Calculate AVG of numeric values
+    fn calculate_avg(&self, values: &[Value]) -> crate::Result<Value> {
+        let mut sum: f64 = 0.0;
+        let mut count = 0;
+        
+        for value in values {
+            match value {
+                Value::Integer(i) => {
+                    sum += *i as f64;
+                    count += 1;
+                }
+                Value::Float(f) => {
+                    sum += *f as f64;
+                    count += 1;
+                }
+                Value::Double(d) => {
+                    sum += d;
+                    count += 1;
+                }
+                Value::Null => {} // Skip NULL values
+                _ => {
+                    return Err(YamlBaseError::Database { message: "AVG can only be applied to numeric columns".to_string() });
+                }
+            }
+        }
+        
+        if count == 0 {
+            Ok(Value::Null)
+        } else {
+            Ok(Value::Double(sum / count as f64))
+        }
+    }
+    
+    // Calculate MIN of comparable values
+    fn calculate_min(&self, values: &[Value]) -> crate::Result<Value> {
+        let mut min_value: Option<Value> = None;
+        
+        for value in values {
+            if let Value::Null = value {
+                continue; // Skip NULL values
+            }
+            
+            match &min_value {
+                None => min_value = Some(value.clone()),
+                Some(current_min) => {
+                    if self.compare_values(value, current_min)? < 0 {
+                        min_value = Some(value.clone());
+                    }
+                }
+            }
+        }
+        
+        Ok(min_value.unwrap_or(Value::Null))
+    }
+    
+    // Calculate MAX of comparable values
+    fn calculate_max(&self, values: &[Value]) -> crate::Result<Value> {
+        let mut max_value: Option<Value> = None;
+        
+        for value in values {
+            if let Value::Null = value {
+                continue; // Skip NULL values
+            }
+            
+            match &max_value {
+                None => max_value = Some(value.clone()),
+                Some(current_max) => {
+                    if self.compare_values(value, current_max)? > 0 {
+                        max_value = Some(value.clone());
+                    }
+                }
+            }
+        }
+        
+        Ok(max_value.unwrap_or(Value::Null))
+    }
+
+    // Helper method to extract column values for CTE aggregate calculations
+    fn extract_cte_column_values(
+        &self,
+        col_expr: &Expr,
+        rows: &[Vec<Value>],
+        column_map: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<Vec<Value>> {
+        let mut values = Vec::new();
+        
+        for row in rows {
+            let value = match col_expr {
+                Expr::Identifier(ident) => {
+                    let col_name = ident.value.clone();
+                    if let Some(&col_idx) = column_map.get(&col_name) {
+                        row.get(col_idx).cloned().unwrap_or(Value::Null)
+                    } else {
+                        return Err(YamlBaseError::Database { 
+                            message: format!("Column '{}' not found in CTE result", col_name) 
+                        });
+                    }
+                }
+                Expr::CompoundIdentifier(parts) => {
+                    let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                    if let Some(&col_idx) = column_map.get(&qualified_name) {
+                        row.get(col_idx).cloned().unwrap_or(Value::Null)
+                    } else {
+                        return Err(YamlBaseError::Database { 
+                            message: format!("Column '{}' not found in CTE result", qualified_name) 
+                        });
+                    }
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Complex expressions in CTE aggregates not yet supported".to_string()
+                    ));
+                }
+            };
+            values.push(value);
+        }
+        
+        Ok(values)
+    }
+    
+    // Helper method to compare two values for MIN/MAX calculations
+    fn compare_values(&self, a: &Value, b: &Value) -> crate::Result<i32> {
+        match (a, b) {
+            (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b) as i32),
+            (Value::Integer(a), Value::Float(b)) => Ok((*a as f32).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Integer(a), Value::Double(b)) => Ok((*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Float(a), Value::Integer(b)) => Ok(a.partial_cmp(&(*b as f32)).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Float(a), Value::Float(b)) => Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Float(a), Value::Double(b)) => Ok((*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Double(a), Value::Integer(b)) => Ok(a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Double(a), Value::Float(b)) => Ok(a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Double(a), Value::Double(b)) => Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b) as i32),
+            (Value::Date(a), Value::Date(b)) => Ok(a.cmp(b) as i32),
+            _ => Err(YamlBaseError::Database { message: "Cannot compare incompatible types".to_string() }),
+        }
     }
 
     // CTE (Common Table Expression) support
@@ -5974,9 +6782,13 @@ impl QueryExecutor {
                     // Pass the current CTE results so this CTE can reference previous ones
                     self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results).await?
                 }
+                SetExpr::SetOperation { op, set_quantifier, left, right } => {
+                    // Handle UNION, UNION ALL, INTERSECT, EXCEPT operations within CTEs
+                    self.execute_cte_set_operation(db, op, set_quantifier, left, right, &cte_results).await?
+                }
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
-                        "Only SELECT queries are supported in CTEs".to_string(),
+                        "This type of query is not yet supported in CTEs".to_string(),
                     ));
                 }
             };
@@ -6068,16 +6880,70 @@ impl QueryExecutor {
                 }
 
                 // Handle SELECT items - support SELECT *, specific columns, and expressions
-                let (selected_columns, column_indices) = self.process_cte_projection(&select.projection, &result_columns)?;
+                let (selected_columns, projection_items) = self.process_cte_projection(&select.projection, &result_columns)?;
                 
-                // Project the specified columns from each row
-                let projected_rows: Vec<Vec<Value>> = result_rows.into_iter()
-                    .map(|row| {
-                        column_indices.iter()
-                            .map(|&idx| row.get(idx).cloned().unwrap_or(Value::Null))
-                            .collect()
-                    })
-                    .collect();
+                // Check if we have aggregate functions like COUNT(*) without GROUP BY
+                let has_aggregates = projection_items.iter().any(|item| {
+                    if let CteProjectionItem::Expression(Expr::Function(func)) = item {
+                        if let Some(first_part) = func.name.0.first() {
+                            let func_name = first_part.value.to_uppercase();
+                            matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                });
+                
+                let projected_rows: Vec<Vec<Value>> = if has_aggregates {
+                    // For aggregate functions without GROUP BY, return one row with aggregated values
+                    let aggregated_row: Vec<Value> = projection_items.iter()
+                        .map(|item| match item {
+                            CteProjectionItem::Column(_) => {
+                                // Can't mix aggregates with non-aggregate columns without GROUP BY
+                                Value::Null
+                            }
+                            CteProjectionItem::Expression(expr) => {
+                                match expr {
+                                    Expr::Function(func) => {
+                                        let func_name = func.name.0.iter()
+                                            .map(|i| i.value.clone())
+                                            .collect::<Vec<_>>()
+                                            .join(".");
+                                        match func_name.to_uppercase().as_str() {
+                                            "COUNT" => {
+                                                // COUNT(*) or COUNT(column) - count all rows
+                                                Value::Integer(result_rows.len() as i64)
+                                            }
+                                            _ => {
+                                                // For other functions, return null for now
+                                                Value::Null
+                                            }
+                                        }
+                                    }
+                                    _ => Value::Null, // Other expressions not yet supported
+                                }
+                            }
+                        })
+                        .collect();
+                    vec![aggregated_row]
+                } else {
+                    // Non-aggregate projection - process each row
+                    result_rows.into_iter()
+                        .map(|row| {
+                            projection_items.iter()
+                                .map(|item| match item {
+                                    CteProjectionItem::Column(idx) => row.get(*idx).cloned().unwrap_or(Value::Null),
+                                    CteProjectionItem::Expression(_expr) => {
+                                        // Non-aggregate expressions not yet fully supported
+                                        Value::Null
+                                    }
+                                })
+                                .collect()
+                        })
+                        .collect()
+                };
 
                 // For CTE results, we need to infer column types
                 let column_types = selected_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
@@ -6126,13 +6992,28 @@ impl QueryExecutor {
         &self,
         context: &mut CteExecutionContext<'_>,
         select: &Select,
-        query: &Query,
+        _query: &Query,
     ) -> crate::Result<QueryResult> {
         debug!("Executing CTE aggregate query with GROUP BY");
         
-        // For now, delegate to normal aggregate processing but with CTE context
-        // This will be enhanced to handle CTE tables in the FROM clause
-        self.execute_cte_complex_select(context, select, query).await
+        // Handle both single table and JOIN scenarios with aggregates
+        let has_joins = select.from.iter().any(|table_with_joins| !table_with_joins.joins.is_empty());
+        
+        if has_joins {
+            // Execute JOINs first, then apply GROUP BY aggregation
+            let joined_data = self.execute_cte_join_without_aggregation(context, select).await?;
+            self.apply_group_by_aggregation(&joined_data, select).await
+        } else {
+            // Single table with GROUP BY
+            if select.from.len() == 1 {
+                let table_data = self.get_table_data_from_context(context, &select.from[0].relation).await?;
+                self.apply_group_by_aggregation(&table_data, select).await
+            } else {
+                Err(YamlBaseError::NotImplemented(
+                    "Multiple tables without explicit JOINs not supported in CTE aggregates".to_string(),
+                ))
+            }
+        }
     }
 
     // Execute CTE queries with JOINs
@@ -6439,9 +7320,9 @@ impl QueryExecutor {
         &self,
         projection: &[SelectItem],
         available_columns: &[String],
-    ) -> crate::Result<(Vec<String>, Vec<usize>)> {
+    ) -> crate::Result<(Vec<String>, Vec<CteProjectionItem>)> {
         let mut selected_columns = Vec::new();
-        let mut column_indices = Vec::new();
+        let mut projection_items = Vec::new();
 
         for item in projection {
             match item {
@@ -6455,7 +7336,7 @@ impl QueryExecutor {
                             col.clone()
                         };
                         selected_columns.push(column_name);
-                        column_indices.push(idx);
+                        projection_items.push(CteProjectionItem::Column(idx));
                     }
                 }
                 SelectItem::UnnamedExpr(expr) => {
@@ -6466,14 +7347,14 @@ impl QueryExecutor {
                         // Try to find exact match first
                         if let Some(idx) = available_columns.iter().position(|c| c == &column_name) {
                             selected_columns.push(column_name);
-                            column_indices.push(idx);
+                            projection_items.push(CteProjectionItem::Column(idx));
                         } else {
                             // Try to find column by unqualified name (ignoring table prefix)
                             if let Some(idx) = available_columns.iter().position(|c| {
                                 c.split('.').last().unwrap_or(c) == &column_name
                             }) {
                                 selected_columns.push(column_name);
-                                column_indices.push(idx);
+                                projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 return Err(YamlBaseError::Database {
                                     message: format!("Column '{}' not found in CTE result", column_name),
@@ -6488,7 +7369,7 @@ impl QueryExecutor {
                             
                             if let Some(idx) = available_columns.iter().position(|c| c == &qualified_name) {
                                 selected_columns.push(column_name); // Use unqualified name in result
-                                column_indices.push(idx);
+                                projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 return Err(YamlBaseError::Database {
                                     message: format!("Column '{}' not found in CTE result", qualified_name),
@@ -6500,9 +7381,10 @@ impl QueryExecutor {
                             ));
                         }
                     } else {
-                        return Err(YamlBaseError::NotImplemented(
-                            "Complex expressions in CTE projection not yet supported".to_string(),
-                        ));
+                        // Handle complex expressions like COUNT(*), functions, arithmetic, etc.
+                        let expr_name = self.get_expression_name(expr);
+                        selected_columns.push(expr_name);
+                        projection_items.push(CteProjectionItem::Expression(expr.clone()));
                     }
                 }
                 SelectItem::ExprWithAlias { expr, alias } => {
@@ -6513,12 +7395,12 @@ impl QueryExecutor {
                         // Try exact match first, then partial match
                         if let Some(idx) = available_columns.iter().position(|c| c == &column_name) {
                             selected_columns.push(alias.value.clone());
-                            column_indices.push(idx);
+                            projection_items.push(CteProjectionItem::Column(idx));
                         } else if let Some(idx) = available_columns.iter().position(|c| {
                             c.split('.').last().unwrap_or(c) == &column_name
                         }) {
                             selected_columns.push(alias.value.clone());
-                            column_indices.push(idx);
+                            projection_items.push(CteProjectionItem::Column(idx));
                         } else {
                             return Err(YamlBaseError::Database {
                                 message: format!("Column '{}' not found in CTE result", column_name),
@@ -6530,7 +7412,7 @@ impl QueryExecutor {
                             
                             if let Some(idx) = available_columns.iter().position(|c| c == &qualified_name) {
                                 selected_columns.push(alias.value.clone());
-                                column_indices.push(idx);
+                                projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 return Err(YamlBaseError::Database {
                                     message: format!("Column '{}' not found in CTE result", qualified_name),
@@ -6542,9 +7424,9 @@ impl QueryExecutor {
                             ));
                         }
                     } else {
-                        return Err(YamlBaseError::NotImplemented(
-                            "Complex expressions with aliases in CTE projection not yet supported".to_string(),
-                        ));
+                        // Handle complex expressions with aliases - NOW SUPPORTED!
+                        selected_columns.push(alias.value.clone());
+                        projection_items.push(CteProjectionItem::Expression(expr.clone()));
                     }
                 }
                 _ => {
@@ -6555,7 +7437,505 @@ impl QueryExecutor {
             }
         }
 
-        Ok((selected_columns, column_indices))
+        Ok((selected_columns, projection_items))
+    }
+
+    // Generate appropriate names for complex expressions
+    fn get_expression_name(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::Function(Function { name, .. }) => {
+                let function_name = name.0.iter()
+                    .map(|i| i.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                function_name
+            }
+            Expr::BinaryOp { left, op, right } => {
+                format!("{} {} {}", 
+                    self.get_expression_name(left), 
+                    self.binary_op_to_string(op),
+                    self.get_expression_name(right))
+            }
+            Expr::Identifier(ident) => ident.value.clone(),
+            Expr::CompoundIdentifier(parts) => {
+                parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".")
+            }
+            Expr::Value(sqlparser::ast::Value::Number(n, _)) => n.clone(),
+            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => format!("'{}'", s),
+            _ => "expr".to_string(), // Generic fallback
+        }
+    }
+
+    // Convert binary operator to string representation
+    fn binary_op_to_string(&self, op: &BinaryOperator) -> &'static str {
+        match op {
+            BinaryOperator::Plus => "+",
+            BinaryOperator::Minus => "-",
+            BinaryOperator::Multiply => "*",
+            BinaryOperator::Divide => "/",
+            BinaryOperator::Eq => "=",
+            BinaryOperator::NotEq => "!=",
+            BinaryOperator::Lt => "<",
+            BinaryOperator::LtEq => "<=",
+            BinaryOperator::Gt => ">",
+            BinaryOperator::GtEq => ">=",
+            BinaryOperator::And => "AND",
+            BinaryOperator::Or => "OR",
+            _ => "OP",
+        }
+    }
+
+    // Execute set operations (UNION, UNION ALL, etc.) within CTE definitions
+    async fn execute_cte_set_operation(
+        &self,
+        db: &Database,
+        op: &SetOperator,
+        set_quantifier: &SetQuantifier,
+        left: &SetExpr,
+        right: &SetExpr,
+        cte_results: &std::collections::HashMap<String, QueryResult>,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing CTE set operation: {:?}", op);
+
+        // Execute left side of the operation
+        let left_result = match left {
+            SetExpr::Select(select) => {
+                // Create a temporary query wrapper for left side
+                let left_query = Query {
+                    with: None,
+                    body: Box::new(left.clone()),
+                    order_by: None,
+                    limit: None,
+                    offset: None,
+                    fetch: None,
+                    locks: vec![],
+                    limit_by: vec![],
+                    for_clause: None,
+                    format_clause: None,
+                    settings: None,
+                };
+                self.execute_select_with_cte_context(db, select, &left_query, cte_results).await?
+            }
+            _ => {
+                return Err(YamlBaseError::NotImplemented(
+                    "Complex set operations not yet supported in CTEs".to_string(),
+                ));
+            }
+        };
+
+        // Execute right side of the operation
+        let right_result = match right {
+            SetExpr::Select(select) => {
+                // Create a temporary query wrapper for right side
+                let right_query = Query {
+                    with: None,
+                    body: Box::new(right.clone()),
+                    order_by: None,
+                    limit: None,
+                    offset: None,
+                    fetch: None,
+                    locks: vec![],
+                    limit_by: vec![],
+                    for_clause: None,
+                    format_clause: None,
+                    settings: None,
+                };
+                self.execute_select_with_cte_context(db, select, &right_query, cte_results).await?
+            }
+            _ => {
+                return Err(YamlBaseError::NotImplemented(
+                    "Complex set operations not yet supported in CTEs".to_string(),
+                ));
+            }
+        };
+
+        // Validate that both sides have compatible column structures
+        if left_result.columns.len() != right_result.columns.len() {
+            return Err(YamlBaseError::Database {
+                message: format!(
+                    "UNION queries must have the same number of columns: left has {}, right has {}",
+                    left_result.columns.len(),
+                    right_result.columns.len()
+                ),
+            });
+        }
+
+        // Apply the set operation
+        match op {
+            SetOperator::Union => {
+                debug!("Executing UNION operation");
+                let mut combined_rows = left_result.rows;
+                
+                // For UNION (without ALL), we need to deduplicate
+                let is_all = matches!(set_quantifier, SetQuantifier::All);
+                
+                if is_all {
+                    // UNION ALL - just concatenate all rows
+                    combined_rows.extend(right_result.rows);
+                } else {
+                    // UNION - deduplicate rows
+                    let mut unique_rows: std::collections::HashSet<Vec<Value>> = 
+                        combined_rows.into_iter().collect();
+                    
+                    for row in right_result.rows {
+                        unique_rows.insert(row);
+                    }
+                    
+                    combined_rows = unique_rows.into_iter().collect();
+                }
+
+                Ok(QueryResult {
+                    columns: left_result.columns,
+                    column_types: left_result.column_types,
+                    rows: combined_rows,
+                })
+            }
+            SetOperator::Intersect => {
+                return Err(YamlBaseError::NotImplemented(
+                    "INTERSECT operation not yet supported in CTEs".to_string(),
+                ));
+            }
+            SetOperator::Except => {
+                return Err(YamlBaseError::NotImplemented(
+                    "EXCEPT operation not yet supported in CTEs".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Execute JOIN operations without aggregation - returns joined data for later GROUP BY processing
+    async fn execute_cte_join_without_aggregation(
+        &self,
+        context: &mut CteExecutionContext<'_>,
+        select: &Select,
+    ) -> crate::Result<QueryResult> {
+        debug!("Executing CTE JOIN without aggregation");
+        
+        // Get the base table (first FROM item)
+        if select.from.is_empty() {
+            return Err(YamlBaseError::Database {
+                message: "No tables specified in FROM clause".to_string(),
+            });
+        }
+
+        let table_with_joins = &select.from[0];
+        let result_data = self.get_table_data_from_context(context, &table_with_joins.relation).await?;
+        let mut result_rows = result_data.rows;
+        let mut result_columns = result_data.columns;
+
+        // Process each JOIN
+        for join in &table_with_joins.joins {
+            let join_data = self.get_table_data_from_context(context, &join.relation).await?;
+            
+            // Extract JOIN condition
+            let join_condition = match &join.join_operator {
+                JoinOperator::Inner(constraint) | 
+                JoinOperator::LeftOuter(constraint) | 
+                JoinOperator::RightOuter(constraint) | 
+                JoinOperator::FullOuter(constraint) => {
+                    match constraint {
+                        JoinConstraint::On(expr) => expr,
+                        _ => {
+                            return Err(YamlBaseError::NotImplemented(
+                                "Only ON clause JOINs are supported in CTE aggregates".to_string(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "This JOIN type not supported in CTE aggregates".to_string(),
+                    ));
+                }
+            };
+
+            // Apply the JOIN
+            let joined_result = self.perform_cte_join(
+                &result_rows,
+                &result_columns,
+                &join_data.rows,
+                &join_data.columns,
+                &join.join_operator,
+                Some(join_condition),
+            )?;
+
+            result_rows = joined_result.rows;
+            result_columns = joined_result.columns;
+        }
+
+        // Apply WHERE clause filtering if present
+        if let Some(where_expr) = &select.selection {
+            result_rows = self.filter_rows_with_columns(
+                &result_rows,
+                &result_columns,
+                where_expr,
+            )?;
+        }
+
+        Ok(QueryResult {
+            columns: result_columns.clone(),
+            column_types: vec![crate::yaml::schema::SqlType::Text; result_columns.len()],
+            rows: result_rows,
+        })
+    }
+
+    // Apply GROUP BY aggregation to data that may have come from JOINs
+    async fn apply_group_by_aggregation(
+        &self,
+        data: &QueryResult,
+        select: &Select,
+    ) -> crate::Result<QueryResult> {
+        debug!("Applying GROUP BY aggregation");
+        
+        // Extract GROUP BY expressions
+        let group_by_exprs = match &select.group_by {
+            GroupByExpr::Expressions(exprs, _) if !exprs.is_empty() => exprs,
+            _ => {
+                return Err(YamlBaseError::NotImplemented(
+                    "GROUP BY expressions are required for aggregate queries".to_string(),
+                ));
+            }
+        };
+
+        // Build groups based on GROUP BY expressions
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>> = std::collections::HashMap::new();
+        
+        for row in &data.rows {
+            // Evaluate GROUP BY expressions for this row
+            let group_key: Vec<Value> = group_by_exprs
+                .iter()
+                .map(|expr| self.evaluate_expression_with_columns(expr, row, &data.columns))
+                .collect::<Result<Vec<_>, _>>()?;
+            
+            groups.entry(group_key).or_insert_with(Vec::new).push(row.clone());
+        }
+
+        // Process SELECT items to build result
+        let mut result_columns = Vec::new();
+        let mut result_rows = Vec::new();
+
+        // Build column names from SELECT items
+        for item in &select.projection {
+            match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    result_columns.push(self.get_expression_name(expr));
+                }
+                SelectItem::ExprWithAlias { alias, .. } => {
+                    result_columns.push(alias.value.clone());
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "Only expressions and aliases supported in aggregate SELECT".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Process each group
+        for (_group_key, group_rows) in groups {
+            let mut result_row = Vec::new();
+            
+            for item in &select.projection {
+                let value = match item {
+                    SelectItem::UnnamedExpr(expr) => {
+                        self.evaluate_aggregate_expression(expr, &group_rows, &data.columns)?
+                    }
+                    SelectItem::ExprWithAlias { expr, .. } => {
+                        self.evaluate_aggregate_expression(expr, &group_rows, &data.columns)?
+                    }
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            "Unsupported SELECT item in aggregate query".to_string(),
+                        ));
+                    }
+                };
+                result_row.push(value);
+            }
+            
+            result_rows.push(result_row);
+        }
+
+        Ok(QueryResult {
+            columns: result_columns.clone(),
+            column_types: vec![crate::yaml::schema::SqlType::Text; result_columns.len()],
+            rows: result_rows,
+        })
+    }
+
+    // Evaluate aggregate expressions like COUNT(*), COUNT(column), SUM(column), etc.
+    fn evaluate_aggregate_expression(
+        &self,
+        expr: &Expr,
+        group_rows: &[Vec<Value>],
+        columns: &[String],
+    ) -> crate::Result<Value> {
+        match expr {
+            Expr::Function(Function { name, args, .. }) => {
+                let function_name = name.0.iter()
+                    .map(|i| i.value.to_uppercase())
+                    .collect::<Vec<_>>()
+                    .join(".");
+
+                match function_name.as_str() {
+                    "COUNT" => {
+                        if let FunctionArguments::List(arg_list) = args {
+                            if arg_list.args.len() == 1 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Wildcard) = &arg_list.args[0] {
+                                    // COUNT(*)
+                                    Ok(Value::Integer(group_rows.len() as i64))
+                                } else if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) = &arg_list.args[0] {
+                                    // COUNT(column) - count non-null values
+                                    let mut count = 0;
+                                    for row in group_rows {
+                                        let value = self.evaluate_expression_with_columns(arg_expr, row, columns)?;
+                                        if !matches!(value, Value::Null) {
+                                            count += 1;
+                                        }
+                                    }
+                                    Ok(Value::Integer(count))
+                                } else {
+                                    Err(YamlBaseError::NotImplemented(
+                                        "Unsupported COUNT argument".to_string(),
+                                    ))
+                                }
+                            } else {
+                                Err(YamlBaseError::NotImplemented(
+                                    "COUNT requires exactly one argument".to_string(),
+                                ))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "COUNT requires function arguments".to_string(),
+                            ))
+                        }
+                    }
+                    "SUM" => {
+                        if let FunctionArguments::List(arg_list) = args {
+                            if arg_list.args.len() == 1 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) = &arg_list.args[0] {
+                                    let mut sum = 0i64;
+                                    for row in group_rows {
+                                        let value = self.evaluate_expression_with_columns(arg_expr, row, columns)?;
+                                        match value {
+                                            Value::Integer(i) => sum += i,
+                                            Value::Null => {}, // Ignore nulls in SUM
+                                            _ => {
+                                                return Err(YamlBaseError::Database {
+                                                    message: "SUM can only be applied to numeric values".to_string(),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Ok(Value::Integer(sum))
+                                } else {
+                                    Err(YamlBaseError::NotImplemented(
+                                        "SUM requires a column or expression argument".to_string(),
+                                    ))
+                                }
+                            } else {
+                                Err(YamlBaseError::NotImplemented(
+                                    "SUM requires exactly one argument".to_string(),
+                                ))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "SUM requires function arguments".to_string(),
+                            ))
+                        }
+                    }
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            format!("Aggregate function {} not yet implemented", function_name),
+                        ));
+                    }
+                }
+            }
+            Expr::Identifier(ident) => {
+                // GROUP BY column - return first value from group (they should all be the same)
+                let column_name = &ident.value;
+                if let Some(col_idx) = columns.iter().position(|c| c == column_name || c.ends_with(&format!(".{}", column_name))) {
+                    if !group_rows.is_empty() {
+                        Ok(group_rows[0][col_idx].clone())
+                    } else {
+                        Ok(Value::Null)
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found in GROUP BY context", column_name),
+                    })
+                }
+            }
+            Expr::CompoundIdentifier(parts) => {
+                // Qualified column name like "p.project_name"
+                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                if let Some(col_idx) = columns.iter().position(|c| c == &qualified_name) {
+                    if !group_rows.is_empty() {
+                        Ok(group_rows[0][col_idx].clone())
+                    } else {
+                        Ok(Value::Null)
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found in GROUP BY context", qualified_name),
+                    })
+                }
+            }
+            _ => {
+                Err(YamlBaseError::NotImplemented(
+                    format!("Expression type not supported in aggregate context: {:?}", expr),
+                ))
+            }
+        }
+    }
+
+    // Evaluate expressions using column names (for CTE contexts where we have column names)
+    fn evaluate_expression_with_columns(
+        &self,
+        expr: &Expr,
+        row: &[Value],
+        columns: &[String],
+    ) -> crate::Result<Value> {
+        match expr {
+            Expr::Identifier(ident) => {
+                let column_name = &ident.value;
+                if let Some(col_idx) = columns.iter().position(|c| c == column_name || c.ends_with(&format!(".{}", column_name))) {
+                    Ok(row[col_idx].clone())
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found", column_name),
+                    })
+                }
+            }
+            Expr::CompoundIdentifier(parts) => {
+                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                if let Some(col_idx) = columns.iter().position(|c| c == &qualified_name) {
+                    Ok(row[col_idx].clone())
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Column '{}' not found", qualified_name),
+                    })
+                }
+            }
+            Expr::Value(sqlparser::ast::Value::Number(n, _)) => {
+                if let Ok(i) = n.parse::<i64>() {
+                    Ok(Value::Integer(i))
+                } else if let Ok(f) = n.parse::<f64>() {
+                    Ok(Value::Double(f))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Unable to parse number: {}", n),
+                    })
+                }
+            }
+            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => {
+                Ok(Value::Text(s.clone()))
+            }
+            _ => {
+                Err(YamlBaseError::NotImplemented(
+                    format!("Expression evaluation not implemented: {:?}", expr),
+                ))
+            }
+        }
     }
 
     // Get table data from either database tables or CTE results
@@ -6642,6 +8022,9 @@ impl QueryExecutor {
             JoinOperator::FullOuter(_) => {
                 self.perform_cte_full_join(left_rows, left_columns, right_rows, right_columns, join_condition)
             }
+            JoinOperator::CrossJoin => {
+                self.perform_cte_cross_join(left_rows, left_columns, right_rows, right_columns)
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "This JOIN type not yet supported in CTE context".to_string(),
             )),
@@ -6673,15 +8056,128 @@ impl QueryExecutor {
         }
 
         // Apply projection (SELECT clause)
-        let (selected_columns, column_indices) = self.process_cte_projection(&select.projection, &columns)?;
+        let (selected_columns, projection_items) = self.process_cte_projection(&select.projection, &columns)?;
         
-        let projected_rows: Vec<Vec<Value>> = rows.into_iter()
-            .map(|row| {
-                column_indices.iter()
-                    .map(|&idx| row.get(idx).cloned().unwrap_or(Value::Null))
-                    .collect()
-            })
-            .collect();
+        // Check if we have aggregate functions like COUNT(*) without GROUP BY
+        let has_aggregates = projection_items.iter().any(|item| {
+            if let CteProjectionItem::Expression(Expr::Function(func)) = item {
+                if let Some(first_part) = func.name.0.first() {
+                    let func_name = first_part.value.to_uppercase();
+                    matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        });
+        
+        let projected_rows: Vec<Vec<Value>> = if has_aggregates {
+            // Create column mapping for aggregate function evaluation
+            let column_map: std::collections::HashMap<String, usize> = columns.iter()
+                .enumerate()
+                .map(|(i, col)| (col.clone(), i))
+                .collect();
+                
+            // For aggregate functions without GROUP BY, return one row with aggregated values
+            let aggregated_row: Vec<Value> = projection_items.iter()
+                .map(|item| match item {
+                    CteProjectionItem::Column(_) => {
+                        // Can't mix aggregates with non-aggregate columns without GROUP BY
+                        Value::Null
+                    }
+                    CteProjectionItem::Expression(expr) => {
+                        match expr {
+                            Expr::Function(func) => {
+                                let func_name = func.name.0.iter()
+                                    .map(|i| i.value.clone())
+                                    .collect::<Vec<_>>()
+                                    .join(".");
+                                match func_name.to_uppercase().as_str() {
+                                    "COUNT" => {
+                                        // COUNT(*) or COUNT(column) - count all rows
+                                        Value::Integer(rows.len() as i64)
+                                    }
+                                    "SUM" => {
+                                        // SUM(column_name)
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                                self.calculate_sum(&values).unwrap_or(Value::Null)
+                                            } else {
+                                                Value::Null
+                                            }
+                                        } else {
+                                            Value::Null
+                                        }
+                                    }
+                                    "AVG" => {
+                                        // AVG(column_name)
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                                self.calculate_avg(&values).unwrap_or(Value::Null)
+                                            } else {
+                                                Value::Null
+                                            }
+                                        } else {
+                                            Value::Null
+                                        }
+                                    }
+                                    "MIN" => {
+                                        // MIN(column_name)
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                                self.calculate_min(&values).unwrap_or(Value::Null)
+                                            } else {
+                                                Value::Null
+                                            }
+                                        } else {
+                                            Value::Null
+                                        }
+                                    }
+                                    "MAX" => {
+                                        // MAX(column_name)
+                                        if let FunctionArguments::List(ref args) = func.args {
+                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
+                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                                self.calculate_max(&values).unwrap_or(Value::Null)
+                                            } else {
+                                                Value::Null
+                                            }
+                                        } else {
+                                            Value::Null
+                                        }
+                                    }
+                                    _ => {
+                                        // For other functions, return null
+                                        Value::Null
+                                    }
+                                }
+                            }
+                            _ => Value::Null, // Other expressions not yet supported
+                        }
+                    }
+                })
+                .collect();
+            vec![aggregated_row]
+        } else {
+            // Non-aggregate projection - process each row
+            rows.into_iter()
+                .map(|row| {
+                    projection_items.iter()
+                        .map(|item| match item {
+                            CteProjectionItem::Column(idx) => row.get(*idx).cloned().unwrap_or(Value::Null),
+                            CteProjectionItem::Expression(_expr) => {
+                                // Non-aggregate expressions not yet fully supported
+                                Value::Null
+                            }
+                        })
+                        .collect()
+                })
+                .collect()
+        };
 
         let column_types = selected_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
 
@@ -6962,6 +8458,39 @@ impl QueryExecutor {
             columns: left_result.columns,
             column_types: left_result.column_types,
             rows: combined_rows,
+        })
+    }
+
+    fn perform_cte_cross_join(
+        &self,
+        left_rows: &[Vec<Value>],
+        left_columns: &[String],
+        right_rows: &[Vec<Value>],
+        right_columns: &[String],
+    ) -> crate::Result<QueryResult> {
+        // CROSS JOIN produces Cartesian product of all rows
+        let mut result_rows = Vec::new();
+        
+        // Generate all combinations of left and right rows
+        for left_row in left_rows {
+            for right_row in right_rows {
+                let mut combined_row = left_row.clone();
+                combined_row.extend(right_row.clone());
+                result_rows.push(combined_row);
+            }
+        }
+
+        // Combine column names
+        let mut combined_columns = left_columns.to_vec();
+        combined_columns.extend(right_columns.iter().cloned());
+
+        // Create column types (all as Text for simplicity)
+        let column_types = vec![crate::yaml::schema::SqlType::Text; combined_columns.len()];
+
+        Ok(QueryResult {
+            columns: combined_columns,
+            column_types,
+            rows: result_rows,
         })
     }
 
