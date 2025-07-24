@@ -1,0 +1,7 @@
+tables:
+  users:
+    columns:
+      - name: id
+        type: integer
+    data:
+      - id: 1

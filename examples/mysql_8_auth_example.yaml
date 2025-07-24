@@ -1,0 +1,78 @@
+# Example YamlBase configuration for MySQL 8.0+ clients
+# This demonstrates the new caching_sha2_password authentication support
+
+# Optional: Define authentication (if not provided, uses default root/password)
+auth:
+  username: "myapp_user"
+  password: "secure_password_123"
+
+databases:
+  myapp_db:
+    # Users table with various data types
+    users:
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: username
+          type: varchar(50)
+          unique: true
+        - name: email
+          type: varchar(100)
+        - name: created_at
+          type: timestamp
+        - name: is_active
+          type: boolean
+        - name: profile
+          type: json
+          nullable: true
+      data:
+        - id: 1
+          username: "alice"
+          email: "alice@example.com"
+          created_at: "2024-01-15 10:30:00"
+          is_active: true
+          profile: '{"interests": ["coding", "music"], "age": 28}'
+        - id: 2
+          username: "bob"
+          email: "bob@example.com"
+          created_at: "2024-01-16 14:45:00"
+          is_active: true
+          profile: null
+        - id: 3
+          username: "charlie"
+          email: "charlie@example.com"
+          created_at: "2024-01-17 09:15:00"
+          is_active: false
+          profile: '{"interests": ["sports"], "age": 32}'
+
+    # Products table demonstrating decimal types
+    products:
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: name
+          type: varchar(100)
+        - name: price
+          type: decimal(10,2)
+        - name: stock_quantity
+          type: integer
+        - name: category
+          type: varchar(50)
+      data:
+        - id: 1
+          name: "Laptop"
+          price: 999.99
+          stock_quantity: 15
+          category: "Electronics"
+        - id: 2
+          name: "Mouse"
+          price: 29.99
+          stock_quantity: 50
+          category: "Electronics"
+        - id: 3
+          name: "Notebook"
+          price: 4.99
+          stock_quantity: 200
+          category: "Stationery"
