@@ -1,0 +1,82 @@
+# Example YamlBase configuration for PostgreSQL Extended Query Protocol
+# This demonstrates prepared statements and parameter binding support
+
+database:
+  name: "analytics_db"
+
+tables:
+  # Events table with timestamp and various types
+  events:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      event_type: "VARCHAR(50)"
+      user_id: "INTEGER"
+      timestamp: "TIMESTAMP"
+      properties: "JSON"
+      duration_ms: "INTEGER"
+    data:
+      - id: 1
+        event_type: "page_view"
+        user_id: 101
+        timestamp: "2024-01-20 10:30:15"
+        properties: '{"page": "/home", "referrer": "google.com"}'
+        duration_ms: 1234
+      - id: 2
+        event_type: "button_click"
+        user_id: 101
+        timestamp: "2024-01-20 10:31:00"
+        properties: '{"button": "signup", "location": "header"}'
+        duration_ms: null
+      - id: 3
+        event_type: "page_view"
+        user_id: 102
+        timestamp: "2024-01-20 10:35:00"
+        properties: '{"page": "/products", "referrer": "/home"}'
+        duration_ms: 2100
+      - id: 4
+        event_type: "purchase"
+        user_id: 102
+        timestamp: "2024-01-20 10:40:00"
+        properties: '{"amount": 49.99, "items": 2}'
+        duration_ms: 5500
+
+  # Users table for JOIN operations
+  users:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      name: "VARCHAR(100)"
+      country: "VARCHAR(50)"
+      created_date: "DATE"
+    data:
+      - id: 101
+        name: "Alice Johnson"
+        country: "USA"
+        created_date: "2024-01-01"
+      - id: 102
+        name: "Bob Smith"
+        country: "Canada"
+        created_date: "2024-01-05"
+      - id: 103
+        name: "Charlie Brown"
+        country: "UK"
+        created_date: "2024-01-10"
+
+  # Metrics table with numeric types
+  daily_metrics:
+    columns:
+      id: "INTEGER PRIMARY KEY"
+      metric_date: "DATE"
+      active_users: "INTEGER"
+      revenue: "DECIMAL(12,2)"
+      conversion_rate: "DECIMAL(5,4)"
+    data:
+      - id: 1
+        metric_date: "2024-01-19"
+        active_users: 1250
+        revenue: 15420.50
+        conversion_rate: 0.0234
+      - id: 2
+        metric_date: "2024-01-20"
+        active_users: 1380
+        revenue: 18950.75
+        conversion_rate: 0.0312
