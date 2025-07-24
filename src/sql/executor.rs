@@ -8,6 +8,7 @@ use sqlparser::ast::{
     TableWithJoins, UnaryOperator, With,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::debug;
 
 use crate::YamlBaseError;
@@ -16,6 +17,7 @@ use crate::database::{Database, Storage, Table, Value};
 pub struct QueryExecutor {
     storage: Arc<Storage>,
     database_name: String,
+    query_timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +102,13 @@ impl QueryExecutor {
         Ok(Self {
             storage,
             database_name,
+            query_timeout: Duration::from_secs(60), // Default 60 second timeout
         })
+    }
+    
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.query_timeout = timeout;
+        self
     }
 
     pub fn storage(&self) -> &Arc<Storage> {
@@ -108,25 +116,40 @@ impl QueryExecutor {
     }
 
     pub async fn execute(&self, statement: &Statement) -> crate::Result<QueryResult> {
-        match statement {
-            Statement::Query(query) => self.execute_query(query).await,
-            Statement::StartTransaction { .. }
-            | Statement::Commit { .. }
-            | Statement::Rollback { .. } => {
-                // Return empty result for transaction commands (no-op in read-only mode)
-                Ok(QueryResult {
-                    columns: vec![],
-                    column_types: vec![],
-                    rows: vec![],
-                })
+        // Wrap execution with timeout to handle client-reported timeout issues
+        let execution_future = async {
+            match statement {
+                Statement::Query(query) => self.execute_query(query).await,
+                Statement::StartTransaction { .. }
+                | Statement::Commit { .. }
+                | Statement::Rollback { .. } => {
+                    // Return empty result for transaction commands (no-op in read-only mode)
+                    Ok(QueryResult {
+                        columns: vec![],
+                        column_types: vec![],
+                        rows: vec![],
+                    })
+                }
+                _ => Err(YamlBaseError::NotImplemented(
+                    "Only SELECT queries are supported".to_string(),
+                )),
             }
-            _ => Err(YamlBaseError::NotImplemented(
-                "Only SELECT queries are supported".to_string(),
-            )),
+        };
+
+        // Apply timeout to prevent client-reported connection timeout issues
+        match tokio::time::timeout(self.query_timeout, execution_future).await {
+            Ok(result) => result,
+            Err(_) => Err(YamlBaseError::Database {
+                message: format!(
+                    "Query execution timeout after {} seconds. Consider optimizing your query or increasing timeout limit.",
+                    self.query_timeout.as_secs()
+                ),
+            }),
         }
     }
 
     async fn execute_query(&self, query: &Query) -> crate::Result<QueryResult> {
+        let start_time = std::time::Instant::now();
         let db_arc = self.storage.database();
         let db = db_arc.read().await;
 
@@ -135,7 +158,7 @@ impl QueryExecutor {
             return self.execute_query_with_ctes(&db, query, with).await;
         }
 
-        match &query.body.as_ref() {
+        let result = match &query.body.as_ref() {
             SetExpr::Select(select) => self.execute_select(&db, select, query).await,
             SetExpr::SetOperation {
                 op,
@@ -149,7 +172,18 @@ impl QueryExecutor {
             _ => Err(YamlBaseError::NotImplemented(
                 "Only SELECT and UNION/EXCEPT/INTERSECT queries are supported".to_string(),
             )),
+        };
+
+        // Performance monitoring and optimization hints for client timeout issues
+        let execution_time = start_time.elapsed();
+        if execution_time > Duration::from_secs(5) {
+            debug!(
+                "Slow query detected: {}ms execution time. Consider optimization.",
+                execution_time.as_millis()
+            );
         }
+
+        result
     }
 
     async fn execute_select(
