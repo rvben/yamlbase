@@ -50,7 +50,7 @@ async fn test_primary_key_index_performance() {
     use yamlbase::sql::{QueryExecutor, parse_sql};
 
     let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage.clone());
+    let executor = QueryExecutor::new(storage.clone()).await.unwrap();
 
     // Wait for indexes to be built
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -133,7 +133,7 @@ async fn test_index_with_different_types() {
     use yamlbase::sql::{QueryExecutor, parse_sql};
 
     let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage.clone());
+    let executor = QueryExecutor::new(storage.clone()).await.unwrap();
 
     // Wait for indexes
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
