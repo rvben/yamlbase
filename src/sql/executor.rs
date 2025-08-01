@@ -14,6 +14,7 @@ use tracing::debug;
 use crate::YamlBaseError;
 use crate::database::{Database, Storage, Table, Value};
 
+#[derive(Clone)]
 pub struct QueryExecutor {
     storage: Arc<Storage>,
     database_name: String,
@@ -1166,6 +1167,14 @@ impl QueryExecutor {
                 );
                 self.evaluate_between(expr, *negated, low, high, row, table)
             }
+            Expr::Exists { subquery, negated } => {
+                debug!("Found EXISTS expression: negated={}", negated);
+                self.evaluate_exists_subquery(subquery, *negated)
+            }
+            Expr::InSubquery { expr, subquery, negated } => {
+                debug!("Found IN subquery expression: expr={:?}, negated={}", expr, negated);
+                self.evaluate_in_subquery(expr, subquery, *negated, row, table)
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported: {:?}",
                 expr
@@ -1249,6 +1258,99 @@ impl QueryExecutor {
         };
 
         Ok(if negated { !is_between } else { is_between })
+    }
+
+    fn evaluate_exists_subquery(&self, subquery: &Query, negated: bool) -> crate::Result<bool> {
+        debug!("Evaluating EXISTS subquery: negated={}", negated);
+        
+        // Handle sync/async bridge for subquery execution
+        let executor_clone = self.clone();
+        let subquery_clone = subquery.clone();
+        
+        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // We're in a tokio runtime context - use spawn_blocking
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _handle_clone = handle.clone();
+            
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                let result = rt.block_on(async {
+                    executor_clone.execute_query(&subquery_clone).await
+                });
+                tx.send(result).unwrap();
+            });
+            
+            rx.recv().map_err(|_| YamlBaseError::Database {
+                message: "Failed to receive subquery result".to_string(),
+            })?
+        } else {
+            // Not in tokio context, create runtime
+            let rt = tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
+                message: "Failed to create tokio runtime".to_string(),
+            })?;
+            rt.block_on(async {
+                executor_clone.execute_query(&subquery_clone).await
+            })
+        }?;
+        
+        let exists = !result.rows.is_empty();
+        debug!("EXISTS subquery returned {} rows, exists={}", result.rows.len(), exists);
+        
+        Ok(if negated { !exists } else { exists })
+    }
+
+    fn evaluate_in_subquery(
+        &self,
+        expr: &Expr,
+        subquery: &Query,
+        negated: bool,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<bool> {
+        debug!("Evaluating IN subquery: expr={:?}, negated={}", expr, negated);
+        
+        let target_value = self.get_expr_value(expr, row, table)?;
+        
+        // Handle sync/async bridge for subquery execution
+        let executor_clone = self.clone();
+        let subquery_clone = subquery.clone();
+        
+        let result = if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+            // We're in a tokio runtime context - use separate thread
+            let (tx, rx) = std::sync::mpsc::channel();
+            
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                let result = rt.block_on(async {
+                    executor_clone.execute_query(&subquery_clone).await
+                });
+                tx.send(result).unwrap();
+            });
+            
+            rx.recv().map_err(|_| YamlBaseError::Database {
+                message: "Failed to receive subquery result".to_string(),
+            })?
+        } else {
+            // Not in tokio context, create runtime
+            let rt = tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
+                message: "Failed to create tokio runtime".to_string(),
+            })?;
+            rt.block_on(async {
+                executor_clone.execute_query(&subquery_clone).await
+            })
+        }?;
+        
+        // Check if target_value exists in the first column of subquery results
+        let found = result.rows.iter().any(|subquery_row| {
+            if !subquery_row.is_empty() {
+                target_value == subquery_row[0]
+            } else {
+                false
+            }
+        });
+        
+        debug!("IN subquery returned {} rows, found={}", result.rows.len(), found);
+        Ok(if negated { !found } else { found })
     }
 
     fn evaluate_in_list(
@@ -1552,6 +1654,52 @@ impl QueryExecutor {
                 // Handle CAST expression
                 let value = self.get_expr_value(expr, row, table)?;
                 self.cast_value(value, data_type)
+            }
+            Expr::Subquery(subquery) => {
+                debug!("Evaluating scalar subquery in expression");
+                
+                // Handle sync/async bridge for subquery execution
+                let executor_clone = self.clone();
+                let subquery_clone = subquery.clone();
+                
+                let result = if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                    // We're in a tokio runtime context - use separate thread
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        let result = rt.block_on(async {
+                            executor_clone.execute_query(&subquery_clone).await
+                        });
+                        tx.send(result).unwrap();
+                    });
+                    
+                    rx.recv().map_err(|_| YamlBaseError::Database {
+                        message: "Failed to receive subquery result".to_string(),
+                    })?
+                } else {
+                    // Not in tokio context, create runtime
+                    let rt = tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
+                        message: "Failed to create tokio runtime".to_string(),
+                    })?;
+                    rt.block_on(async {
+                        executor_clone.execute_query(&subquery_clone).await
+                    })
+                }?;
+                
+                // Scalar subquery should return exactly one row and one column
+                if result.rows.is_empty() {
+                    Ok(Value::Null)
+                } else if result.rows.len() == 1 && !result.rows[0].is_empty() {
+                    Ok(result.rows[0][0].clone())
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!(
+                            "Scalar subquery returned {} rows, expected 1",
+                            result.rows.len()
+                        ),
+                    })
+                }
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
