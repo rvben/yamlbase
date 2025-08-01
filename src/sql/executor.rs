@@ -5697,7 +5697,110 @@ impl QueryExecutor {
         group_by_exprs: &[Expr],
         table: &Table,
     ) -> crate::Result<(String, crate::yaml::schema::SqlType, Value)> {
+        println!("DEBUG: evaluate_group_by_expr called with expression: {}", self.expr_to_string(expr));
         match expr {
+            // Handle binary operations in GROUP BY context (e.g., MAX(salary) - MIN(salary))
+            Expr::BinaryOp { left, op, right } => {
+                println!("DEBUG: Evaluating binary operation in GROUP BY context: {} {:?} {}", 
+                       self.expr_to_string(left), op, self.expr_to_string(right));
+                
+                // Recursively evaluate left and right sides in GROUP BY context
+                let (_, _, left_val) = self.evaluate_group_by_expr(left, group_rows, group_values, group_by_exprs, table)?;
+                let (_, _, right_val) = self.evaluate_group_by_expr(right, group_rows, group_values, group_by_exprs, table)?;
+                
+                // Perform the binary operation
+                let result = match op {
+                    BinaryOperator::Plus => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l + r)),
+                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l + r)),
+                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 + r)),
+                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l + *r as f64)),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot add non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Minus => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l - r)),
+                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l - r)),
+                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 - r)),
+                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l - *r as f64)),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot subtract non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Multiply => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l * r)),
+                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l * r)),
+                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 * r)),
+                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l * *r as f64)),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot multiply non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Divide => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => {
+                            if *r == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(*l as f64 / *r as f64))
+                            }
+                        },
+                        (Value::Double(l), Value::Double(r)) => {
+                            if *r == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(l / r))
+                            }
+                        },
+                        (Value::Integer(l), Value::Double(r)) => {
+                            if *r == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(*l as f64 / r))
+                            }
+                        },
+                        (Value::Double(l), Value::Integer(r)) => {
+                            if *r == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(l / *r as f64))
+                            }
+                        },
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot divide non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::StringConcat => match (&left_val, &right_val) {
+                        (Value::Text(l), Value::Text(r)) => Ok(Value::Text(format!("{}{}", l, r))),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot concatenate non-text values".to_string(),
+                        }),
+                    },
+                    _ => Err(YamlBaseError::NotImplemented(
+                        format!("Binary operator {:?} not implemented in GROUP BY context", op)
+                    )),
+                }?;
+                
+                let col_name = format!("{} {} {}", 
+                                     self.expr_to_string(left), 
+                                     self.binary_op_to_string(op), 
+                                     self.expr_to_string(right));
+                let col_type = self.infer_value_type(&result);
+                Ok((col_name, col_type, result))
+            }
             // If this is one of the GROUP BY expressions, return the group value
             _ if self.is_group_by_expr(expr, group_by_exprs) => {
                 let idx = self
