@@ -308,7 +308,7 @@ mod comprehensive_tests {
     }
 
     #[tokio::test]
-    async fn test_subquery_placeholders() {
+    async fn test_subquery_support() {
         let mut db = Database::new("test_db".to_string());
 
         // Create users table
@@ -374,31 +374,27 @@ mod comprehensive_tests {
         let storage_arc = Arc::new(storage);
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
-        // Test IN subquery placeholder
+        // Test IN subquery - should now work!
         let query =
             parse_sql("SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)").unwrap();
         let result = executor.execute(&query[0]).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Expression type not supported: InSubquery"));
+        assert!(result.is_ok(), "IN subquery should work now");
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 1); // Only Alice has orders
 
-        // Test EXISTS subquery placeholder
-        let query = parse_sql("SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id)").unwrap();
+        // Test EXISTS subquery - should now work!
+        let query = parse_sql("SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders)").unwrap();
         let result = executor.execute(&query[0]).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Expression type not supported: Exists"));
+        assert!(result.is_ok(), "EXISTS subquery should work now");
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 2); // Both users exist since orders table has data
 
-        // Test NOT EXISTS subquery placeholder
-        let query = parse_sql("SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id)").unwrap();
+        // Test NOT EXISTS subquery - should now work!
+        let query = parse_sql("SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM orders WHERE id = 999)").unwrap();
         let result = executor.execute(&query[0]).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        // NOT EXISTS gets parsed as UnaryOp { op: Not, expr: Exists(...) }
-        assert!(
-            err.contains("Unary operator Not not supported")
-                || err.contains("Expression type not supported")
-        );
+        assert!(result.is_ok(), "NOT EXISTS subquery should work now");
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 2); // Both users since order 999 doesn't exist
     }
 
     #[tokio::test]
