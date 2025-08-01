@@ -5633,9 +5633,34 @@ impl QueryExecutor {
             result_rows.push(row.clone());
         }
 
-        // Process joins
+        // Process joins and comma-separated tables
         let mut table_idx = 1;
-        for table_with_joins in from {
+        
+        for (from_idx, table_with_joins) in from.iter().enumerate() {
+            // Handle comma-separated tables (implicit CROSS JOIN)
+            // Skip the first table since it's already initialized
+            if from_idx > 0 && table_with_joins.joins.is_empty() {
+                // This is a comma-separated table, treat as CROSS JOIN
+                if table_idx >= tables.len() {
+                    return Err(YamlBaseError::Database {
+                        message: "Invalid table structure for comma join".to_string(),
+                    });
+                }
+
+                let join_table = tables[table_idx].1;
+                result_rows = self.apply_join(
+                    result_rows,
+                    join_table,
+                    &JoinOperator::CrossJoin,
+                    tables,
+                    table_aliases,
+                    table_idx,
+                )?;
+
+                table_idx += 1;
+            }
+            
+            // Handle explicit joins within each table_with_joins
             for join in &table_with_joins.joins {
                 if table_idx >= tables.len() {
                     return Err(YamlBaseError::Database {
@@ -5674,10 +5699,12 @@ impl QueryExecutor {
         match join_type {
             JoinOperator::Inner(constraint)
             | JoinOperator::LeftOuter(constraint)
-            | JoinOperator::RightOuter(constraint) => {
-                // For INNER, LEFT JOIN, and RIGHT JOIN
+            | JoinOperator::RightOuter(constraint)
+            | JoinOperator::FullOuter(constraint) => {
+                // For INNER, LEFT JOIN, RIGHT JOIN, and FULL OUTER JOIN
                 let is_left_join = matches!(join_type, JoinOperator::LeftOuter(_));
                 let is_right_join = matches!(join_type, JoinOperator::RightOuter(_));
+                let is_full_join = matches!(join_type, JoinOperator::FullOuter(_));
 
                 for left_row in &left_rows {
                     let mut matched = false;
@@ -5714,8 +5741,8 @@ impl QueryExecutor {
                         }
                     }
 
-                    // For LEFT JOIN, include unmatched left rows with NULLs
-                    if is_left_join && !matched {
+                    // For LEFT JOIN or FULL OUTER JOIN, include unmatched left rows with NULLs
+                    if (is_left_join || is_full_join) && !matched {
                         let mut combined_row = left_row.clone();
                         // Add NULL values for all columns from the right table
                         for _ in &right_table.columns {
@@ -5725,8 +5752,8 @@ impl QueryExecutor {
                     }
                 }
 
-                // For RIGHT JOIN, we need to check which right rows were not matched
-                if is_right_join {
+                // For RIGHT JOIN or FULL OUTER JOIN, we need to check which right rows were not matched
+                if is_right_join || is_full_join {
                     // Track which right rows were matched
                     let mut matched_right_indices = std::collections::HashSet::new();
 
