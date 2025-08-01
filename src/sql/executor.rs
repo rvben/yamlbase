@@ -1534,6 +1534,25 @@ impl QueryExecutor {
                 })?;
                 Ok(row[col_idx].clone())
             }
+            Expr::CompoundIdentifier(parts) => {
+                if parts.len() == 2 {
+                    let table_name = &parts[0].value;
+                    let column_name = &parts[1].value;
+                    
+                    // For now, just match the column name ignoring the table name
+                    // This is a simplified approach that works for basic cases
+                    let col_idx = table.get_column_index(column_name).ok_or_else(|| {
+                        YamlBaseError::Database {
+                            message: format!("Column '{}.{}' not found in table", table_name, column_name),
+                        }
+                    })?;
+                    Ok(row[col_idx].clone())
+                } else {
+                    Err(YamlBaseError::NotImplemented(
+                        "Complex compound identifiers not supported in get_expr_value".to_string(),
+                    ))
+                }
+            }
             Expr::Value(val) => self.sql_value_to_db_value(val),
             Expr::TypedString { data_type, value } => {
                 // Handle DATE '2025-01-01' and similar typed strings
@@ -5474,6 +5493,39 @@ impl QueryExecutor {
                     .unwrap_or_default();
                 matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
             }
+            // Recursively check binary operations (e.g., MAX(salary) - MIN(salary))
+            Expr::BinaryOp { left, right, .. } => {
+                self.contains_aggregate_function(left) || self.contains_aggregate_function(right)
+            }
+            // Recursively check unary operations
+            Expr::UnaryOp { expr, .. } => {
+                self.contains_aggregate_function(expr)
+            }
+            // Check CASE expressions
+            Expr::Case { operand, conditions, results, else_result } => {
+                if let Some(operand_expr) = operand {
+                    if self.contains_aggregate_function(operand_expr) {
+                        return true;
+                    }
+                }
+                for condition in conditions {
+                    if self.contains_aggregate_function(condition) {
+                        return true;
+                    }
+                }
+                for result in results {
+                    if self.contains_aggregate_function(result) {
+                        return true;
+                    }
+                }
+                if let Some(else_expr) = else_result {
+                    if self.contains_aggregate_function(else_expr) {
+                        return true;
+                    }
+                }
+                false
+            }
+            // Add more complex expression types as needed
             _ => false,
         }
     }
@@ -7484,9 +7536,176 @@ impl QueryExecutor {
                     }),
                 }
             }
+            // Binary operations in JOIN conditions
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.get_join_expr_value(left, row, tables, table_aliases)?;
+                let right_val = self.get_join_expr_value(right, row, tables, table_aliases)?;
+                self.evaluate_binary_op_constant(&left_val, op, &right_val)
+            }
+            // Unary operations in JOIN conditions
+            Expr::UnaryOp { op, expr } => {
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                match op {
+                    UnaryOperator::Minus => match val {
+                        Value::Integer(i) => Ok(Value::Integer(-i)),
+                        Value::Double(d) => Ok(Value::Double(-d)),
+                        Value::Null => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Unary minus requires numeric value".to_string(),
+                        }),
+                    },
+                    UnaryOperator::Plus => match val {
+                        Value::Integer(_) | Value::Double(_) | Value::Null => Ok(val),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Unary plus requires numeric value".to_string(),
+                        }),
+                    },
+                    UnaryOperator::Not => match val {
+                        Value::Boolean(b) => Ok(Value::Boolean(!b)),
+                        Value::Null => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Unary NOT requires boolean value".to_string(),
+                        }),
+                    },
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Unary operator {:?} not supported in JOIN conditions",
+                        op
+                    ))),
+                }
+            }
+            // CASE expressions in JOIN conditions
+            Expr::Case { operand, conditions, results, else_result } => {
+                if let Some(operand_expr) = operand {
+                    let operand_val = self.get_join_expr_value(operand_expr, row, tables, table_aliases)?;
+                    for (i, condition) in conditions.iter().enumerate() {
+                        let condition_val = self.get_join_expr_value(condition, row, tables, table_aliases)?;
+                        if self.compare_values_equal(&operand_val, &condition_val) {
+                            return self.get_join_expr_value(&results[i], row, tables, table_aliases);
+                        }
+                    }
+                } else {
+                    for (i, condition) in conditions.iter().enumerate() {
+                        let condition_result = self.evaluate_join_condition(condition, row, tables, table_aliases)?;
+                        if condition_result {
+                            return self.get_join_expr_value(&results[i], row, tables, table_aliases);
+                        }
+                    }
+                }
+                
+                if let Some(else_expr) = else_result {
+                    self.get_join_expr_value(else_expr, row, tables, table_aliases)
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            // NULL checks in JOIN conditions
+            Expr::IsNull(expr) => {
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                Ok(Value::Boolean(val == Value::Null))
+            }
+            Expr::IsNotNull(expr) => {
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                Ok(Value::Boolean(val != Value::Null))
+            }
+            // Nested expressions (parentheses)
+            Expr::Nested(inner_expr) => {
+                self.get_join_expr_value(inner_expr, row, tables, table_aliases)
+            }
+            // CAST expressions in JOIN conditions
+            Expr::Cast { expr, data_type, .. } => {
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                self.cast_value(val, data_type)
+            }
+            // LIKE pattern matching in JOIN conditions
+            Expr::Like { expr, pattern, .. } => {
+                let text_val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                let pattern_val = self.get_join_expr_value(pattern, row, tables, table_aliases)?;
+                
+                match (text_val, pattern_val) {
+                    (Value::Text(text), Value::Text(pattern)) => {
+                        let regex_pattern = pattern.replace('%', ".*").replace('_', ".");
+                        let regex = regex::Regex::new(&format!("^{}$", regex_pattern))
+                            .map_err(|_| YamlBaseError::Database {
+                                message: "Invalid LIKE pattern".to_string(),
+                            })?;
+                        Ok(Value::Boolean(regex.is_match(&text)))
+                    }
+                    (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: "LIKE requires text values".to_string(),
+                    }),
+                }
+            }
+            // BETWEEN expressions in JOIN conditions
+            Expr::Between { expr, low, high, .. } => {
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                let low_val = self.get_join_expr_value(low, row, tables, table_aliases)?;
+                let high_val = self.get_join_expr_value(high, row, tables, table_aliases)?;
+                
+                let ge_low = self.evaluate_binary_op_constant(&val, &BinaryOperator::GtEq, &low_val)?;
+                let le_high = self.evaluate_binary_op_constant(&val, &BinaryOperator::LtEq, &high_val)?;
+                
+                match (ge_low, le_high) {
+                    (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(a && b)),
+                    _ => Ok(Value::Null),
+                }
+            }
+            // IN expressions in JOIN conditions
+            Expr::InList { expr, list, .. } => {
+                let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                
+                for item in list {
+                    let item_val = self.get_join_expr_value(item, row, tables, table_aliases)?;
+                    if self.compare_values_equal(&val, &item_val) {
+                        return Ok(Value::Boolean(true));
+                    }
+                }
+                Ok(Value::Boolean(false))
+            }
+            // Subquery expressions (if supported)
+            Expr::InSubquery { expr, .. } => {
+                let _val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                // For now, return a basic implementation - this would need full subquery evaluation
+                // This is a placeholder that returns false for now
+                Ok(Value::Boolean(false))
+            }
+            Expr::Exists { .. } => {
+                // For now, return a basic implementation - this would need full subquery evaluation
+                // This is a placeholder that returns false for now
+                Ok(Value::Boolean(false))
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Expression type not supported in JOIN conditions".to_string(),
             )),
+        }
+    }
+    
+    /// Compare two values for equality in JOIN contexts
+    fn compare_values_equal(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Double(a), Value::Double(b)) => a == b,
+            (Value::Decimal(a), Value::Decimal(b)) => a == b,
+            // Cross-type numeric comparisons
+            (Value::Integer(a), Value::Float(b)) => *a as f32 == *b,
+            (Value::Integer(a), Value::Double(b)) => *a as f64 == *b,
+            (Value::Float(a), Value::Integer(b)) => *a == *b as f32,
+            (Value::Float(a), Value::Double(b)) => *a as f64 == *b,
+            (Value::Double(a), Value::Integer(b)) => *a == *b as f64,
+            (Value::Double(a), Value::Float(b)) => *a == *b as f64,
+            // Other types
+            (Value::Text(a), Value::Text(b)) => a == b,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Date(a), Value::Date(b)) => a == b,
+            (Value::Time(a), Value::Time(b)) => a == b,
+            (Value::Timestamp(a), Value::Timestamp(b)) => a == b,
+            (Value::Uuid(a), Value::Uuid(b)) => a == b,
+            (Value::Json(a), Value::Json(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Null, _) | (_, Value::Null) => false,
+            // Different types are not equal
+            _ => false,
         }
     }
 
