@@ -10,7 +10,7 @@ mod tests {
         // Create a simple test database with string functions test
         let db = Database::new("test_db".to_string());
         let storage = Arc::new(Storage::new(db));
-        let executor = QueryExecutor::new(storage);
+        let executor = QueryExecutor::new(storage).await.unwrap();
 
         // Test constant expressions (SELECT without FROM) - these are easier to test
         let queries = parse_sql("SELECT LEFT('Hello World', 5)").unwrap();

@@ -463,19 +463,27 @@ impl MySqlProtocol {
         }
 
         static VERSION_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version|VERSION|Version)\b")
+            Regex::new(
+                r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version|VERSION|Version)\b",
+            )
         });
 
         static VERSION_COMMENT_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b")
+            Regex::new(
+                r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:version_comment|VERSION_COMMENT|Version_Comment)\b",
+            )
         });
 
         static MAX_ALLOWED_PACKET_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:max_allowed_packet|MAX_ALLOWED_PACKET|Max_Allowed_Packet)\b")
+            Regex::new(
+                r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?(?:max_allowed_packet|MAX_ALLOWED_PACKET|Max_Allowed_Packet)\b",
+            )
         });
 
         static SYSTEM_VAR_RE: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
-            Regex::new(r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b")
+            Regex::new(
+                r"@@(?:(?:global|GLOBAL|Global|session|SESSION|Session)\.)?([a-zA-Z_][a-zA-Z0-9_]*)\b",
+            )
         });
 
         let mut result = query.to_string();
@@ -499,9 +507,7 @@ impl MySqlProtocol {
 
         // Handle @@max_allowed_packet - MySQL default is 64MB (67108864 bytes)
         if let Ok(ref max_packet_re) = *MAX_ALLOWED_PACKET_RE {
-            result = max_packet_re
-                .replace_all(&result, "67108864")
-                .to_string();
+            result = max_packet_re.replace_all(&result, "67108864").to_string();
         } else {
             debug!("Failed to compile MAX_ALLOWED_PACKET_RE regex");
         }
@@ -638,40 +644,44 @@ impl MySqlProtocol {
         debug!("Sending {} rows", rows.len());
         const BATCH_SIZE_THRESHOLD: usize = 100; // Process in batches for large result sets
         const MAX_BATCH_MEMORY: usize = 8 * 1024 * 1024; // 8MB batch limit
-        
+
         if rows.len() > BATCH_SIZE_THRESHOLD {
             // Large result set - send in optimized batches
             debug!("Large result set detected, using batch processing");
             let mut batch_start = 0;
-            
+
             while batch_start < rows.len() {
                 let mut batch_size = 0;
                 let mut batch_memory = 0;
-                
+
                 // Calculate optimal batch size based on memory usage
-                for i in batch_start..rows.len() {
-                    let estimated_row_size: usize = rows[i].iter()
+                for (_i, row) in rows.iter().enumerate().skip(batch_start) {
+                    let estimated_row_size: usize = row
+                        .iter()
                         .map(|v| if *v == "NULL" { 1 } else { v.len() + 5 }) // +5 for length encoding overhead
                         .sum();
-                    
+
                     if batch_memory + estimated_row_size > MAX_BATCH_MEMORY && batch_size > 0 {
                         break;
                     }
-                    
+
                     batch_memory += estimated_row_size;
                     batch_size += 1;
-                    
+
                     if batch_size >= BATCH_SIZE_THRESHOLD {
                         break;
                     }
                 }
-                
+
                 let batch_end = std::cmp::min(batch_start + batch_size, rows.len());
                 debug!(
                     "Processing batch: rows {}-{} ({} rows, ~{} bytes)",
-                    batch_start, batch_end - 1, batch_end - batch_start, batch_memory
+                    batch_start,
+                    batch_end - 1,
+                    batch_end - batch_start,
+                    batch_memory
                 );
-                
+
                 // Send this batch
                 for (idx, row) in rows[batch_start..batch_end].iter().enumerate() {
                     let global_idx = batch_start + idx;
@@ -705,7 +715,7 @@ impl MySqlProtocol {
                     debug!("Row packet size: {} bytes", row_packet.len());
                     self.write_packet(stream, state, &row_packet).await?;
                 }
-                
+
                 batch_start = batch_end;
             }
         } else {
@@ -814,7 +824,7 @@ impl MySqlProtocol {
         payload: &[u8],
     ) -> crate::Result<()> {
         const MAX_PACKET_SIZE: usize = 0xffffff; // 16MB - 1 (maximum MySQL packet size)
-        
+
         if payload.len() <= MAX_PACKET_SIZE {
             // Single packet - original logic
             let mut packet = BytesMut::with_capacity(4 + payload.len());
@@ -848,12 +858,12 @@ impl MySqlProtocol {
                 payload.len(),
                 MAX_PACKET_SIZE
             );
-            
+
             let mut offset = 0;
             while offset < payload.len() {
                 let chunk_size = std::cmp::min(MAX_PACKET_SIZE, payload.len() - offset);
                 let chunk = &payload[offset..offset + chunk_size];
-                
+
                 let mut packet = BytesMut::with_capacity(4 + chunk_size);
 
                 // Length (3 bytes)
@@ -879,7 +889,7 @@ impl MySqlProtocol {
 
                 stream.write_all(&packet).await?;
                 stream.flush().await?;
-                
+
                 offset += chunk_size;
             }
         }
