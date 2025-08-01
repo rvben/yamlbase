@@ -1701,6 +1701,143 @@ impl QueryExecutor {
                     })
                 }
             }
+            Expr::UnaryOp { op, expr } => {
+                // Handle unary operations with row context
+                let val = self.get_expr_value(expr, row, table)?;
+                match op {
+                    UnaryOperator::Minus => match val {
+                        Value::Integer(i) => Ok(Value::Integer(-i)),
+                        Value::Double(d) => Ok(Value::Double(-d)),
+                        Value::Null => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Unary minus requires numeric value".to_string(),
+                        }),
+                    },
+                    UnaryOperator::Plus => match val {
+                        Value::Integer(_) | Value::Double(_) | Value::Null => Ok(val),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Unary plus requires numeric value".to_string(),
+                        }),
+                    },
+                    UnaryOperator::Not => match val {
+                        Value::Boolean(b) => Ok(Value::Boolean(!b)),
+                        Value::Null => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Unary NOT requires boolean value".to_string(),
+                        }),
+                    },
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Unary operator {:?} not supported in get_expr_value",
+                        op
+                    ))),
+                }
+            }
+            Expr::BinaryOp { left, op, right } => {
+                // Handle binary operations with row context
+                let left_val = self.get_expr_value(left, row, table)?;
+                let right_val = self.get_expr_value(right, row, table)?;
+                
+                match op {
+                    BinaryOperator::Plus => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l + r)),
+                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l + r)),
+                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 + r)),
+                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l + *r as f64)),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot add non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Minus => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l - r)),
+                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l - r)),
+                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 - r)),
+                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l - *r as f64)),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot subtract non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Multiply => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l * r)),
+                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l * r)),
+                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 * r)),
+                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l * *r as f64)),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot multiply non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Divide => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => {
+                            if *r == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(*l as f64 / *r as f64))
+                            }
+                        },
+                        (Value::Double(l), Value::Double(r)) => {
+                            if *r == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(l / r))
+                            }
+                        },
+                        (Value::Integer(l), Value::Double(r)) => {
+                            if *r == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(*l as f64 / r))
+                            }
+                        },
+                        (Value::Double(l), Value::Integer(r)) => {
+                            if *r == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(l / *r as f64))
+                            }
+                        },
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Cannot divide non-numeric values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::Modulo => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => {
+                            if *r == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Integer(l % r))
+                            }
+                        },
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "Modulo operation requires integer values".to_string(),
+                        }),
+                    },
+                    BinaryOperator::StringConcat => match (&left_val, &right_val) {
+                        (Value::Text(l), Value::Text(r)) => Ok(Value::Text(format!("{}{}", l, r))),
+                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "String concatenation requires text values".to_string(),
+                        }),
+                    },
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not supported in get_expr_value",
+                        op
+                    ))),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
                 expr
@@ -2983,9 +3120,414 @@ impl QueryExecutor {
                     })
                 }
             }
-            "DATEADD" | "DATEDIFF" | "DATE_ADD" | "DATE_SUB" => {
-                // Date arithmetic functions - delegate to constant function handler
-                self.evaluate_constant_function(func)
+            "DATE_ADD" => {
+                // DATE_ADD(date, INTERVAL value unit) - MySQL style with row context
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(value_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(unit_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+                            let value_val = self.get_expr_value(value_expr, row, table)?;
+                            let unit_val = self.get_expr_value(unit_expr, row, table)?;
+
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_ADD requires date as first argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let value = match &value_val {
+                                Value::Integer(n) => *n,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_ADD requires integer as second argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let unit = match &unit_val {
+                                Value::Text(s) => s.to_uppercase(),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_ADD requires unit as third argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let result = match unit.as_str() {
+                                "YEAR" => {
+                                    if value >= 0 {
+                                        date + chrono::Months::new((value * 12) as u32)
+                                    } else {
+                                        date - chrono::Months::new(((-value) * 12) as u32)
+                                    }
+                                }
+                                "MONTH" => {
+                                    if value >= 0 {
+                                        date + chrono::Months::new(value as u32)
+                                    } else {
+                                        date - chrono::Months::new((-value) as u32)
+                                    }
+                                }
+                                "DAY" => {
+                                    if value >= 0 {
+                                        date + chrono::Days::new(value as u64)
+                                    } else {
+                                        date - chrono::Days::new((-value) as u64)
+                                    }
+                                }
+                                "WEEK" => {
+                                    if value >= 0 {
+                                        date + chrono::Days::new((value * 7) as u64)
+                                    } else {
+                                        date - chrono::Days::new((-value * 7) as u64)
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
+                                    });
+                                }
+                            };
+
+                            Ok(Value::Date(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATE_ADD requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_ADD requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_ADD requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATE_SUB" => {
+                // DATE_SUB(date, INTERVAL value unit) - MySQL style with row context
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(value_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(unit_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+                            let value_val = self.get_expr_value(value_expr, row, table)?;
+                            let unit_val = self.get_expr_value(unit_expr, row, table)?;
+
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_SUB requires date as first argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let value = match &value_val {
+                                Value::Integer(n) => *n,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_SUB requires integer as second argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let unit = match &unit_val {
+                                Value::Text(s) => s.to_uppercase(),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_SUB requires unit as third argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let result = match unit.as_str() {
+                                "YEAR" => {
+                                    if value >= 0 {
+                                        date - chrono::Months::new((value * 12) as u32)
+                                    } else {
+                                        date + chrono::Months::new(((-value) * 12) as u32)
+                                    }
+                                }
+                                "MONTH" => {
+                                    if value >= 0 {
+                                        date - chrono::Months::new(value as u32)
+                                    } else {
+                                        date + chrono::Months::new((-value) as u32)
+                                    }
+                                }
+                                "DAY" => {
+                                    if value >= 0 {
+                                        date - chrono::Days::new(value as u64)
+                                    } else {
+                                        date + chrono::Days::new((-value) as u64)
+                                    }
+                                }
+                                "WEEK" => {
+                                    if value >= 0 {
+                                        date - chrono::Days::new((value * 7) as u64)
+                                    } else {
+                                        date + chrono::Days::new((-value * 7) as u64)
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
+                                    });
+                                }
+                            };
+
+                            Ok(Value::Date(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATE_SUB requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATE_SUB requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATE_SUB requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATEADD" => {
+                // DATEADD(datepart, number, date) - SQL Server style with row context
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(datepart_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(number_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let datepart_val = self.get_expr_value(datepart_expr, row, table)?;
+                            let number_val = self.get_expr_value(number_expr, row, table)?;
+                            let date_val = self.get_expr_value(date_expr, row, table)?;
+
+                            let datepart = match &datepart_val {
+                                Value::Text(s) => s.to_lowercase(),
+                                _ => return Err(YamlBaseError::Database {
+                                    message: "DATEADD requires datepart as first argument (year, month, day, hour, minute, second)".to_string(),
+                                }),
+                            };
+
+                            let number = match &number_val {
+                                Value::Integer(n) => *n,
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEADD requires integer as second argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let date = match &date_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEADD requires date as third argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let result = match datepart.as_str() {
+                                "year" => {
+                                    if number >= 0 {
+                                        date + chrono::Months::new((number * 12) as u32)
+                                    } else {
+                                        date - chrono::Months::new(((-number) * 12) as u32)
+                                    }
+                                }
+                                "month" => {
+                                    if number >= 0 {
+                                        date + chrono::Months::new(number as u32)
+                                    } else {
+                                        date - chrono::Months::new((-number) as u32)
+                                    }
+                                }
+                                "day" => {
+                                    if number >= 0 {
+                                        date + chrono::Days::new(number as u64)
+                                    } else {
+                                        date - chrono::Days::new((-number) as u64)
+                                    }
+                                }
+                                "week" => {
+                                    if number >= 0 {
+                                        date + chrono::Days::new((number * 7) as u64)
+                                    } else {
+                                        date - chrono::Days::new((-number * 7) as u64)
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!("Unsupported datepart: {} (supported: year, month, day, week)", datepart),
+                                    });
+                                }
+                            };
+
+                            Ok(Value::Date(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATEADD requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATEADD requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATEADD requires arguments".to_string(),
+                    })
+                }
+            }
+            "DATEDIFF" => {
+                // DATEDIFF(datepart, startdate, enddate) - calculates difference between dates with row context
+                if let FunctionArguments::List(args) = &func.args {
+                    if args.args.len() == 3 {
+                        if let (
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(datepart_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(startdate_expr)),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(enddate_expr)),
+                        ) = (&args.args[0], &args.args[1], &args.args[2])
+                        {
+                            let datepart_val = self.get_expr_value(datepart_expr, row, table)?;
+                            let startdate_val = self.get_expr_value(startdate_expr, row, table)?;
+                            let enddate_val = self.get_expr_value(enddate_expr, row, table)?;
+
+                            let datepart = match &datepart_val {
+                                Value::Text(s) => s.to_lowercase(),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEDIFF requires datepart as first argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let start_date = match &startdate_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid start date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEDIFF requires date as second argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let end_date = match &enddate_val {
+                                Value::Date(d) => *d,
+                                Value::Text(s) => {
+                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                        date
+                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        datetime.date()
+                                    } else {
+                                        return Err(YamlBaseError::Database {
+                                            message: format!("Invalid end date format: {}", s),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEDIFF requires date as third argument".to_string(),
+                                    });
+                                }
+                            };
+
+                            let result = match datepart.as_str() {
+                                "year" => end_date.years_since(start_date).unwrap_or(0) as i64,
+                                "month" => {
+                                    let years_diff = end_date.year() - start_date.year();
+                                    let months_diff = end_date.month() as i32 - start_date.month() as i32;
+                                    (years_diff * 12 + months_diff) as i64
+                                }
+                                "day" => (end_date - start_date).num_days(),
+                                "week" => (end_date - start_date).num_weeks(),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!("Unsupported datepart: {} (supported: year, month, day, week)", datepart),
+                                    });
+                                }
+                            };
+
+                            Ok(Value::Integer(result))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "DATEDIFF requires 3 arguments".to_string(),
+                            })
+                        }
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: "DATEDIFF requires exactly 3 arguments".to_string(),
+                        })
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "DATEDIFF requires arguments".to_string(),
+                    })
+                }
             }
             // For functions that don't need row context, delegate to constant version
             _ => self.evaluate_constant_function(func),
