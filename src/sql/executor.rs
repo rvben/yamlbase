@@ -50,7 +50,7 @@ enum CteProjectionItem {
     // A column from the CTE result (column index)
     Column(usize),
     // A complex expression that needs to be evaluated
-    Expression(Expr),
+    Expression(Box<Expr>),
 }
 
 impl JoinedColumn {
@@ -105,7 +105,7 @@ impl QueryExecutor {
             query_timeout: Duration::from_secs(60), // Default 60 second timeout
         })
     }
-    
+
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.query_timeout = timeout;
         self
@@ -841,7 +841,14 @@ impl QueryExecutor {
         // Check if this is an aggregate query
         if self.is_aggregate_query(select) {
             return self
-                .execute_aggregate_with_joined_rows(db, select, query, &joined_rows, &all_tables, &table_aliases)
+                .execute_aggregate_with_joined_rows(
+                    db,
+                    select,
+                    query,
+                    &joined_rows,
+                    &all_tables,
+                    &table_aliases,
+                )
                 .await;
         }
 
@@ -1726,10 +1733,11 @@ impl QueryExecutor {
             DateTimeField::Decade => (date.year() / 10) as i64,
             DateTimeField::Epoch => {
                 // Days since Unix epoch (1970-01-01)
-                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .ok_or_else(|| YamlBaseError::Database {
+                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).ok_or_else(|| {
+                    YamlBaseError::Database {
                         message: "Failed to create Unix epoch date".to_string(),
-                    })?;
+                    }
+                })?;
                 (*date - epoch).num_days()
             }
             _ => {
@@ -2640,7 +2648,9 @@ impl QueryExecutor {
                 // MySQL DATE function - extracts date part from datetime
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.get_expr_value(date_expr, row, table)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Date(d)),
@@ -2650,9 +2660,16 @@ impl QueryExecutor {
                                 }
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Date(date))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Date(datetime.date()))
                                     } else {
                                         Ok(Value::Null)
@@ -2681,16 +2698,25 @@ impl QueryExecutor {
                 // MySQL YEAR function - extracts year from date/datetime
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.get_expr_value(date_expr, row, table)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Integer(d.year() as i64)),
                                 Value::Timestamp(ts) => Ok(Value::Integer(ts.year() as i64)),
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Integer(date.year() as i64))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Integer(datetime.year() as i64))
                                     } else {
                                         Ok(Value::Null)
@@ -2719,16 +2745,25 @@ impl QueryExecutor {
                 // MySQL MONTH function - extracts month from date/datetime (1-12)
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.get_expr_value(date_expr, row, table)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Integer(d.month() as i64)),
                                 Value::Timestamp(ts) => Ok(Value::Integer(ts.month() as i64)),
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Integer(date.month() as i64))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Integer(datetime.month() as i64))
                                     } else {
                                         Ok(Value::Null)
@@ -2757,16 +2792,25 @@ impl QueryExecutor {
                 // MySQL DAY function - extracts day from date/datetime (1-31)
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.get_expr_value(date_expr, row, table)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Integer(d.day() as i64)),
                                 Value::Timestamp(ts) => Ok(Value::Integer(ts.day() as i64)),
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Integer(date.day() as i64))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Integer(datetime.day() as i64))
                                     } else {
                                         Ok(Value::Null)
@@ -2981,14 +3025,17 @@ impl QueryExecutor {
 
                             // Get first day of next month
                             let next_month = if date.month() == 12 {
-                                chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
-                                    .ok_or_else(|| YamlBaseError::Database {
-                                        message: "Invalid date calculation for next year".to_string(),
-                                    })?
+                                chrono::NaiveDate::from_ymd_opt(date.year() + 1, 1, 1).ok_or_else(
+                                    || YamlBaseError::Database {
+                                        message: "Invalid date calculation for next year"
+                                            .to_string(),
+                                    },
+                                )?
                             } else {
                                 chrono::NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
                                     .ok_or_else(|| YamlBaseError::Database {
-                                        message: "Invalid date calculation for next month".to_string(),
+                                        message: "Invalid date calculation for next month"
+                                            .to_string(),
                                     })?
                             };
                             // Subtract one day to get last day of current month
@@ -3855,7 +3902,9 @@ impl QueryExecutor {
                 // MySQL DATE function - extracts date part from datetime
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Date(d)),
@@ -3865,9 +3914,16 @@ impl QueryExecutor {
                                 }
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Date(date))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Date(datetime.date()))
                                     } else {
                                         Ok(Value::Null)
@@ -3896,16 +3952,25 @@ impl QueryExecutor {
                 // MySQL YEAR function - extracts year from date/datetime
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Integer(d.year() as i64)),
                                 Value::Timestamp(ts) => Ok(Value::Integer(ts.year() as i64)),
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Integer(date.year() as i64))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Integer(datetime.year() as i64))
                                     } else {
                                         Ok(Value::Null)
@@ -3934,16 +3999,25 @@ impl QueryExecutor {
                 // MySQL MONTH function - extracts month from date/datetime (1-12)
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Integer(d.month() as i64)),
                                 Value::Timestamp(ts) => Ok(Value::Integer(ts.month() as i64)),
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Integer(date.month() as i64))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Integer(datetime.month() as i64))
                                     } else {
                                         Ok(Value::Null)
@@ -3972,16 +4046,25 @@ impl QueryExecutor {
                 // MySQL DAY function - extracts day from date/datetime (1-31)
                 if let FunctionArguments::List(args) = &func.args {
                     if args.args.len() == 1 {
-                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) = &args.args[0] {
+                        if let FunctionArg::Unnamed(FunctionArgExpr::Expr(date_expr)) =
+                            &args.args[0]
+                        {
                             let date_val = self.evaluate_constant_expr(date_expr)?;
                             match date_val {
                                 Value::Date(d) => Ok(Value::Integer(d.day() as i64)),
                                 Value::Timestamp(ts) => Ok(Value::Integer(ts.day() as i64)),
                                 Value::Text(s) => {
                                     // Try to parse text as date
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
                                         Ok(Value::Integer(date.day() as i64))
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Ok(Value::Integer(datetime.day() as i64))
                                     } else {
                                         Ok(Value::Null)
@@ -4031,9 +4114,12 @@ impl QueryExecutor {
                             // Get number to add
                             let number = match &number_val {
                                 Value::Integer(n) => *n,
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATEADD requires integer as second argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEADD requires integer as second argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Parse date
@@ -4041,9 +4127,16 @@ impl QueryExecutor {
                                 Value::Date(d) => *d,
                                 Value::Timestamp(ts) => ts.date(),
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -4051,9 +4144,12 @@ impl QueryExecutor {
                                         });
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATEADD requires date as third argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEADD requires date as third argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Add the specified interval
@@ -4086,9 +4182,14 @@ impl QueryExecutor {
                                         date - chrono::Days::new((-number * 7) as u64)
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: format!("Unsupported datepart: {} (supported: year, month, day, week)", datepart),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Unsupported datepart: {} (supported: year, month, day, week)",
+                                            datepart
+                                        ),
+                                    });
+                                }
                             };
 
                             Ok(Value::Date(result))
@@ -4125,9 +4226,12 @@ impl QueryExecutor {
                             // Get datepart
                             let datepart = match &datepart_val {
                                 Value::Text(s) => s.to_lowercase(),
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATEDIFF requires datepart as first argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEDIFF requires datepart as first argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Parse start date
@@ -4135,9 +4239,16 @@ impl QueryExecutor {
                                 Value::Date(d) => *d,
                                 Value::Timestamp(ts) => ts.date(),
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -4145,9 +4256,12 @@ impl QueryExecutor {
                                         });
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATEDIFF requires date as second argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEDIFF requires date as second argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Parse end date
@@ -4155,9 +4269,16 @@ impl QueryExecutor {
                                 Value::Date(d) => *d,
                                 Value::Timestamp(ts) => ts.date(),
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -4165,30 +4286,35 @@ impl QueryExecutor {
                                         });
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATEDIFF requires date as third argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATEDIFF requires date as third argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Calculate difference
                             let result = match datepart.as_str() {
-                                "day" | "dd" | "d" => {
-                                    (end_date - start_date).num_days()
-                                }
-                                "week" | "ww" | "wk" => {
-                                    (end_date - start_date).num_weeks()
-                                }
+                                "day" | "dd" | "d" => (end_date - start_date).num_days(),
+                                "week" | "ww" | "wk" => (end_date - start_date).num_weeks(),
                                 "month" | "mm" | "m" => {
                                     let years_diff = end_date.year() - start_date.year();
-                                    let months_diff = end_date.month0() as i32 - start_date.month0() as i32;
+                                    let months_diff =
+                                        end_date.month0() as i32 - start_date.month0() as i32;
                                     (years_diff * 12 + months_diff) as i64
                                 }
                                 "year" | "yy" | "yyyy" => {
                                     (end_date.year() - start_date.year()) as i64
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: format!("Unsupported datepart: {} (supported: day, week, month, year)", datepart),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Unsupported datepart: {} (supported: day, week, month, year)",
+                                            datepart
+                                        ),
+                                    });
+                                }
                             };
 
                             Ok(Value::Integer(result))
@@ -4227,9 +4353,16 @@ impl QueryExecutor {
                                 Value::Date(d) => *d,
                                 Value::Timestamp(ts) => ts.date(),
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -4237,25 +4370,34 @@ impl QueryExecutor {
                                         });
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATE_ADD requires date as first argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_ADD requires date as first argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Get value to add
                             let value = match &value_val {
                                 Value::Integer(n) => *n,
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATE_ADD requires integer as second argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_ADD requires integer as second argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Get unit
                             let unit = match &unit_val {
                                 Value::Text(s) => s.to_uppercase(),
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATE_ADD requires unit as third argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_ADD requires unit as third argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Add the specified interval
@@ -4288,9 +4430,14 @@ impl QueryExecutor {
                                         date - chrono::Days::new((-value * 7) as u64)
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)",
+                                            unit
+                                        ),
+                                    });
+                                }
                             };
 
                             Ok(Value::Date(result))
@@ -4329,9 +4476,16 @@ impl QueryExecutor {
                                 Value::Date(d) => *d,
                                 Value::Timestamp(ts) => ts.date(),
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -4339,25 +4493,34 @@ impl QueryExecutor {
                                         });
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATE_SUB requires date as first argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_SUB requires date as first argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Get value to subtract
                             let value = match &value_val {
                                 Value::Integer(n) => *n,
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATE_SUB requires integer as second argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_SUB requires integer as second argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Get unit
                             let unit = match &unit_val {
                                 Value::Text(s) => s.to_uppercase(),
-                                _ => return Err(YamlBaseError::Database {
-                                    message: "DATE_SUB requires unit as third argument".to_string(),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: "DATE_SUB requires unit as third argument"
+                                            .to_string(),
+                                    });
+                                }
                             };
 
                             // Subtract the specified interval (reverse of DATE_ADD)
@@ -4390,9 +4553,14 @@ impl QueryExecutor {
                                         date + chrono::Days::new((-value * 7) as u64)
                                     }
                                 }
-                                _ => return Err(YamlBaseError::Database {
-                                    message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
-                                }),
+                                _ => {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)",
+                                            unit
+                                        ),
+                                    });
+                                }
                             };
 
                             Ok(Value::Date(result))
@@ -4842,14 +5010,18 @@ impl QueryExecutor {
         match expr {
             // If this is one of the GROUP BY expressions, return the group value
             _ if self.is_group_by_expr(expr, group_by_exprs) => {
-                let idx = self.get_group_by_expr_index(expr, group_by_exprs)
+                let idx = self
+                    .get_group_by_expr_index(expr, group_by_exprs)
                     .ok_or_else(|| YamlBaseError::Database {
                         message: "GROUP BY expression index not found".to_string(),
                     })?;
-                let value = group_values.get(idx).cloned()
-                    .ok_or_else(|| YamlBaseError::Database {
-                        message: "GROUP BY value index out of bounds".to_string(),
-                    })?;
+                let value =
+                    group_values
+                        .get(idx)
+                        .cloned()
+                        .ok_or_else(|| YamlBaseError::Database {
+                            message: "GROUP BY value index out of bounds".to_string(),
+                        })?;
                 let col_name = self.expr_to_string(expr);
                 let col_type = self.infer_value_type(&value);
                 Ok((col_name, col_type, value))
@@ -4864,14 +5036,18 @@ impl QueryExecutor {
             Expr::Identifier(ident) => {
                 // This should be one of the GROUP BY columns
                 if self.is_group_by_expr(expr, group_by_exprs) {
-                    let idx = self.get_group_by_expr_index(expr, group_by_exprs)
+                    let idx = self
+                        .get_group_by_expr_index(expr, group_by_exprs)
                         .ok_or_else(|| YamlBaseError::Database {
                             message: "GROUP BY expression index not found".to_string(),
                         })?;
-                    let value = group_values.get(idx).cloned()
-                        .ok_or_else(|| YamlBaseError::Database {
-                            message: "GROUP BY value index out of bounds".to_string(),
-                        })?;
+                    let value =
+                        group_values
+                            .get(idx)
+                            .cloned()
+                            .ok_or_else(|| YamlBaseError::Database {
+                                message: "GROUP BY value index out of bounds".to_string(),
+                            })?;
                     let col_type = self.infer_value_type(&value);
                     Ok((ident.value.clone(), col_type, value))
                 } else {
@@ -6731,16 +6907,16 @@ impl QueryExecutor {
         // Create a mapping of column names to their positions in joined rows
         let mut column_mapping = std::collections::HashMap::new();
         let mut position = 0;
-        
+
         for (table_name, table) in tables {
-            for (_col_idx, column) in table.columns.iter().enumerate() {
+            for column in table.columns.iter() {
                 let qualified_name = format!("{}.{}", table_name, column.name);
                 let unqualified_name = column.name.clone();
-                
+
                 column_mapping.insert(qualified_name.clone(), position);
                 // Only insert unqualified name if it doesn't already exist (avoid ambiguity)
                 column_mapping.entry(unqualified_name).or_insert(position);
-                
+
                 // Also add alias-based qualified names
                 for (alias, real_table_name) in table_aliases {
                     if real_table_name == table_name {
@@ -6748,7 +6924,7 @@ impl QueryExecutor {
                         column_mapping.insert(alias_qualified_name, position);
                     }
                 }
-                
+
                 position += 1;
             }
         }
@@ -6772,7 +6948,15 @@ impl QueryExecutor {
         match &select.group_by {
             GroupByExpr::Expressions(exprs, _) if !exprs.is_empty() => {
                 // GROUP BY aggregate with JOINs
-                return self.execute_joined_group_by_aggregate(select, &select.group_by, &filtered_rows, &column_mapping, table_aliases).await;
+                return self
+                    .execute_joined_group_by_aggregate(
+                        select,
+                        &select.group_by,
+                        &filtered_rows,
+                        &column_mapping,
+                        table_aliases,
+                    )
+                    .await;
             }
             GroupByExpr::All(_) => {
                 return Err(YamlBaseError::NotImplemented(
@@ -6789,27 +6973,39 @@ impl QueryExecutor {
         for (idx, item) in select.projection.iter().enumerate() {
             match item {
                 SelectItem::UnnamedExpr(expr) => {
-                    let (col_name, value) =
-                        self.evaluate_joined_aggregate_expr(expr, &filtered_rows, &column_mapping, idx)?;
+                    let (col_name, value) = self.evaluate_joined_aggregate_expr(
+                        expr,
+                        &filtered_rows,
+                        &column_mapping,
+                        idx,
+                    )?;
                     columns.push(col_name);
                     row_values.push(value);
                 }
                 SelectItem::ExprWithAlias { expr, alias } => {
-                    let (_, value) =
-                        self.evaluate_joined_aggregate_expr(expr, &filtered_rows, &column_mapping, idx)?;
+                    let (_, value) = self.evaluate_joined_aggregate_expr(
+                        expr,
+                        &filtered_rows,
+                        &column_mapping,
+                        idx,
+                    )?;
                     columns.push(alias.value.clone());
                     row_values.push(value);
                 }
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
-                        "Complex projections in joined aggregate queries are not supported".to_string(),
+                        "Complex projections in joined aggregate queries are not supported"
+                            .to_string(),
                     ));
                 }
             }
         }
 
         // Determine column types for aggregate results
-        let column_types = columns.iter().map(|_| crate::yaml::schema::SqlType::Integer).collect();
+        let column_types = columns
+            .iter()
+            .map(|_| crate::yaml::schema::SqlType::Integer)
+            .collect();
 
         let result = QueryResult {
             columns,
@@ -6830,11 +7026,14 @@ impl QueryExecutor {
     ) -> crate::Result<(String, Value)> {
         match expr {
             Expr::Function(func) => {
-                let func_name = func.name.0.iter()
+                let func_name = func
+                    .name
+                    .0
+                    .iter()
                     .map(|i| i.value.clone())
                     .collect::<Vec<_>>()
                     .join(".");
-                
+
                 match func_name.to_uppercase().as_str() {
                     "COUNT" => {
                         let count_value = Value::Integer(rows.len() as i64);
@@ -6843,68 +7042,105 @@ impl QueryExecutor {
                     "SUM" => {
                         // Extract the column name from SUM(column_name)
                         if let FunctionArguments::List(ref args) = func.args {
-                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) =
+                                args.args.first()
+                            {
+                                let values = self.extract_column_values_for_aggregate(
+                                    col_expr,
+                                    rows,
+                                    column_mapping,
+                                )?;
                                 let sum = self.calculate_sum(&values)?;
                                 Ok((format!("SUM({})", self.expr_to_string(col_expr)), sum))
                             } else {
-                                Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()))
+                                Err(YamlBaseError::NotImplemented(
+                                    "SUM requires a column argument".to_string(),
+                                ))
                             }
                         } else {
-                            Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()))
+                            Err(YamlBaseError::NotImplemented(
+                                "SUM requires a column argument".to_string(),
+                            ))
                         }
                     }
                     "AVG" => {
                         if let FunctionArguments::List(ref args) = func.args {
-                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) =
+                                args.args.first()
+                            {
+                                let values = self.extract_column_values_for_aggregate(
+                                    col_expr,
+                                    rows,
+                                    column_mapping,
+                                )?;
                                 let avg = self.calculate_avg(&values)?;
                                 Ok((format!("AVG({})", self.expr_to_string(col_expr)), avg))
                             } else {
-                                Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()))
+                                Err(YamlBaseError::NotImplemented(
+                                    "AVG requires a column argument".to_string(),
+                                ))
                             }
                         } else {
-                            Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()))
+                            Err(YamlBaseError::NotImplemented(
+                                "AVG requires a column argument".to_string(),
+                            ))
                         }
                     }
                     "MIN" => {
                         if let FunctionArguments::List(ref args) = func.args {
-                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) =
+                                args.args.first()
+                            {
+                                let values = self.extract_column_values_for_aggregate(
+                                    col_expr,
+                                    rows,
+                                    column_mapping,
+                                )?;
                                 let min = self.calculate_min(&values)?;
                                 Ok((format!("MIN({})", self.expr_to_string(col_expr)), min))
                             } else {
-                                Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()))
+                                Err(YamlBaseError::NotImplemented(
+                                    "MIN requires a column argument".to_string(),
+                                ))
                             }
                         } else {
-                            Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()))
+                            Err(YamlBaseError::NotImplemented(
+                                "MIN requires a column argument".to_string(),
+                            ))
                         }
                     }
                     "MAX" => {
                         if let FunctionArguments::List(ref args) = func.args {
-                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                let values = self.extract_column_values_for_aggregate(col_expr, rows, column_mapping)?;
+                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) =
+                                args.args.first()
+                            {
+                                let values = self.extract_column_values_for_aggregate(
+                                    col_expr,
+                                    rows,
+                                    column_mapping,
+                                )?;
                                 let max = self.calculate_max(&values)?;
                                 Ok((format!("MAX({})", self.expr_to_string(col_expr)), max))
                             } else {
-                                Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()))
+                                Err(YamlBaseError::NotImplemented(
+                                    "MAX requires a column argument".to_string(),
+                                ))
                             }
                         } else {
-                            Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()))
+                            Err(YamlBaseError::NotImplemented(
+                                "MAX requires a column argument".to_string(),
+                            ))
                         }
                     }
-                    _ => {
-                        Err(YamlBaseError::NotImplemented(
-                            format!("Aggregate function {} not supported in JOINs yet", func_name)
-                        ))
-                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Aggregate function {} not supported in JOINs yet",
+                        func_name
+                    ))),
                 }
             }
-            _ => {
-                Err(YamlBaseError::NotImplemented(
-                    "Non-function aggregates not supported in JOINs yet".to_string()
-                ))
-            }
+            _ => Err(YamlBaseError::NotImplemented(
+                "Non-function aggregates not supported in JOINs yet".to_string(),
+            )),
         }
     }
 
@@ -6926,18 +7162,20 @@ impl QueryExecutor {
         };
 
         // Create groups based on GROUP BY expressions
-        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>> = std::collections::HashMap::new();
-        
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>> =
+            std::collections::HashMap::new();
+
         for row in rows {
             let mut group_key = Vec::new();
-            
+
             // Evaluate each GROUP BY expression for this row
             for group_expr in group_exprs {
-                let group_value = self.evaluate_joined_group_expr(group_expr, row, column_mapping)?;
+                let group_value =
+                    self.evaluate_joined_group_expr(group_expr, row, column_mapping)?;
                 group_key.push(group_value);
             }
-            
-            groups.entry(group_key).or_insert_with(Vec::new).push(row.clone());
+
+            groups.entry(group_key).or_default().push(row.clone());
         }
 
         // Now aggregate each group
@@ -6951,9 +7189,21 @@ impl QueryExecutor {
                     if let Expr::Identifier(ident) = expr {
                         result_columns.push(ident.value.clone());
                     } else if let Expr::CompoundIdentifier(parts) = expr {
-                        result_columns.push(parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join("."));
+                        result_columns.push(
+                            parts
+                                .iter()
+                                .map(|p| p.value.clone())
+                                .collect::<Vec<_>>()
+                                .join("."),
+                        );
                     } else if let Expr::Function(func) = expr {
-                        let func_name = func.name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                        let func_name = func
+                            .name
+                            .0
+                            .iter()
+                            .map(|i| i.value.clone())
+                            .collect::<Vec<_>>()
+                            .join(".");
                         result_columns.push(func_name);
                     } else {
                         result_columns.push(format!("expr_{}", result_columns.len()));
@@ -6990,73 +7240,125 @@ impl QueryExecutor {
                                 }
                             }
                             Expr::Function(func) => {
-                                let func_name = func.name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                                let func_name = func
+                                    .name
+                                    .0
+                                    .iter()
+                                    .map(|i| i.value.clone())
+                                    .collect::<Vec<_>>()
+                                    .join(".");
                                 match func_name.to_uppercase().as_str() {
                                     "COUNT" => {
                                         result_row.push(Value::Integer(group_rows.len() as i64));
                                     }
                                     "SUM" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let sum = self.calculate_sum(&values)?;
                                                 result_row.push(sum);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "SUM requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "SUM requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     "AVG" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let avg = self.calculate_avg(&values)?;
                                                 result_row.push(avg);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "AVG requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "AVG requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     "MIN" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let min = self.calculate_min(&values)?;
                                                 result_row.push(min);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "MIN requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "MIN requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     "MAX" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let max = self.calculate_max(&values)?;
                                                 result_row.push(max);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "MAX requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "MAX requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     _ => {
-                                        return Err(YamlBaseError::NotImplemented(
-                                            format!("Aggregate function {} not supported in GROUP BY JOINs yet", func_name)
-                                        ));
+                                        return Err(YamlBaseError::NotImplemented(format!(
+                                            "Aggregate function {} not supported in GROUP BY JOINs yet",
+                                            func_name
+                                        )));
                                     }
                                 }
                             }
                             _ => {
                                 return Err(YamlBaseError::NotImplemented(
-                                    "Complex expressions in GROUP BY SELECT not supported".to_string(),
+                                    "Complex expressions in GROUP BY SELECT not supported"
+                                        .to_string(),
                                 ));
                             }
                         }
@@ -7073,73 +7375,125 @@ impl QueryExecutor {
                                 }
                             }
                             Expr::Function(func) => {
-                                let func_name = func.name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                                let func_name = func
+                                    .name
+                                    .0
+                                    .iter()
+                                    .map(|i| i.value.clone())
+                                    .collect::<Vec<_>>()
+                                    .join(".");
                                 match func_name.to_uppercase().as_str() {
                                     "COUNT" => {
                                         result_row.push(Value::Integer(group_rows.len() as i64));
                                     }
                                     "SUM" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let sum = self.calculate_sum(&values)?;
                                                 result_row.push(sum);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "SUM requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("SUM requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "SUM requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     "AVG" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let avg = self.calculate_avg(&values)?;
                                                 result_row.push(avg);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "AVG requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("AVG requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "AVG requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     "MIN" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let min = self.calculate_min(&values)?;
                                                 result_row.push(min);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "MIN requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("MIN requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "MIN requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     "MAX" => {
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_group_column_values(col_expr, &group_rows, column_mapping)?;
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self.extract_group_column_values(
+                                                    col_expr,
+                                                    &group_rows,
+                                                    column_mapping,
+                                                )?;
                                                 let max = self.calculate_max(&values)?;
                                                 result_row.push(max);
                                             } else {
-                                                return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                                return Err(YamlBaseError::NotImplemented(
+                                                    "MAX requires a column argument".to_string(),
+                                                ));
                                             }
                                         } else {
-                                            return Err(YamlBaseError::NotImplemented("MAX requires a column argument".to_string()));
+                                            return Err(YamlBaseError::NotImplemented(
+                                                "MAX requires a column argument".to_string(),
+                                            ));
                                         }
                                     }
                                     _ => {
-                                        return Err(YamlBaseError::NotImplemented(
-                                            format!("Aggregate function {} not supported in GROUP BY JOINs yet", func_name)
-                                        ));
+                                        return Err(YamlBaseError::NotImplemented(format!(
+                                            "Aggregate function {} not supported in GROUP BY JOINs yet",
+                                            func_name
+                                        )));
                                     }
                                 }
                             }
                             _ => {
                                 return Err(YamlBaseError::NotImplemented(
-                                    "Complex expressions in GROUP BY SELECT not supported".to_string(),
+                                    "Complex expressions in GROUP BY SELECT not supported"
+                                        .to_string(),
                                 ));
                             }
                         }
@@ -7155,7 +7509,10 @@ impl QueryExecutor {
             result_rows.push(result_row);
         }
 
-        let column_types = result_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
+        let column_types = result_columns
+            .iter()
+            .map(|_| crate::yaml::schema::SqlType::Text)
+            .collect();
 
         Ok(QueryResult {
             columns: result_columns,
@@ -7190,7 +7547,7 @@ impl QueryExecutor {
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_joined_expression(left, row, column_mapping)?;
                 let right_val = self.evaluate_joined_expression(right, row, column_mapping)?;
-                
+
                 match op {
                     BinaryOperator::Eq => Ok(left_val == right_val),
                     BinaryOperator::NotEq => Ok(left_val != right_val),
@@ -7208,9 +7565,10 @@ impl QueryExecutor {
                         let right_bool = self.convert_value_to_bool(&right_val);
                         Ok(left_bool || right_bool)
                     }
-                    _ => Err(YamlBaseError::NotImplemented(
-                        format!("Binary operator {:?} not supported in WHERE clause for joined rows", op)
-                    )),
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not supported in WHERE clause for joined rows",
+                        op
+                    ))),
                 }
             }
             _ => {
@@ -7253,7 +7611,11 @@ impl QueryExecutor {
                 }
             }
             Expr::CompoundIdentifier(parts) => {
-                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                let qualified_name = parts
+                    .iter()
+                    .map(|p| p.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".");
                 if let Some(&col_idx) = column_mapping.get(&qualified_name) {
                     Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                 } else {
@@ -7263,9 +7625,10 @@ impl QueryExecutor {
                 }
             }
             Expr::Value(v) => Ok(self.sql_value_to_db_value(v)?),
-            _ => Err(YamlBaseError::NotImplemented(
-                format!("Expression {:?} not supported in WHERE clause for joined rows", expr)
-            )),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Expression {:?} not supported in WHERE clause for joined rows",
+                expr
+            ))),
         }
     }
 
@@ -7288,7 +7651,11 @@ impl QueryExecutor {
                 }
             }
             Expr::CompoundIdentifier(parts) => {
-                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                let qualified_name = parts
+                    .iter()
+                    .map(|p| p.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".");
                 if let Some(&col_idx) = column_mapping.get(&qualified_name) {
                     Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                 } else {
@@ -7297,14 +7664,12 @@ impl QueryExecutor {
                     })
                 }
             }
-            _ => {
-                Err(YamlBaseError::NotImplemented(
-                    "Complex GROUP BY expressions not supported yet".to_string(),
-                ))
-            }
+            _ => Err(YamlBaseError::NotImplemented(
+                "Complex GROUP BY expressions not supported yet".to_string(),
+            )),
         }
     }
-    
+
     // Helper method to extract column values for aggregate calculations
     fn extract_column_values_for_aggregate(
         &self,
@@ -7313,7 +7678,7 @@ impl QueryExecutor {
         column_mapping: &std::collections::HashMap<String, usize>,
     ) -> crate::Result<Vec<Value>> {
         let mut values = Vec::new();
-        
+
         for row in rows {
             let value = match col_expr {
                 Expr::Identifier(ident) => {
@@ -7321,27 +7686,48 @@ impl QueryExecutor {
                     if let Some(&col_idx) = column_mapping.get(&col_name) {
                         row.get(col_idx).cloned().unwrap_or(Value::Null)
                     } else {
-                        return Err(YamlBaseError::Database { message: format!("Column '{}' not found in joined result", col_name) });
+                        return Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in joined result", col_name),
+                        });
                     }
                 }
                 Expr::CompoundIdentifier(parts) => {
-                    let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                    let qualified_name = parts
+                        .iter()
+                        .map(|p| p.value.clone())
+                        .collect::<Vec<_>>()
+                        .join(".");
                     if let Some(&col_idx) = column_mapping.get(&qualified_name) {
                         row.get(col_idx).cloned().unwrap_or(Value::Null)
                     } else {
-                        return Err(YamlBaseError::Database { message: format!("Column '{}' not found in joined result", qualified_name) });
+                        return Err(YamlBaseError::Database {
+                            message: format!(
+                                "Column '{}' not found in joined result",
+                                qualified_name
+                            ),
+                        });
                     }
                 }
                 // Support for complex expressions in aggregates
                 Expr::BinaryOp { left, op, right } => {
                     // Evaluate binary operations like price * quantity, amount + tax, etc.
-                    let left_val = self.extract_column_values_for_aggregate(left, &[row.clone()], column_mapping)?;
-                    let right_val = self.extract_column_values_for_aggregate(right, &[row.clone()], column_mapping)?;
-                    
+                    let left_val = self.extract_column_values_for_aggregate(
+                        left,
+                        &[row.clone()],
+                        column_mapping,
+                    )?;
+                    let right_val = self.extract_column_values_for_aggregate(
+                        right,
+                        &[row.clone()],
+                        column_mapping,
+                    )?;
+
                     if left_val.is_empty() || right_val.is_empty() {
-                        return Err(YamlBaseError::Database { message: "Invalid operands in aggregate expression".to_string() });
+                        return Err(YamlBaseError::Database {
+                            message: "Invalid operands in aggregate expression".to_string(),
+                        });
                     }
-                    
+
                     self.evaluate_arithmetic_operation(&left_val[0], op, &right_val[0])?
                 }
                 Expr::Value(val) => {
@@ -7353,147 +7739,202 @@ impl QueryExecutor {
                             } else if let Ok(float_val) = n.parse::<f64>() {
                                 Value::Float(float_val as f32)
                             } else {
-                                return Err(YamlBaseError::Database { message: format!("Invalid number: {}", n) });
+                                return Err(YamlBaseError::Database {
+                                    message: format!("Invalid number: {}", n),
+                                });
                             }
                         }
                         sqlparser::ast::Value::SingleQuotedString(s) => Value::Text(s.clone()),
                         sqlparser::ast::Value::Boolean(b) => Value::Boolean(*b),
                         sqlparser::ast::Value::Null => Value::Null,
-                        _ => return Err(YamlBaseError::Database { message: "Unsupported literal value in aggregate".to_string() }),
+                        _ => {
+                            return Err(YamlBaseError::Database {
+                                message: "Unsupported literal value in aggregate".to_string(),
+                            });
+                        }
                     }
                 }
                 Expr::UnaryOp { op, expr } => {
                     // Support unary operations like -price, +amount
-                    let operand_vals = self.extract_column_values_for_aggregate(expr, &[row.clone()], column_mapping)?;
+                    let operand_vals = self.extract_column_values_for_aggregate(
+                        expr,
+                        &[row.clone()],
+                        column_mapping,
+                    )?;
                     if operand_vals.is_empty() {
-                        return Err(YamlBaseError::Database { message: "Invalid operand in unary operation".to_string() });
+                        return Err(YamlBaseError::Database {
+                            message: "Invalid operand in unary operation".to_string(),
+                        });
                     }
-                    
+
                     match op {
                         UnaryOperator::Plus => operand_vals[0].clone(),
-                        UnaryOperator::Minus => {
-                            match &operand_vals[0] {
-                                Value::Integer(i) => Value::Integer(-i),
-                                Value::Float(f) => Value::Float(-f),
-                                Value::Decimal(d) => Value::Decimal(-d),
-                                _ => return Err(YamlBaseError::Database { message: "Cannot apply unary minus to non-numeric value".to_string() }),
+                        UnaryOperator::Minus => match &operand_vals[0] {
+                            Value::Integer(i) => Value::Integer(-i),
+                            Value::Float(f) => Value::Float(-f),
+                            Value::Decimal(d) => Value::Decimal(-d),
+                            _ => {
+                                return Err(YamlBaseError::Database {
+                                    message: "Cannot apply unary minus to non-numeric value"
+                                        .to_string(),
+                                });
                             }
+                        },
+                        _ => {
+                            return Err(YamlBaseError::NotImplemented(format!(
+                                "Unary operator {:?} not supported in aggregates",
+                                op
+                            )));
                         }
-                        _ => return Err(YamlBaseError::NotImplemented(format!("Unary operator {:?} not supported in aggregates", op))),
                     }
                 }
                 _ => {
-                    return Err(YamlBaseError::NotImplemented(format!("Expression type {:?} not yet supported in aggregates", col_expr)));
+                    return Err(YamlBaseError::NotImplemented(format!(
+                        "Expression type {:?} not yet supported in aggregates",
+                        col_expr
+                    )));
                 }
             };
             values.push(value);
         }
-        
+
         Ok(values)
     }
-    
+
     // Helper method to evaluate arithmetic operations for complex expressions in aggregates
-    fn evaluate_arithmetic_operation(&self, left: &Value, op: &BinaryOperator, right: &Value) -> crate::Result<Value> {
+    fn evaluate_arithmetic_operation(
+        &self,
+        left: &Value,
+        op: &BinaryOperator,
+        right: &Value,
+    ) -> crate::Result<Value> {
         match op {
-            BinaryOperator::Plus => {
-                match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
-                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-                    (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a + b)),
-                    (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 + b)),
-                    (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f32)),
-                    (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + b)),
-                    (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Decimal(a + rust_decimal::Decimal::from(*b))),
-                    _ => Err(YamlBaseError::Database { message: "Cannot add non-numeric values".to_string() }),
+            BinaryOperator::Plus => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a + b)),
+                (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 + b)),
+                (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f32)),
+                (Value::Integer(a), Value::Decimal(b)) => {
+                    Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + b))
                 }
-            }
-            BinaryOperator::Minus => {
-                match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
-                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-                    (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a - b)),
-                    (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 - b)),
-                    (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f32)),
-                    (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Decimal(rust_decimal::Decimal::from(*a) - b)),
-                    (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Decimal(a - rust_decimal::Decimal::from(*b))),
-                    _ => Err(YamlBaseError::Database { message: "Cannot subtract non-numeric values".to_string() }),
+                (Value::Decimal(a), Value::Integer(b)) => {
+                    Ok(Value::Decimal(a + rust_decimal::Decimal::from(*b)))
                 }
-            }
-            BinaryOperator::Multiply => {
-                match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
-                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-                    (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a * b)),
-                    (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 * b)),
-                    (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a * *b as f32)),
-                    (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Decimal(rust_decimal::Decimal::from(*a) * b)),
-                    (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Decimal(a * rust_decimal::Decimal::from(*b))),
-                    _ => Err(YamlBaseError::Database { message: "Cannot multiply non-numeric values".to_string() }),
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot add non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Minus => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+                (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a - b)),
+                (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 - b)),
+                (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f32)),
+                (Value::Integer(a), Value::Decimal(b)) => {
+                    Ok(Value::Decimal(rust_decimal::Decimal::from(*a) - b))
                 }
-            }
-            BinaryOperator::Divide => {
-                match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) => {
-                        if *b == 0 {
-                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
-                        } else {
-                            Ok(Value::Float(*a as f32 / *b as f32))
-                        }
-                    }
-                    (Value::Float(a), Value::Float(b)) => {
-                        if *b == 0.0 {
-                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
-                        } else {
-                            Ok(Value::Float(a / b))
-                        }
-                    }
-                    (Value::Decimal(a), Value::Decimal(b)) => {
-                        if *b == rust_decimal::Decimal::ZERO {
-                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
-                        } else {
-                            Ok(Value::Decimal(a / b))
-                        }
-                    }
-                    (Value::Integer(a), Value::Float(b)) => {
-                        if *b == 0.0 {
-                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
-                        } else {
-                            Ok(Value::Float(*a as f32 / b))
-                        }
-                    }
-                    (Value::Float(a), Value::Integer(b)) => {
-                        if *b == 0 {
-                            Err(YamlBaseError::Database { message: "Division by zero".to_string() })
-                        } else {
-                            Ok(Value::Float(a / *b as f32))
-                        }
-                    }
-                    _ => Err(YamlBaseError::Database { message: "Cannot divide non-numeric values".to_string() }),
+                (Value::Decimal(a), Value::Integer(b)) => {
+                    Ok(Value::Decimal(a - rust_decimal::Decimal::from(*b)))
                 }
-            }
-            BinaryOperator::Modulo => {
-                match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) => {
-                        if *b == 0 {
-                            Err(YamlBaseError::Database { message: "Modulo by zero".to_string() })
-                        } else {
-                            Ok(Value::Integer(a % b))
-                        }
-                    }
-                    _ => Err(YamlBaseError::Database { message: "Modulo operation only supported for integers".to_string() }),
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot subtract non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Multiply => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+                (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a * b)),
+                (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 * b)),
+                (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a * *b as f32)),
+                (Value::Integer(a), Value::Decimal(b)) => {
+                    Ok(Value::Decimal(rust_decimal::Decimal::from(*a) * b))
                 }
-            }
-            _ => Err(YamlBaseError::NotImplemented(format!("Binary operator {:?} not supported in aggregates", op))),
+                (Value::Decimal(a), Value::Integer(b)) => {
+                    Ok(Value::Decimal(a * rust_decimal::Decimal::from(*b)))
+                }
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot multiply non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Divide => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => {
+                    if *b == 0 {
+                        Err(YamlBaseError::Database {
+                            message: "Division by zero".to_string(),
+                        })
+                    } else {
+                        Ok(Value::Float(*a as f32 / *b as f32))
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(YamlBaseError::Database {
+                            message: "Division by zero".to_string(),
+                        })
+                    } else {
+                        Ok(Value::Float(a / b))
+                    }
+                }
+                (Value::Decimal(a), Value::Decimal(b)) => {
+                    if *b == rust_decimal::Decimal::ZERO {
+                        Err(YamlBaseError::Database {
+                            message: "Division by zero".to_string(),
+                        })
+                    } else {
+                        Ok(Value::Decimal(a / b))
+                    }
+                }
+                (Value::Integer(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(YamlBaseError::Database {
+                            message: "Division by zero".to_string(),
+                        })
+                    } else {
+                        Ok(Value::Float(*a as f32 / b))
+                    }
+                }
+                (Value::Float(a), Value::Integer(b)) => {
+                    if *b == 0 {
+                        Err(YamlBaseError::Database {
+                            message: "Division by zero".to_string(),
+                        })
+                    } else {
+                        Ok(Value::Float(a / *b as f32))
+                    }
+                }
+                _ => Err(YamlBaseError::Database {
+                    message: "Cannot divide non-numeric values".to_string(),
+                }),
+            },
+            BinaryOperator::Modulo => match (left, right) {
+                (Value::Integer(a), Value::Integer(b)) => {
+                    if *b == 0 {
+                        Err(YamlBaseError::Database {
+                            message: "Modulo by zero".to_string(),
+                        })
+                    } else {
+                        Ok(Value::Integer(a % b))
+                    }
+                }
+                _ => Err(YamlBaseError::Database {
+                    message: "Modulo operation only supported for integers".to_string(),
+                }),
+            },
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Binary operator {:?} not supported in aggregates",
+                op
+            ))),
         }
     }
-    
+
     // Calculate SUM of numeric values
     fn calculate_sum(&self, values: &[Value]) -> crate::Result<Value> {
         let mut sum_int: i64 = 0;
         let mut sum_float: f64 = 0.0;
         let mut has_float = false;
         let mut count = 0;
-        
+
         for value in values {
             match value {
                 Value::Integer(i) => {
@@ -7524,10 +7965,13 @@ impl QueryExecutor {
                 }
                 Value::Decimal(d) => {
                     // Convert Decimal to f64 for summing
-                    let decimal_f64 = d.to_string().parse::<f64>()
-                        .map_err(|_| YamlBaseError::Database { 
-                            message: "Failed to convert Decimal to f64 for SUM calculation".to_string() 
-                        })?;
+                    let decimal_f64 =
+                        d.to_string()
+                            .parse::<f64>()
+                            .map_err(|_| YamlBaseError::Database {
+                                message: "Failed to convert Decimal to f64 for SUM calculation"
+                                    .to_string(),
+                            })?;
                     if !has_float {
                         sum_float = sum_int as f64 + decimal_f64;
                         has_float = true;
@@ -7538,11 +7982,13 @@ impl QueryExecutor {
                 }
                 Value::Null => {} // Skip NULL values
                 _ => {
-                    return Err(YamlBaseError::Database { message: "SUM can only be applied to numeric columns".to_string() });
+                    return Err(YamlBaseError::Database {
+                        message: "SUM can only be applied to numeric columns".to_string(),
+                    });
                 }
             }
         }
-        
+
         if count == 0 {
             Ok(Value::Null)
         } else if has_float {
@@ -7551,12 +7997,12 @@ impl QueryExecutor {
             Ok(Value::Integer(sum_int))
         }
     }
-    
+
     // Calculate AVG of numeric values
     fn calculate_avg(&self, values: &[Value]) -> crate::Result<Value> {
         let mut sum: f64 = 0.0;
         let mut count = 0;
-        
+
         for value in values {
             match value {
                 Value::Integer(i) => {
@@ -7573,36 +8019,41 @@ impl QueryExecutor {
                 }
                 Value::Decimal(d) => {
                     // Convert Decimal to f64 for averaging
-                    let decimal_f64 = d.to_string().parse::<f64>()
-                        .map_err(|_| YamlBaseError::Database { 
-                            message: "Failed to convert Decimal to f64 for AVG calculation".to_string() 
-                        })?;
+                    let decimal_f64 =
+                        d.to_string()
+                            .parse::<f64>()
+                            .map_err(|_| YamlBaseError::Database {
+                                message: "Failed to convert Decimal to f64 for AVG calculation"
+                                    .to_string(),
+                            })?;
                     sum += decimal_f64;
                     count += 1;
                 }
                 Value::Null => {} // Skip NULL values
                 _ => {
-                    return Err(YamlBaseError::Database { message: "AVG can only be applied to numeric columns".to_string() });
+                    return Err(YamlBaseError::Database {
+                        message: "AVG can only be applied to numeric columns".to_string(),
+                    });
                 }
             }
         }
-        
+
         if count == 0 {
             Ok(Value::Null)
         } else {
             Ok(Value::Double(sum / count as f64))
         }
     }
-    
+
     // Calculate MIN of comparable values
     fn calculate_min(&self, values: &[Value]) -> crate::Result<Value> {
         let mut min_value: Option<Value> = None;
-        
+
         for value in values {
             if let Value::Null = value {
                 continue; // Skip NULL values
             }
-            
+
             match &min_value {
                 None => min_value = Some(value.clone()),
                 Some(current_min) => {
@@ -7612,19 +8063,19 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         Ok(min_value.unwrap_or(Value::Null))
     }
-    
+
     // Calculate MAX of comparable values
     fn calculate_max(&self, values: &[Value]) -> crate::Result<Value> {
         let mut max_value: Option<Value> = None;
-        
+
         for value in values {
             if let Value::Null = value {
                 continue; // Skip NULL values
             }
-            
+
             match &max_value {
                 None => max_value = Some(value.clone()),
                 Some(current_max) => {
@@ -7634,7 +8085,7 @@ impl QueryExecutor {
                 }
             }
         }
-        
+
         Ok(max_value.unwrap_or(Value::Null))
     }
 
@@ -7646,7 +8097,7 @@ impl QueryExecutor {
         column_map: &std::collections::HashMap<String, usize>,
     ) -> crate::Result<Vec<Value>> {
         let mut values = Vec::new();
-        
+
         for row in rows {
             let value = match col_expr {
                 Expr::Identifier(ident) => {
@@ -7654,48 +8105,76 @@ impl QueryExecutor {
                     if let Some(&col_idx) = column_map.get(&col_name) {
                         row.get(col_idx).cloned().unwrap_or(Value::Null)
                     } else {
-                        return Err(YamlBaseError::Database { 
-                            message: format!("Column '{}' not found in CTE result", col_name) 
+                        return Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in CTE result", col_name),
                         });
                     }
                 }
                 Expr::CompoundIdentifier(parts) => {
-                    let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                    let qualified_name = parts
+                        .iter()
+                        .map(|p| p.value.clone())
+                        .collect::<Vec<_>>()
+                        .join(".");
                     if let Some(&col_idx) = column_map.get(&qualified_name) {
                         row.get(col_idx).cloned().unwrap_or(Value::Null)
                     } else {
-                        return Err(YamlBaseError::Database { 
-                            message: format!("Column '{}' not found in CTE result", qualified_name) 
+                        return Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in CTE result", qualified_name),
                         });
                     }
                 }
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
-                        "Complex expressions in CTE aggregates not yet supported".to_string()
+                        "Complex expressions in CTE aggregates not yet supported".to_string(),
                     ));
                 }
             };
             values.push(value);
         }
-        
+
         Ok(values)
     }
-    
+
     // Helper method to compare two values for MIN/MAX calculations
     fn compare_values(&self, a: &Value, b: &Value) -> crate::Result<i32> {
         match (a, b) {
             (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b) as i32),
-            (Value::Integer(a), Value::Float(b)) => Ok((*a as f32).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Integer(a), Value::Double(b)) => Ok((*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Float(a), Value::Integer(b)) => Ok(a.partial_cmp(&(*b as f32)).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Float(a), Value::Float(b)) => Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Float(a), Value::Double(b)) => Ok((*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Double(a), Value::Integer(b)) => Ok(a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Double(a), Value::Float(b)) => Ok(a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal) as i32),
-            (Value::Double(a), Value::Double(b)) => Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32),
+            (Value::Integer(a), Value::Float(b)) => Ok((*a as f32)
+                .partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                as i32),
+            (Value::Integer(a), Value::Double(b)) => Ok((*a as f64)
+                .partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                as i32),
+            (Value::Float(a), Value::Integer(b)) => {
+                Ok(a.partial_cmp(&(*b as f32))
+                    .unwrap_or(std::cmp::Ordering::Equal) as i32)
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32)
+            }
+            (Value::Float(a), Value::Double(b)) => Ok((*a as f64)
+                .partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                as i32),
+            (Value::Double(a), Value::Integer(b)) => {
+                Ok(a.partial_cmp(&(*b as f64))
+                    .unwrap_or(std::cmp::Ordering::Equal) as i32)
+            }
+            (Value::Double(a), Value::Float(b)) => {
+                Ok(a.partial_cmp(&(*b as f64))
+                    .unwrap_or(std::cmp::Ordering::Equal) as i32)
+            }
+            (Value::Double(a), Value::Double(b)) => {
+                Ok(a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal) as i32)
+            }
             (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b) as i32),
             (Value::Date(a), Value::Date(b)) => Ok(a.cmp(b) as i32),
-            _ => Err(YamlBaseError::Database { message: "Cannot compare incompatible types".to_string() }),
+            _ => Err(YamlBaseError::Database {
+                message: "Cannot compare incompatible types".to_string(),
+            }),
         }
     }
 
@@ -7715,17 +8194,35 @@ impl QueryExecutor {
         // Execute each CTE in order - CTEs can reference previously defined CTEs
         for cte_table in &with.cte_tables {
             let cte_name = cte_table.alias.name.value.clone();
-            debug!("Executing CTE: {} (with {} existing CTEs available)", cte_name, cte_results.len());
+            debug!(
+                "Executing CTE: {} (with {} existing CTEs available)",
+                cte_name,
+                cte_results.len()
+            );
 
             // Execute the CTE query with access to previously defined CTEs
             let cte_result = match &cte_table.query.body.as_ref() {
                 SetExpr::Select(select) => {
                     // Pass the current CTE results so this CTE can reference previous ones
-                    self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results).await?
+                    self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results)
+                        .await?
                 }
-                SetExpr::SetOperation { op, set_quantifier, left, right } => {
+                SetExpr::SetOperation {
+                    op,
+                    set_quantifier,
+                    left,
+                    right,
+                } => {
                     // Handle UNION, UNION ALL, INTERSECT, EXCEPT operations within CTEs
-                    self.execute_cte_set_operation(db, op, set_quantifier, left, right, &cte_results).await?
+                    self.execute_cte_set_operation(
+                        db,
+                        op,
+                        set_quantifier,
+                        left,
+                        right,
+                        &cte_results,
+                    )
+                    .await?
                 }
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
@@ -7736,13 +8233,18 @@ impl QueryExecutor {
 
             // Store the CTE result for later reference by subsequent CTEs and main query
             cte_results.insert(cte_name.clone(), cte_result);
-            debug!("CTE {} executed successfully, now {} CTEs available", cte_name, cte_results.len());
+            debug!(
+                "CTE {} executed successfully, now {} CTEs available",
+                cte_name,
+                cte_results.len()
+            );
         }
 
         // Now execute the main query with CTE results available
         match &query.body.as_ref() {
             SetExpr::Select(select) => {
-                self.execute_select_with_cte_context(db, select, query, &cte_results).await
+                self.execute_select_with_cte_context(db, select, query, &cte_results)
+                    .await
             }
             _ => Err(YamlBaseError::NotImplemented(
                 "Only SELECT queries are supported with CTEs".to_string(),
@@ -7784,11 +8286,16 @@ impl QueryExecutor {
 
         // Handle CTE references - support both single table and JOIN queries with CTE references
         // Check if query has any JOINs
-        let has_joins = select.from.iter().any(|table_with_joins| !table_with_joins.joins.is_empty());
-        
+        let has_joins = select
+            .from
+            .iter()
+            .any(|table_with_joins| !table_with_joins.joins.is_empty());
+
         if has_joins || select.from.len() > 1 {
             // Handle complex queries with JOINs involving CTEs
-            return self.execute_complex_cte_query(db, select, query, cte_results).await;
+            return self
+                .execute_complex_cte_query(db, select, query, cte_results)
+                .await;
         }
 
         let table_with_joins = &select.from[0];
@@ -7806,12 +8313,17 @@ impl QueryExecutor {
 
                 // Apply WHERE clause filtering if present
                 if let Some(where_expr) = &select.selection {
-                    result_rows = self.filter_rows_with_columns(&result_rows, &result_columns, where_expr)?;
+                    result_rows =
+                        self.filter_rows_with_columns(&result_rows, &result_columns, where_expr)?;
                 }
 
                 // Apply ORDER BY if present
                 if let Some(order_by) = &query.order_by {
-                    result_rows = self.sort_rows_with_columns(&result_rows, &result_columns, &order_by.exprs)?;
+                    result_rows = self.sort_rows_with_columns(
+                        &result_rows,
+                        &result_columns,
+                        &order_by.exprs,
+                    )?;
                 }
 
                 // Apply LIMIT if present
@@ -7821,14 +8333,22 @@ impl QueryExecutor {
                 }
 
                 // Handle SELECT items - support SELECT *, specific columns, and expressions
-                let (selected_columns, projection_items) = self.process_cte_projection(&select.projection, &result_columns)?;
-                
+                let (selected_columns, projection_items) =
+                    self.process_cte_projection(&select.projection, &result_columns)?;
+
                 // Check if we have aggregate functions like COUNT(*) without GROUP BY
                 let has_aggregates = projection_items.iter().any(|item| {
-                    if let CteProjectionItem::Expression(Expr::Function(func)) = item {
-                        if let Some(first_part) = func.name.0.first() {
-                            let func_name = first_part.value.to_uppercase();
-                            matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                    if let CteProjectionItem::Expression(expr) = item {
+                        if let Expr::Function(func) = expr.as_ref() {
+                            if let Some(first_part) = func.name.0.first() {
+                                let func_name = first_part.value.to_uppercase();
+                                matches!(
+                                    func_name.as_str(),
+                                    "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+                                )
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
@@ -7836,19 +8356,23 @@ impl QueryExecutor {
                         false
                     }
                 });
-                
+
                 let projected_rows: Vec<Vec<Value>> = if has_aggregates {
                     // For aggregate functions without GROUP BY, return one row with aggregated values
-                    let aggregated_row: Vec<Value> = projection_items.iter()
+                    let aggregated_row: Vec<Value> = projection_items
+                        .iter()
                         .map(|item| match item {
                             CteProjectionItem::Column(_) => {
                                 // Can't mix aggregates with non-aggregate columns without GROUP BY
                                 Value::Null
                             }
                             CteProjectionItem::Expression(expr) => {
-                                match expr {
+                                match expr.as_ref() {
                                     Expr::Function(func) => {
-                                        let func_name = func.name.0.iter()
+                                        let func_name = func
+                                            .name
+                                            .0
+                                            .iter()
                                             .map(|i| i.value.clone())
                                             .collect::<Vec<_>>()
                                             .join(".");
@@ -7871,11 +8395,15 @@ impl QueryExecutor {
                     vec![aggregated_row]
                 } else {
                     // Non-aggregate projection - process each row
-                    result_rows.into_iter()
+                    result_rows
+                        .into_iter()
                         .map(|row| {
-                            projection_items.iter()
+                            projection_items
+                                .iter()
                                 .map(|item| match item {
-                                    CteProjectionItem::Column(idx) => row.get(*idx).cloned().unwrap_or(Value::Null),
+                                    CteProjectionItem::Column(idx) => {
+                                        row.get(*idx).cloned().unwrap_or(Value::Null)
+                                    }
                                     CteProjectionItem::Expression(_expr) => {
                                         // Non-aggregate expressions not yet fully supported
                                         Value::Null
@@ -7887,8 +8415,11 @@ impl QueryExecutor {
                 };
 
                 // For CTE results, we need to infer column types
-                let column_types = selected_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
-                
+                let column_types = selected_columns
+                    .iter()
+                    .map(|_| crate::yaml::schema::SqlType::Text)
+                    .collect();
+
                 return Ok(QueryResult {
                     columns: selected_columns,
                     column_types,
@@ -7916,16 +8447,25 @@ impl QueryExecutor {
 
         // Check if query uses GROUP BY (aggregate functions)
         if !matches!(select.group_by, GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty()) {
-            return self.execute_cte_aggregate_query(&mut combined_context, select, query).await;
+            return self
+                .execute_cte_aggregate_query(&mut combined_context, select, query)
+                .await;
         }
 
         // Handle JOIN operations with CTEs
-        if select.from.iter().any(|table_with_joins| !table_with_joins.joins.is_empty()) {
-            return self.execute_cte_join_query(&mut combined_context, select, query).await;
+        if select
+            .from
+            .iter()
+            .any(|table_with_joins| !table_with_joins.joins.is_empty())
+        {
+            return self
+                .execute_cte_join_query(&mut combined_context, select, query)
+                .await;
         }
 
         // Handle other complex cases (subqueries, etc.)
-        self.execute_cte_complex_select(&mut combined_context, select, query).await
+        self.execute_cte_complex_select(&mut combined_context, select, query)
+            .await
     }
 
     // Execute CTE queries with aggregate functions (GROUP BY, COUNT, SUM, etc.)
@@ -7936,22 +8476,30 @@ impl QueryExecutor {
         _query: &Query,
     ) -> crate::Result<QueryResult> {
         debug!("Executing CTE aggregate query with GROUP BY");
-        
+
         // Handle both single table and JOIN scenarios with aggregates
-        let has_joins = select.from.iter().any(|table_with_joins| !table_with_joins.joins.is_empty());
-        
+        let has_joins = select
+            .from
+            .iter()
+            .any(|table_with_joins| !table_with_joins.joins.is_empty());
+
         if has_joins {
             // Execute JOINs first, then apply GROUP BY aggregation
-            let joined_data = self.execute_cte_join_without_aggregation(context, select).await?;
+            let joined_data = self
+                .execute_cte_join_without_aggregation(context, select)
+                .await?;
             self.apply_group_by_aggregation(&joined_data, select).await
         } else {
             // Single table with GROUP BY
             if select.from.len() == 1 {
-                let table_data = self.get_table_data_from_context(context, &select.from[0].relation).await?;
+                let table_data = self
+                    .get_table_data_from_context(context, &select.from[0].relation)
+                    .await?;
                 self.apply_group_by_aggregation(&table_data, select).await
             } else {
                 Err(YamlBaseError::NotImplemented(
-                    "Multiple tables without explicit JOINs not supported in CTE aggregates".to_string(),
+                    "Multiple tables without explicit JOINs not supported in CTE aggregates"
+                        .to_string(),
                 ))
             }
         }
@@ -7965,7 +8513,7 @@ impl QueryExecutor {
         query: &Query,
     ) -> crate::Result<QueryResult> {
         debug!("Executing CTE JOIN query");
-        
+
         // Get the base table (first FROM item)
         if select.from.is_empty() {
             return Err(YamlBaseError::Database {
@@ -7974,25 +8522,27 @@ impl QueryExecutor {
         }
 
         let base_table = &select.from[0];
-        let result_data = self.get_table_data_from_context(context, &base_table.relation).await?;
+        let result_data = self
+            .get_table_data_from_context(context, &base_table.relation)
+            .await?;
         let mut result_columns = result_data.columns.clone();
         let mut result_rows = result_data.rows.clone();
 
         // Process each JOIN
         for join in &base_table.joins {
-            let join_data = self.get_table_data_from_context(context, &join.relation).await?;
-            
+            let join_data = self
+                .get_table_data_from_context(context, &join.relation)
+                .await?;
+
             // Extract JOIN condition based on sqlparser structure
             let join_condition = match &join.join_operator {
-                JoinOperator::Inner(constraint) |
-                JoinOperator::LeftOuter(constraint) |
-                JoinOperator::RightOuter(constraint) |
-                JoinOperator::FullOuter(constraint) => {
-                    match constraint {
-                        JoinConstraint::On(expr) => Some(expr),
-                        _ => None,
-                    }
-                }
+                JoinOperator::Inner(constraint)
+                | JoinOperator::LeftOuter(constraint)
+                | JoinOperator::RightOuter(constraint)
+                | JoinOperator::FullOuter(constraint) => match constraint {
+                    JoinConstraint::On(expr) => Some(expr),
+                    _ => None,
+                },
                 _ => None,
             };
 
@@ -8011,12 +8561,8 @@ impl QueryExecutor {
         }
 
         // Apply WHERE, ORDER BY, LIMIT, and projection
-        self.apply_cte_query_clauses(
-            result_rows,
-            result_columns,
-            select,
-            query,
-        ).await
+        self.apply_cte_query_clauses(result_rows, result_columns, select, query)
+            .await
     }
 
     // Execute other complex CTE SELECT operations
@@ -8027,35 +8573,41 @@ impl QueryExecutor {
         query: &Query,
     ) -> crate::Result<QueryResult> {
         debug!("Executing complex CTE SELECT");
-        
+
         // Handle single table case with potential subqueries
         if select.from.len() == 1 {
-            let table_data = self.get_table_data_from_context(context, &select.from[0].relation).await?;
-            return self.apply_cte_query_clauses(
-                table_data.rows,
-                table_data.columns,
-                select,
-                query,
-            ).await;
+            let table_data = self
+                .get_table_data_from_context(context, &select.from[0].relation)
+                .await?;
+            return self
+                .apply_cte_query_clauses(table_data.rows, table_data.columns, select, query)
+                .await;
         }
 
         // Handle multi-table cases (comma-separated tables for Cartesian products)
         if select.from.len() > 1 {
-            debug!("Handling multi-table CTE query with {} tables", select.from.len());
-            
+            debug!(
+                "Handling multi-table CTE query with {} tables",
+                select.from.len()
+            );
+
             // Get the first table as the base
-            let first_table_data = self.get_table_data_from_context(context, &select.from[0].relation).await?;
+            let first_table_data = self
+                .get_table_data_from_context(context, &select.from[0].relation)
+                .await?;
             let mut result_rows = first_table_data.rows;
             let mut result_columns = first_table_data.columns;
 
             // Process each additional table to create Cartesian product
             for table_ref in &select.from[1..] {
-                let table_data = self.get_table_data_from_context(context, &table_ref.relation).await?;
-                
+                let table_data = self
+                    .get_table_data_from_context(context, &table_ref.relation)
+                    .await?;
+
                 // Create Cartesian product between current result and new table
                 let mut new_rows = Vec::new();
                 let mut new_columns = result_columns.clone();
-                
+
                 // Add columns from the new table (with potential prefixing to avoid conflicts)
                 for col in &table_data.columns {
                     if !new_columns.contains(col) {
@@ -8063,7 +8615,12 @@ impl QueryExecutor {
                     } else {
                         // Add table prefix to avoid column name conflicts
                         if let TableFactor::Table { name, .. } = &table_ref.relation {
-                            let table_name = name.0.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                            let table_name = name
+                                .0
+                                .iter()
+                                .map(|i| i.value.clone())
+                                .collect::<Vec<_>>()
+                                .join(".");
                             new_columns.push(format!("{}.{}", table_name, col));
                         } else {
                             new_columns.push(format!("t{}.{}", new_columns.len(), col));
@@ -8084,12 +8641,9 @@ impl QueryExecutor {
                 result_columns = new_columns;
             }
 
-            return self.apply_cte_query_clauses(
-                result_rows,
-                result_columns,
-                select,
-                query,
-            ).await;
+            return self
+                .apply_cte_query_clauses(result_rows, result_columns, select, query)
+                .await;
         }
 
         Err(YamlBaseError::NotImplemented(
@@ -8105,14 +8659,15 @@ impl QueryExecutor {
         where_expr: &Expr,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut filtered_rows = Vec::new();
-        
+
         for row in rows {
-            let row_matches = self.evaluate_where_condition_with_columns(where_expr, row, columns)?;
+            let row_matches =
+                self.evaluate_where_condition_with_columns(where_expr, row, columns)?;
             if row_matches {
                 filtered_rows.push(row.clone());
             }
         }
-        
+
         Ok(filtered_rows)
     }
 
@@ -8124,7 +8679,7 @@ impl QueryExecutor {
         order_by: &[OrderByExpr],
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut sorted_rows = rows.to_vec();
-        
+
         sorted_rows.sort_by(|a, b| {
             for order_expr in order_by {
                 if let Expr::Identifier(ident) = &order_expr.expr {
@@ -8132,12 +8687,16 @@ impl QueryExecutor {
                     if let Some(column_idx) = columns.iter().position(|col| col == column_name) {
                         if let (Some(val_a), Some(val_b)) = (a.get(column_idx), b.get(column_idx)) {
                             let cmp = val_a.compare(val_b).unwrap_or(std::cmp::Ordering::Equal);
-                            let final_cmp = if let Some(sqlparser::ast::OrderByExpr { asc: Some(false), .. }) = Some(order_expr) {
+                            let final_cmp = if let Some(sqlparser::ast::OrderByExpr {
+                                asc: Some(false),
+                                ..
+                            }) = Some(order_expr)
+                            {
                                 cmp.reverse()
                             } else {
                                 cmp
                             };
-                            
+
                             if final_cmp != std::cmp::Ordering::Equal {
                                 return final_cmp;
                             }
@@ -8147,7 +8706,7 @@ impl QueryExecutor {
             }
             std::cmp::Ordering::Equal
         });
-        
+
         Ok(sorted_rows)
     }
 
@@ -8173,15 +8732,15 @@ impl QueryExecutor {
                         Ok(false)
                     }
                 } else {
-                    Err(YamlBaseError::Database { 
-                        message: format!("Column not found: {}", column_name) 
+                    Err(YamlBaseError::Database {
+                        message: format!("Column not found: {}", column_name),
                     })
                 }
             }
             Expr::BinaryOp { left, right, op } => {
                 let left_val = self.evaluate_expr_with_columns(left, row, columns)?;
                 let right_val = self.evaluate_expr_with_columns(right, row, columns)?;
-                
+
                 match op {
                     BinaryOperator::Eq => Ok(left_val == right_val),
                     BinaryOperator::NotEq => Ok(left_val != right_val),
@@ -8214,16 +8773,23 @@ impl QueryExecutor {
                         }
                     }
                     BinaryOperator::And => {
-                        let left_bool = self.evaluate_where_condition_with_columns(left, row, columns)?;
-                        let right_bool = self.evaluate_where_condition_with_columns(right, row, columns)?;
+                        let left_bool =
+                            self.evaluate_where_condition_with_columns(left, row, columns)?;
+                        let right_bool =
+                            self.evaluate_where_condition_with_columns(right, row, columns)?;
                         Ok(left_bool && right_bool)
                     }
                     BinaryOperator::Or => {
-                        let left_bool = self.evaluate_where_condition_with_columns(left, row, columns)?;
-                        let right_bool = self.evaluate_where_condition_with_columns(right, row, columns)?;
+                        let left_bool =
+                            self.evaluate_where_condition_with_columns(left, row, columns)?;
+                        let right_bool =
+                            self.evaluate_where_condition_with_columns(right, row, columns)?;
                         Ok(left_bool || right_bool)
                     }
-                    _ => Err(YamlBaseError::NotImplemented(format!("Binary operator {:?} not supported in CTE WHERE clauses", op))),
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not supported in CTE WHERE clauses",
+                        op
+                    ))),
                 }
             }
             Expr::Value(value) => {
@@ -8235,7 +8801,10 @@ impl QueryExecutor {
                     _ => false,
                 })
             }
-            _ => Err(YamlBaseError::NotImplemented(format!("WHERE expression {:?} not supported in CTE context", expr))),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "WHERE expression {:?} not supported in CTE context",
+                expr
+            ))),
         }
     }
 
@@ -8249,7 +8818,7 @@ impl QueryExecutor {
         match expr {
             Expr::Identifier(ident) => {
                 let column_name = &ident.value;
-                
+
                 // Try exact match first, then try without table prefix
                 if let Some(column_idx) = columns.iter().position(|col| col == column_name) {
                     if let Some(value) = row.get(column_idx) {
@@ -8257,17 +8826,18 @@ impl QueryExecutor {
                     } else {
                         Ok(Value::Null)
                     }
-                } else if let Some(column_idx) = columns.iter().position(|col| {
-                    col.split('.').last().unwrap_or(col) == column_name
-                }) {
+                } else if let Some(column_idx) = columns
+                    .iter()
+                    .position(|col| col.split('.').next_back().unwrap_or(col) == column_name)
+                {
                     if let Some(value) = row.get(column_idx) {
                         Ok(value.clone())
                     } else {
                         Ok(Value::Null)
                     }
                 } else {
-                    Err(YamlBaseError::Database { 
-                        message: format!("Column not found: {}", column_name) 
+                    Err(YamlBaseError::Database {
+                        message: format!("Column not found: {}", column_name),
                     })
                 }
             }
@@ -8276,17 +8846,19 @@ impl QueryExecutor {
                 if parts.len() == 2 {
                     let qualified_name = format!("{}.{}", parts[0].value, parts[1].value);
                     let column_name = &parts[1].value;
-                    
+
                     // Try exact qualified match first
-                    if let Some(column_idx) = columns.iter().position(|col| col == &qualified_name) {
+                    if let Some(column_idx) = columns.iter().position(|col| col == &qualified_name)
+                    {
                         if let Some(value) = row.get(column_idx) {
                             Ok(value.clone())
                         } else {
                             Ok(Value::Null)
                         }
-                    } else if let Some(column_idx) = columns.iter().position(|col| {
-                        col.split('.').last().unwrap_or(col) == column_name
-                    }) {
+                    } else if let Some(column_idx) = columns
+                        .iter()
+                        .position(|col| col.split('.').next_back().unwrap_or(col) == column_name)
+                    {
                         // Try matching just the column name part
                         if let Some(value) = row.get(column_idx) {
                             Ok(value.clone())
@@ -8294,8 +8866,8 @@ impl QueryExecutor {
                             Ok(Value::Null)
                         }
                     } else {
-                        Err(YamlBaseError::Database { 
-                            message: format!("Column not found: {}", qualified_name) 
+                        Err(YamlBaseError::Database {
+                            message: format!("Column not found: {}", qualified_name),
                         })
                     }
                 } else {
@@ -8305,7 +8877,10 @@ impl QueryExecutor {
                 }
             }
             Expr::Value(value) => self.sql_value_to_db_value(value),
-            _ => Err(YamlBaseError::NotImplemented(format!("Expression {:?} not supported in CTE context", expr))),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Expression {:?} not supported in CTE context",
+                expr
+            ))),
         }
     }
 
@@ -8325,7 +8900,7 @@ impl QueryExecutor {
                     for (idx, col) in available_columns.iter().enumerate() {
                         let column_name = if col.contains('.') {
                             // Extract just the column name part after the dot
-                            col.split('.').last().unwrap_or(col).to_string()
+                            col.split('.').next_back().unwrap_or(col).to_string()
                         } else {
                             col.clone()
                         };
@@ -8337,21 +8912,26 @@ impl QueryExecutor {
                     // Handle specific column references
                     if let Expr::Identifier(ident) = expr {
                         let column_name = ident.value.clone();
-                        
+
                         // Try to find exact match first
-                        if let Some(idx) = available_columns.iter().position(|c| c == &column_name) {
+                        if let Some(idx) = available_columns.iter().position(|c| c == &column_name)
+                        {
                             selected_columns.push(column_name);
                             projection_items.push(CteProjectionItem::Column(idx));
                         } else {
                             // Try to find column by unqualified name (ignoring table prefix)
-                            if let Some(idx) = available_columns.iter().position(|c| {
-                                c.split('.').last().unwrap_or(c) == &column_name
-                            }) {
+                            if let Some(idx) = available_columns
+                                .iter()
+                                .position(|c| c.split('.').next_back().unwrap_or(c) == column_name)
+                            {
                                 selected_columns.push(column_name);
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 return Err(YamlBaseError::Database {
-                                    message: format!("Column '{}' not found in CTE result", column_name),
+                                    message: format!(
+                                        "Column '{}' not found in CTE result",
+                                        column_name
+                                    ),
                                 });
                             }
                         }
@@ -8360,13 +8940,18 @@ impl QueryExecutor {
                         if parts.len() == 2 {
                             let qualified_name = format!("{}.{}", parts[0].value, parts[1].value);
                             let column_name = parts[1].value.clone();
-                            
-                            if let Some(idx) = available_columns.iter().position(|c| c == &qualified_name) {
+
+                            if let Some(idx) =
+                                available_columns.iter().position(|c| c == &qualified_name)
+                            {
                                 selected_columns.push(column_name); // Use unqualified name in result
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 return Err(YamlBaseError::Database {
-                                    message: format!("Column '{}' not found in CTE result", qualified_name),
+                                    message: format!(
+                                        "Column '{}' not found in CTE result",
+                                        qualified_name
+                                    ),
                                 });
                             }
                         } else {
@@ -8378,38 +8963,49 @@ impl QueryExecutor {
                         // Handle complex expressions like COUNT(*), functions, arithmetic, etc.
                         let expr_name = self.get_expression_name(expr);
                         selected_columns.push(expr_name);
-                        projection_items.push(CteProjectionItem::Expression(expr.clone()));
+                        projection_items
+                            .push(CteProjectionItem::Expression(Box::new(expr.clone())));
                     }
                 }
                 SelectItem::ExprWithAlias { expr, alias } => {
                     // Handle column with alias
                     if let Expr::Identifier(ident) = expr {
                         let column_name = ident.value.clone();
-                        
+
                         // Try exact match first, then partial match
-                        if let Some(idx) = available_columns.iter().position(|c| c == &column_name) {
+                        if let Some(idx) = available_columns.iter().position(|c| c == &column_name)
+                        {
                             selected_columns.push(alias.value.clone());
                             projection_items.push(CteProjectionItem::Column(idx));
-                        } else if let Some(idx) = available_columns.iter().position(|c| {
-                            c.split('.').last().unwrap_or(c) == &column_name
-                        }) {
+                        } else if let Some(idx) = available_columns
+                            .iter()
+                            .position(|c| c.split('.').next_back().unwrap_or(c) == column_name)
+                        {
                             selected_columns.push(alias.value.clone());
                             projection_items.push(CteProjectionItem::Column(idx));
                         } else {
                             return Err(YamlBaseError::Database {
-                                message: format!("Column '{}' not found in CTE result", column_name),
+                                message: format!(
+                                    "Column '{}' not found in CTE result",
+                                    column_name
+                                ),
                             });
                         }
                     } else if let Expr::CompoundIdentifier(parts) = expr {
                         if parts.len() == 2 {
                             let qualified_name = format!("{}.{}", parts[0].value, parts[1].value);
-                            
-                            if let Some(idx) = available_columns.iter().position(|c| c == &qualified_name) {
+
+                            if let Some(idx) =
+                                available_columns.iter().position(|c| c == &qualified_name)
+                            {
                                 selected_columns.push(alias.value.clone());
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 return Err(YamlBaseError::Database {
-                                    message: format!("Column '{}' not found in CTE result", qualified_name),
+                                    message: format!(
+                                        "Column '{}' not found in CTE result",
+                                        qualified_name
+                                    ),
                                 });
                             }
                         } else {
@@ -8420,7 +9016,8 @@ impl QueryExecutor {
                     } else {
                         // Handle complex expressions with aliases - NOW SUPPORTED!
                         selected_columns.push(alias.value.clone());
-                        projection_items.push(CteProjectionItem::Expression(expr.clone()));
+                        projection_items
+                            .push(CteProjectionItem::Expression(Box::new(expr.clone())));
                     }
                 }
                 _ => {
@@ -8437,23 +9034,26 @@ impl QueryExecutor {
     // Generate appropriate names for complex expressions
     fn get_expression_name(&self, expr: &Expr) -> String {
         match expr {
-            Expr::Function(Function { name, .. }) => {
-                let function_name = name.0.iter()
-                    .map(|i| i.value.clone())
-                    .collect::<Vec<_>>()
-                    .join(".");
-                function_name
-            }
+            Expr::Function(Function { name, .. }) => name
+                .0
+                .iter()
+                .map(|i| i.value.clone())
+                .collect::<Vec<_>>()
+                .join("."),
             Expr::BinaryOp { left, op, right } => {
-                format!("{} {} {}", 
-                    self.get_expression_name(left), 
+                format!(
+                    "{} {} {}",
+                    self.get_expression_name(left),
                     self.binary_op_to_string(op),
-                    self.get_expression_name(right))
+                    self.get_expression_name(right)
+                )
             }
             Expr::Identifier(ident) => ident.value.clone(),
-            Expr::CompoundIdentifier(parts) => {
-                parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".")
-            }
+            Expr::CompoundIdentifier(parts) => parts
+                .iter()
+                .map(|p| p.value.clone())
+                .collect::<Vec<_>>()
+                .join("."),
             Expr::Value(sqlparser::ast::Value::Number(n, _)) => n.clone(),
             Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => format!("'{}'", s),
             _ => "expr".to_string(), // Generic fallback
@@ -8508,7 +9108,8 @@ impl QueryExecutor {
                     format_clause: None,
                     settings: None,
                 };
-                self.execute_select_with_cte_context(db, select, &left_query, cte_results).await?
+                self.execute_select_with_cte_context(db, select, &left_query, cte_results)
+                    .await?
             }
             _ => {
                 return Err(YamlBaseError::NotImplemented(
@@ -8534,7 +9135,8 @@ impl QueryExecutor {
                     format_clause: None,
                     settings: None,
                 };
-                self.execute_select_with_cte_context(db, select, &right_query, cte_results).await?
+                self.execute_select_with_cte_context(db, select, &right_query, cte_results)
+                    .await?
             }
             _ => {
                 return Err(YamlBaseError::NotImplemented(
@@ -8559,22 +9161,22 @@ impl QueryExecutor {
             SetOperator::Union => {
                 debug!("Executing UNION operation");
                 let mut combined_rows = left_result.rows;
-                
+
                 // For UNION (without ALL), we need to deduplicate
                 let is_all = matches!(set_quantifier, SetQuantifier::All);
-                
+
                 if is_all {
                     // UNION ALL - just concatenate all rows
                     combined_rows.extend(right_result.rows);
                 } else {
                     // UNION - deduplicate rows
-                    let mut unique_rows: std::collections::HashSet<Vec<Value>> = 
+                    let mut unique_rows: std::collections::HashSet<Vec<Value>> =
                         combined_rows.into_iter().collect();
-                    
+
                     for row in right_result.rows {
                         unique_rows.insert(row);
                     }
-                    
+
                     combined_rows = unique_rows.into_iter().collect();
                 }
 
@@ -8584,16 +9186,12 @@ impl QueryExecutor {
                     rows: combined_rows,
                 })
             }
-            SetOperator::Intersect => {
-                return Err(YamlBaseError::NotImplemented(
-                    "INTERSECT operation not yet supported in CTEs".to_string(),
-                ));
-            }
-            SetOperator::Except => {
-                return Err(YamlBaseError::NotImplemented(
-                    "EXCEPT operation not yet supported in CTEs".to_string(),
-                ));
-            }
+            SetOperator::Intersect => Err(YamlBaseError::NotImplemented(
+                "INTERSECT operation not yet supported in CTEs".to_string(),
+            )),
+            SetOperator::Except => Err(YamlBaseError::NotImplemented(
+                "EXCEPT operation not yet supported in CTEs".to_string(),
+            )),
         }
     }
 
@@ -8604,7 +9202,7 @@ impl QueryExecutor {
         select: &Select,
     ) -> crate::Result<QueryResult> {
         debug!("Executing CTE JOIN without aggregation");
-        
+
         // Get the base table (first FROM item)
         if select.from.is_empty() {
             return Err(YamlBaseError::Database {
@@ -8613,29 +9211,31 @@ impl QueryExecutor {
         }
 
         let table_with_joins = &select.from[0];
-        let result_data = self.get_table_data_from_context(context, &table_with_joins.relation).await?;
+        let result_data = self
+            .get_table_data_from_context(context, &table_with_joins.relation)
+            .await?;
         let mut result_rows = result_data.rows;
         let mut result_columns = result_data.columns;
 
         // Process each JOIN
         for join in &table_with_joins.joins {
-            let join_data = self.get_table_data_from_context(context, &join.relation).await?;
-            
+            let join_data = self
+                .get_table_data_from_context(context, &join.relation)
+                .await?;
+
             // Extract JOIN condition
             let join_condition = match &join.join_operator {
-                JoinOperator::Inner(constraint) | 
-                JoinOperator::LeftOuter(constraint) | 
-                JoinOperator::RightOuter(constraint) | 
-                JoinOperator::FullOuter(constraint) => {
-                    match constraint {
-                        JoinConstraint::On(expr) => expr,
-                        _ => {
-                            return Err(YamlBaseError::NotImplemented(
-                                "Only ON clause JOINs are supported in CTE aggregates".to_string(),
-                            ));
-                        }
+                JoinOperator::Inner(constraint)
+                | JoinOperator::LeftOuter(constraint)
+                | JoinOperator::RightOuter(constraint)
+                | JoinOperator::FullOuter(constraint) => match constraint {
+                    JoinConstraint::On(expr) => expr,
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            "Only ON clause JOINs are supported in CTE aggregates".to_string(),
+                        ));
                     }
-                }
+                },
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
                         "This JOIN type not supported in CTE aggregates".to_string(),
@@ -8659,11 +9259,8 @@ impl QueryExecutor {
 
         // Apply WHERE clause filtering if present
         if let Some(where_expr) = &select.selection {
-            result_rows = self.filter_rows_with_columns(
-                &result_rows,
-                &result_columns,
-                where_expr,
-            )?;
+            result_rows =
+                self.filter_rows_with_columns(&result_rows, &result_columns, where_expr)?;
         }
 
         Ok(QueryResult {
@@ -8680,7 +9277,7 @@ impl QueryExecutor {
         select: &Select,
     ) -> crate::Result<QueryResult> {
         debug!("Applying GROUP BY aggregation");
-        
+
         // Extract GROUP BY expressions
         let group_by_exprs = match &select.group_by {
             GroupByExpr::Expressions(exprs, _) if !exprs.is_empty() => exprs,
@@ -8692,16 +9289,17 @@ impl QueryExecutor {
         };
 
         // Build groups based on GROUP BY expressions
-        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>> = std::collections::HashMap::new();
-        
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>> =
+            std::collections::HashMap::new();
+
         for row in &data.rows {
             // Evaluate GROUP BY expressions for this row
             let group_key: Vec<Value> = group_by_exprs
                 .iter()
                 .map(|expr| self.evaluate_expression_with_columns(expr, row, &data.columns))
                 .collect::<Result<Vec<_>, _>>()?;
-            
-            groups.entry(group_key).or_insert_with(Vec::new).push(row.clone());
+
+            groups.entry(group_key).or_default().push(row.clone());
         }
 
         // Process SELECT items to build result
@@ -8728,7 +9326,7 @@ impl QueryExecutor {
         // Process each group
         for (_group_key, group_rows) in groups {
             let mut result_row = Vec::new();
-            
+
             for item in &select.projection {
                 let value = match item {
                     SelectItem::UnnamedExpr(expr) => {
@@ -8745,7 +9343,7 @@ impl QueryExecutor {
                 };
                 result_row.push(value);
             }
-            
+
             result_rows.push(result_row);
         }
 
@@ -8765,7 +9363,9 @@ impl QueryExecutor {
     ) -> crate::Result<Value> {
         match expr {
             Expr::Function(Function { name, args, .. }) => {
-                let function_name = name.0.iter()
+                let function_name = name
+                    .0
+                    .iter()
                     .map(|i| i.value.to_uppercase())
                     .collect::<Vec<_>>()
                     .join(".");
@@ -8774,14 +9374,21 @@ impl QueryExecutor {
                     "COUNT" => {
                         if let FunctionArguments::List(arg_list) = args {
                             if arg_list.args.len() == 1 {
-                                if let FunctionArg::Unnamed(FunctionArgExpr::Wildcard) = &arg_list.args[0] {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Wildcard) =
+                                    &arg_list.args[0]
+                                {
                                     // COUNT(*)
                                     Ok(Value::Integer(group_rows.len() as i64))
-                                } else if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) = &arg_list.args[0] {
+                                } else if let FunctionArg::Unnamed(FunctionArgExpr::Expr(
+                                    arg_expr,
+                                )) = &arg_list.args[0]
+                                {
                                     // COUNT(column) - count non-null values
                                     let mut count = 0;
                                     for row in group_rows {
-                                        let value = self.evaluate_expression_with_columns(arg_expr, row, columns)?;
+                                        let value = self.evaluate_expression_with_columns(
+                                            arg_expr, row, columns,
+                                        )?;
                                         if !matches!(value, Value::Null) {
                                             count += 1;
                                         }
@@ -8806,16 +9413,22 @@ impl QueryExecutor {
                     "SUM" => {
                         if let FunctionArguments::List(arg_list) = args {
                             if arg_list.args.len() == 1 {
-                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) = &arg_list.args[0] {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) =
+                                    &arg_list.args[0]
+                                {
                                     let mut sum = 0i64;
                                     for row in group_rows {
-                                        let value = self.evaluate_expression_with_columns(arg_expr, row, columns)?;
+                                        let value = self.evaluate_expression_with_columns(
+                                            arg_expr, row, columns,
+                                        )?;
                                         match value {
                                             Value::Integer(i) => sum += i,
-                                            Value::Null => {}, // Ignore nulls in SUM
+                                            Value::Null => {} // Ignore nulls in SUM
                                             _ => {
                                                 return Err(YamlBaseError::Database {
-                                                    message: "SUM can only be applied to numeric values".to_string(),
+                                                    message:
+                                                        "SUM can only be applied to numeric values"
+                                                            .to_string(),
                                                 });
                                             }
                                         }
@@ -8837,17 +9450,19 @@ impl QueryExecutor {
                             ))
                         }
                     }
-                    _ => {
-                        return Err(YamlBaseError::NotImplemented(
-                            format!("Aggregate function {} not yet implemented", function_name),
-                        ));
-                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Aggregate function {} not yet implemented",
+                        function_name
+                    ))),
                 }
             }
             Expr::Identifier(ident) => {
                 // GROUP BY column - return first value from group (they should all be the same)
                 let column_name = &ident.value;
-                if let Some(col_idx) = columns.iter().position(|c| c == column_name || c.ends_with(&format!(".{}", column_name))) {
+                if let Some(col_idx) = columns
+                    .iter()
+                    .position(|c| c == column_name || c.ends_with(&format!(".{}", column_name)))
+                {
                     if !group_rows.is_empty() {
                         Ok(group_rows[0][col_idx].clone())
                     } else {
@@ -8861,7 +9476,11 @@ impl QueryExecutor {
             }
             Expr::CompoundIdentifier(parts) => {
                 // Qualified column name like "p.project_name"
-                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                let qualified_name = parts
+                    .iter()
+                    .map(|p| p.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".");
                 if let Some(col_idx) = columns.iter().position(|c| c == &qualified_name) {
                     if !group_rows.is_empty() {
                         Ok(group_rows[0][col_idx].clone())
@@ -8870,15 +9489,17 @@ impl QueryExecutor {
                     }
                 } else {
                     Err(YamlBaseError::Database {
-                        message: format!("Column '{}' not found in GROUP BY context", qualified_name),
+                        message: format!(
+                            "Column '{}' not found in GROUP BY context",
+                            qualified_name
+                        ),
                     })
                 }
             }
-            _ => {
-                Err(YamlBaseError::NotImplemented(
-                    format!("Expression type not supported in aggregate context: {:?}", expr),
-                ))
-            }
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Expression type not supported in aggregate context: {:?}",
+                expr
+            ))),
         }
     }
 
@@ -8892,7 +9513,10 @@ impl QueryExecutor {
         match expr {
             Expr::Identifier(ident) => {
                 let column_name = &ident.value;
-                if let Some(col_idx) = columns.iter().position(|c| c == column_name || c.ends_with(&format!(".{}", column_name))) {
+                if let Some(col_idx) = columns
+                    .iter()
+                    .position(|c| c == column_name || c.ends_with(&format!(".{}", column_name)))
+                {
                     Ok(row[col_idx].clone())
                 } else {
                     Err(YamlBaseError::Database {
@@ -8901,7 +9525,11 @@ impl QueryExecutor {
                 }
             }
             Expr::CompoundIdentifier(parts) => {
-                let qualified_name = parts.iter().map(|p| p.value.clone()).collect::<Vec<_>>().join(".");
+                let qualified_name = parts
+                    .iter()
+                    .map(|p| p.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".");
                 if let Some(col_idx) = columns.iter().position(|c| c == &qualified_name) {
                     Ok(row[col_idx].clone())
                 } else {
@@ -8921,14 +9549,11 @@ impl QueryExecutor {
                     })
                 }
             }
-            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => {
-                Ok(Value::Text(s.clone()))
-            }
-            _ => {
-                Err(YamlBaseError::NotImplemented(
-                    format!("Expression evaluation not implemented: {:?}", expr),
-                ))
-            }
+            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => Ok(Value::Text(s.clone())),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "Expression evaluation not implemented: {:?}",
+                expr
+            ))),
         }
     }
 
@@ -8954,7 +9579,8 @@ impl QueryExecutor {
             // Check if this is a CTE reference
             if let Some(cte_result) = context.cte_results.get(&table_name) {
                 // Create qualified column names using the alias
-                let qualified_columns: Vec<String> = cte_result.columns
+                let qualified_columns: Vec<String> = cte_result
+                    .columns
                     .iter()
                     .map(|col| format!("{}.{}", table_alias, col))
                     .collect();
@@ -8969,7 +9595,8 @@ impl QueryExecutor {
             // Check if this is a regular database table
             if let Some(table) = context.db.get_table(&table_name) {
                 // Create qualified column names using the alias
-                let qualified_columns: Vec<String> = table.columns
+                let qualified_columns: Vec<String> = table
+                    .columns
                     .iter()
                     .map(|c| format!("{}.{}", table_alias, c.name))
                     .collect();
@@ -9004,18 +9631,34 @@ impl QueryExecutor {
         join_condition: Option<&Expr>,
     ) -> crate::Result<QueryResult> {
         match join_operator {
-            JoinOperator::Inner(_) => {
-                self.perform_cte_inner_join(left_rows, left_columns, right_rows, right_columns, join_condition)
-            }
-            JoinOperator::LeftOuter(_) => {
-                self.perform_cte_left_join(left_rows, left_columns, right_rows, right_columns, join_condition)
-            }
-            JoinOperator::RightOuter(_) => {
-                self.perform_cte_right_join(left_rows, left_columns, right_rows, right_columns, join_condition)
-            }
-            JoinOperator::FullOuter(_) => {
-                self.perform_cte_full_join(left_rows, left_columns, right_rows, right_columns, join_condition)
-            }
+            JoinOperator::Inner(_) => self.perform_cte_inner_join(
+                left_rows,
+                left_columns,
+                right_rows,
+                right_columns,
+                join_condition,
+            ),
+            JoinOperator::LeftOuter(_) => self.perform_cte_left_join(
+                left_rows,
+                left_columns,
+                right_rows,
+                right_columns,
+                join_condition,
+            ),
+            JoinOperator::RightOuter(_) => self.perform_cte_right_join(
+                left_rows,
+                left_columns,
+                right_rows,
+                right_columns,
+                join_condition,
+            ),
+            JoinOperator::FullOuter(_) => self.perform_cte_full_join(
+                left_rows,
+                left_columns,
+                right_rows,
+                right_columns,
+                join_condition,
+            ),
             JoinOperator::CrossJoin => {
                 self.perform_cte_cross_join(left_rows, left_columns, right_rows, right_columns)
             }
@@ -9050,14 +9693,19 @@ impl QueryExecutor {
         }
 
         // Apply projection (SELECT clause)
-        let (selected_columns, projection_items) = self.process_cte_projection(&select.projection, &columns)?;
-        
+        let (selected_columns, projection_items) =
+            self.process_cte_projection(&select.projection, &columns)?;
+
         // Check if we have aggregate functions like COUNT(*) without GROUP BY
         let has_aggregates = projection_items.iter().any(|item| {
-            if let CteProjectionItem::Expression(Expr::Function(func)) = item {
-                if let Some(first_part) = func.name.0.first() {
-                    let func_name = first_part.value.to_uppercase();
-                    matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+            if let CteProjectionItem::Expression(expr) = item {
+                if let Expr::Function(func) = expr.as_ref() {
+                    if let Some(first_part) = func.name.0.first() {
+                        let func_name = first_part.value.to_uppercase();
+                        matches!(func_name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -9065,25 +9713,30 @@ impl QueryExecutor {
                 false
             }
         });
-        
+
         let projected_rows: Vec<Vec<Value>> = if has_aggregates {
             // Create column mapping for aggregate function evaluation
-            let column_map: std::collections::HashMap<String, usize> = columns.iter()
+            let column_map: std::collections::HashMap<String, usize> = columns
+                .iter()
                 .enumerate()
                 .map(|(i, col)| (col.clone(), i))
                 .collect();
-                
+
             // For aggregate functions without GROUP BY, return one row with aggregated values
-            let aggregated_row: Vec<Value> = projection_items.iter()
+            let aggregated_row: Vec<Value> = projection_items
+                .iter()
                 .map(|item| match item {
                     CteProjectionItem::Column(_) => {
                         // Can't mix aggregates with non-aggregate columns without GROUP BY
                         Value::Null
                     }
                     CteProjectionItem::Expression(expr) => {
-                        match expr {
+                        match expr.as_ref() {
                             Expr::Function(func) => {
-                                let func_name = func.name.0.iter()
+                                let func_name = func
+                                    .name
+                                    .0
+                                    .iter()
                                     .map(|i| i.value.clone())
                                     .collect::<Vec<_>>()
                                     .join(".");
@@ -9095,8 +9748,17 @@ impl QueryExecutor {
                                     "SUM" => {
                                         // SUM(column_name)
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self
+                                                    .extract_cte_column_values(
+                                                        col_expr,
+                                                        &rows,
+                                                        &column_map,
+                                                    )
+                                                    .unwrap_or_default();
                                                 self.calculate_sum(&values).unwrap_or(Value::Null)
                                             } else {
                                                 Value::Null
@@ -9108,8 +9770,17 @@ impl QueryExecutor {
                                     "AVG" => {
                                         // AVG(column_name)
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self
+                                                    .extract_cte_column_values(
+                                                        col_expr,
+                                                        &rows,
+                                                        &column_map,
+                                                    )
+                                                    .unwrap_or_default();
                                                 self.calculate_avg(&values).unwrap_or(Value::Null)
                                             } else {
                                                 Value::Null
@@ -9121,8 +9792,17 @@ impl QueryExecutor {
                                     "MIN" => {
                                         // MIN(column_name)
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self
+                                                    .extract_cte_column_values(
+                                                        col_expr,
+                                                        &rows,
+                                                        &column_map,
+                                                    )
+                                                    .unwrap_or_default();
                                                 self.calculate_min(&values).unwrap_or(Value::Null)
                                             } else {
                                                 Value::Null
@@ -9134,8 +9814,17 @@ impl QueryExecutor {
                                     "MAX" => {
                                         // MAX(column_name)
                                         if let FunctionArguments::List(ref args) = func.args {
-                                            if let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(col_expr))) = args.args.first() {
-                                                let values = self.extract_cte_column_values(col_expr, &rows, &column_map).unwrap_or_default();
+                                            if let Some(FunctionArg::Unnamed(
+                                                FunctionArgExpr::Expr(col_expr),
+                                            )) = args.args.first()
+                                            {
+                                                let values = self
+                                                    .extract_cte_column_values(
+                                                        col_expr,
+                                                        &rows,
+                                                        &column_map,
+                                                    )
+                                                    .unwrap_or_default();
                                                 self.calculate_max(&values).unwrap_or(Value::Null)
                                             } else {
                                                 Value::Null
@@ -9160,9 +9849,12 @@ impl QueryExecutor {
             // Non-aggregate projection - process each row
             rows.into_iter()
                 .map(|row| {
-                    projection_items.iter()
+                    projection_items
+                        .iter()
                         .map(|item| match item {
-                            CteProjectionItem::Column(idx) => row.get(*idx).cloned().unwrap_or(Value::Null),
+                            CteProjectionItem::Column(idx) => {
+                                row.get(*idx).cloned().unwrap_or(Value::Null)
+                            }
                             CteProjectionItem::Expression(_expr) => {
                                 // Non-aggregate expressions not yet fully supported
                                 Value::Null
@@ -9173,7 +9865,10 @@ impl QueryExecutor {
                 .collect()
         };
 
-        let column_types = selected_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
+        let column_types = selected_columns
+            .iter()
+            .map(|_| crate::yaml::schema::SqlType::Text)
+            .collect();
 
         Ok(QueryResult {
             columns: selected_columns,
@@ -9292,7 +9987,10 @@ struct CteExecutionContext<'a> {
 }
 
 impl<'a> CteExecutionContext<'a> {
-    fn new(db: &'a Database, cte_results: &'a std::collections::HashMap<String, QueryResult>) -> Self {
+    fn new(
+        db: &'a Database,
+        cte_results: &'a std::collections::HashMap<String, QueryResult>,
+    ) -> Self {
         Self { db, cte_results }
     }
 }
@@ -9334,7 +10032,10 @@ impl QueryExecutor {
             }
         }
 
-        let column_types = result_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
+        let column_types = result_columns
+            .iter()
+            .map(|_| crate::yaml::schema::SqlType::Text)
+            .collect();
 
         Ok(QueryResult {
             columns: result_columns,
@@ -9358,7 +10059,7 @@ impl QueryExecutor {
         // Perform LEFT JOIN
         for left_row in left_rows {
             let mut matched = false;
-            
+
             for right_row in right_rows {
                 let mut combined_row = left_row.clone();
                 combined_row.extend(right_row.iter().cloned());
@@ -9388,7 +10089,10 @@ impl QueryExecutor {
             }
         }
 
-        let column_types = result_columns.iter().map(|_| crate::yaml::schema::SqlType::Text).collect();
+        let column_types = result_columns
+            .iter()
+            .map(|_| crate::yaml::schema::SqlType::Text)
+            .collect();
 
         Ok(QueryResult {
             columns: result_columns,
@@ -9464,7 +10168,7 @@ impl QueryExecutor {
     ) -> crate::Result<QueryResult> {
         // CROSS JOIN produces Cartesian product of all rows
         let mut result_rows = Vec::new();
-        
+
         // Generate all combinations of left and right rows
         for left_row in left_rows {
             for right_row in right_rows {
@@ -9498,19 +10202,34 @@ impl QueryExecutor {
         // Production code would need comprehensive expression evaluation
         match condition {
             Expr::BinaryOp { left, op, right } => {
-                let left_val = self.evaluate_expr_with_columns(left, combined_row, combined_columns)?;
-                let right_val = self.evaluate_expr_with_columns(right, combined_row, combined_columns)?;
-                
+                let left_val =
+                    self.evaluate_expr_with_columns(left, combined_row, combined_columns)?;
+                let right_val =
+                    self.evaluate_expr_with_columns(right, combined_row, combined_columns)?;
+
                 match op {
-                    BinaryOperator::Eq => Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Equal)),
-                    BinaryOperator::NotEq => Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Equal)),
-                    BinaryOperator::Lt => Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Less)),
-                    BinaryOperator::LtEq => Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Greater)),
-                    BinaryOperator::Gt => Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Greater)),
-                    BinaryOperator::GtEq => Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Less)),
-                    _ => Err(YamlBaseError::NotImplemented(
-                        format!("JOIN condition operator {:?} not yet supported", op)
-                    )),
+                    BinaryOperator::Eq => {
+                        Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Equal))
+                    }
+                    BinaryOperator::NotEq => {
+                        Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Equal))
+                    }
+                    BinaryOperator::Lt => {
+                        Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Less))
+                    }
+                    BinaryOperator::LtEq => {
+                        Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Greater))
+                    }
+                    BinaryOperator::Gt => {
+                        Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Greater))
+                    }
+                    BinaryOperator::GtEq => {
+                        Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Less))
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "JOIN condition operator {:?} not yet supported",
+                        op
+                    ))),
                 }
             }
             _ => Err(YamlBaseError::NotImplemented(
@@ -10988,7 +11707,7 @@ mod tests {
     async fn test_cte_references_other_cte() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test CTE that references another CTE
         let stmt = parse_statement(
             "WITH first_cte AS (
@@ -11017,7 +11736,7 @@ mod tests {
     async fn test_cte_chain_multiple_references() {
         let db = create_test_database().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test chain of CTEs where each references the previous one
         let stmt = parse_statement(
             "WITH base_users AS (
@@ -11064,8 +11783,12 @@ mod tests {
             },
         ];
         let mut users = Table::new("users".to_string(), user_columns);
-        users.insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())]).unwrap();
-        users.insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())]).unwrap();
+        users
+            .insert_row(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+            .unwrap();
+        users
+            .insert_row(vec![Value::Integer(2), Value::Text("Bob".to_string())])
+            .unwrap();
         db.add_table(users).unwrap();
 
         // Create orders table
@@ -11099,21 +11822,27 @@ mod tests {
             },
         ];
         let mut orders = Table::new("orders".to_string(), order_columns);
-        orders.insert_row(vec![
-            Value::Integer(1),
-            Value::Integer(1),
-            Value::Decimal(Decimal::from_str("150.00").unwrap()),
-        ]).unwrap();
-        orders.insert_row(vec![
-            Value::Integer(2),
-            Value::Integer(1),
-            Value::Decimal(Decimal::from_str("75.50").unwrap()),
-        ]).unwrap();
-        orders.insert_row(vec![
-            Value::Integer(3),
-            Value::Integer(2),
-            Value::Decimal(Decimal::from_str("200.25").unwrap()),
-        ]).unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Decimal(Decimal::from_str("150.00").unwrap()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(2),
+                Value::Integer(1),
+                Value::Decimal(Decimal::from_str("75.50").unwrap()),
+            ])
+            .unwrap();
+        orders
+            .insert_row(vec![
+                Value::Integer(3),
+                Value::Integer(2),
+                Value::Decimal(Decimal::from_str("200.25").unwrap()),
+            ])
+            .unwrap();
         db.add_table(orders).unwrap();
 
         Arc::new(RwLock::new(db))
@@ -11123,7 +11852,7 @@ mod tests {
     async fn test_cte_with_inner_join() {
         let db = create_test_database_with_orders().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test CTE with INNER JOIN between regular tables - simplified first
         let stmt = parse_statement(
             "WITH user_orders AS (
@@ -11139,7 +11868,7 @@ mod tests {
         }
         assert!(result.is_ok(), "CTE with INNER JOIN should succeed");
         let query_result = result.unwrap();
-        
+
         // Should have users with orders > 100
         assert!(!query_result.rows.is_empty());
         assert_eq!(query_result.columns.len(), 3);
@@ -11152,7 +11881,7 @@ mod tests {
     async fn test_cte_with_left_join() {
         let db = create_test_database_with_orders().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test CTE with LEFT JOIN to include users without orders
         let stmt = parse_statement(
             "WITH all_users_orders AS (
@@ -11166,7 +11895,7 @@ mod tests {
             ORDER BY name",
         );
         let _result = executor.execute(&stmt).await;
-        
+
         // This should work once GROUP BY is fully implemented in CTEs
         // For now, test the basic CTE LEFT JOIN without GROUP BY
         let simple_stmt = parse_statement(
@@ -11185,7 +11914,7 @@ mod tests {
     async fn test_cte_join_with_cte_reference() {
         let db = create_test_database_with_orders().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test JOIN between a CTE and a regular table
         let stmt = parse_statement(
             "WITH active_users AS (
@@ -11199,9 +11928,13 @@ mod tests {
             SELECT * FROM user_order_summary ORDER BY amount DESC",
         );
         let result = executor.execute(&stmt).await;
-        assert!(result.is_ok(), "CTE JOIN with CTE reference should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "CTE JOIN with CTE reference should succeed: {:?}",
+            result.err()
+        );
         let query_result = result.unwrap();
-        
+
         assert!(!query_result.rows.is_empty());
         assert_eq!(query_result.columns.len(), 2);
         assert_eq!(query_result.columns[0], "name");
@@ -11212,7 +11945,7 @@ mod tests {
     async fn test_cte_multiple_joins() {
         let db = create_test_database_with_orders().await;
         let executor = create_test_executor_from_arc(db).await;
-        
+
         // Test CTE with multiple JOINs
         let stmt = parse_statement(
             "WITH comprehensive_data AS (
@@ -11223,9 +11956,12 @@ mod tests {
             SELECT user_id, name FROM comprehensive_data WHERE amount > 50 ORDER BY user_id",
         );
         let result = executor.execute(&stmt).await;
-        assert!(result.is_ok(), "CTE with multiple operations should succeed");
+        assert!(
+            result.is_ok(),
+            "CTE with multiple operations should succeed"
+        );
         let query_result = result.unwrap();
-        
+
         assert_eq!(query_result.columns.len(), 2);
         assert_eq!(query_result.columns[0], "user_id");
         assert_eq!(query_result.columns[1], "name");

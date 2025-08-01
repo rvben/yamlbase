@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, Semaphore};
@@ -23,7 +26,6 @@ pub struct ConnectionStats {
 /// Individual connection metadata
 #[derive(Debug)]
 struct ConnectionInfo {
-    pub id: usize,
     pub client_addr: String,
     pub started_at: Instant,
     pub last_activity: Instant,
@@ -59,7 +61,7 @@ impl Clone for ConnectionManager {
 impl ConnectionManager {
     pub fn new(config: Arc<Config>, storage: Arc<Storage>) -> Self {
         let max_connections = config.max_connections.unwrap_or(1000);
-        
+
         Self {
             config,
             storage,
@@ -73,26 +75,28 @@ impl ConnectionManager {
     }
 
     /// Handle a new client connection with full stability features
-    pub async fn handle_connection(&self, mut stream: TcpStream, client_addr: String) -> crate::Result<()> {
+    pub async fn handle_connection(
+        &self,
+        mut stream: TcpStream,
+        client_addr: String,
+    ) -> crate::Result<()> {
         // Acquire connection permit (with timeout to prevent hanging)
-        let permit = match timeout(
-            Duration::from_secs(30),
-            self.connection_semaphore.acquire()
-        ).await {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => {
-                error!("Failed to acquire connection permit");
-                return Err(crate::YamlBaseError::Database {
-                    message: "Connection pool exhausted".to_string(),
-                });
-            }
-            Err(_) => {
-                error!("Timeout acquiring connection permit for {}", client_addr);
-                return Err(crate::YamlBaseError::Database {
-                    message: "Connection pool timeout".to_string(),
-                });
-            }
-        };
+        let permit =
+            match timeout(Duration::from_secs(30), self.connection_semaphore.acquire()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => {
+                    error!("Failed to acquire connection permit");
+                    return Err(crate::YamlBaseError::Database {
+                        message: "Connection pool exhausted".to_string(),
+                    });
+                }
+                Err(_) => {
+                    error!("Timeout acquiring connection permit for {}", client_addr);
+                    return Err(crate::YamlBaseError::Database {
+                        message: "Connection pool timeout".to_string(),
+                    });
+                }
+            };
 
         // Configure TCP socket for stability
         if let Err(e) = self.configure_tcp_socket(&mut stream).await {
@@ -102,34 +106,37 @@ impl ConnectionManager {
 
         let connection_id = self.connection_counter.fetch_add(1, Ordering::SeqCst);
         let now = Instant::now();
-        
+
         // Register connection
         {
             let mut connections = self.connections.write().await;
-            connections.insert(connection_id, ConnectionInfo {
-                id: connection_id,
-                client_addr: client_addr.clone(),
-                started_at: now,
-                last_activity: now,
-            });
+            connections.insert(
+                connection_id,
+                ConnectionInfo {
+                    client_addr: client_addr.clone(),
+                    started_at: now,
+                    last_activity: now,
+                },
+            );
         }
 
         self.active_connections.fetch_add(1, Ordering::SeqCst);
-        info!("Connection {} from {} established", connection_id, client_addr);
+        info!(
+            "Connection {} from {} established",
+            connection_id, client_addr
+        );
 
         // Handle the connection with comprehensive error handling
-        let result = self.handle_connection_with_recovery(
-            stream, 
-            connection_id, 
-            client_addr.clone()
-        ).await;
+        let result = self
+            .handle_connection_with_recovery(stream, connection_id, client_addr.clone())
+            .await;
 
         // Cleanup connection
         {
             let mut connections = self.connections.write().await;
             connections.remove(&connection_id);
         }
-        
+
         self.active_connections.fetch_sub(1, Ordering::SeqCst);
         drop(permit); // Release connection permit
 
@@ -137,7 +144,10 @@ impl ConnectionManager {
         match &result {
             Ok(_) => {
                 let duration = now.elapsed();
-                info!("Connection {} closed normally after {:?}", connection_id, duration);
+                info!(
+                    "Connection {} closed normally after {:?}",
+                    connection_id, duration
+                );
             }
             Err(e) => {
                 self.failed_connections.fetch_add(1, Ordering::SeqCst);
@@ -153,8 +163,8 @@ impl ConnectionManager {
 
     /// Configure TCP socket options for connection stability
     async fn configure_tcp_socket(&self, stream: &mut TcpStream) -> crate::Result<()> {
-        use std::os::unix::io::AsRawFd;
         use std::mem::size_of;
+        use std::os::unix::io::AsRawFd;
 
         let fd = stream.as_raw_fd();
 
@@ -167,7 +177,8 @@ impl ConnectionManager {
                 libc::TCP_NODELAY,
                 &nodelay as *const _ as *const libc::c_void,
                 size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0 {
+            ) != 0
+            {
                 return Err(crate::YamlBaseError::Database {
                     message: "Failed to set TCP_NODELAY".to_string(),
                 });
@@ -183,7 +194,8 @@ impl ConnectionManager {
                 libc::SO_KEEPALIVE,
                 &keepalive as *const _ as *const libc::c_void,
                 size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0 {
+            ) != 0
+            {
                 return Err(crate::YamlBaseError::Database {
                     message: "Failed to set SO_KEEPALIVE".to_string(),
                 });
@@ -241,7 +253,9 @@ impl ConnectionManager {
         connection_id: usize,
         client_addr: String,
     ) -> crate::Result<()> {
-        let connection_timeout = self.config.connection_timeout
+        let connection_timeout = self
+            .config
+            .connection_timeout
             .unwrap_or(Duration::from_secs(300)); // 5 minutes default
 
         let connection = Connection::new(self.config.clone(), self.storage.clone());
@@ -250,7 +264,7 @@ impl ConnectionManager {
         let connection_future = async {
             // Update last activity
             self.update_connection_activity(connection_id).await;
-            
+
             // Handle the actual protocol connection
             connection.handle(stream).await
         };
@@ -258,8 +272,10 @@ impl ConnectionManager {
         match timeout(connection_timeout, connection_future).await {
             Ok(result) => result,
             Err(_) => {
-                warn!("Connection {} from {} timed out after {:?}", 
-                     connection_id, client_addr, connection_timeout);
+                warn!(
+                    "Connection {} from {} timed out after {:?}",
+                    connection_id, client_addr, connection_timeout
+                );
                 Err(crate::YamlBaseError::Database {
                     message: format!("Connection timeout after {:?}", connection_timeout),
                 })
@@ -285,10 +301,11 @@ impl ConnectionManager {
 
         // Calculate average connection duration from active connections
         let now = Instant::now();
-        let total_duration: Duration = connections.values()
+        let total_duration: Duration = connections
+            .values()
             .map(|conn| now.duration_since(conn.started_at))
             .sum();
-        
+
         let avg_duration = if !connections.is_empty() {
             total_duration / connections.len() as u32
         } else {
@@ -314,8 +331,12 @@ impl ConnectionManager {
             let connections = self.connections.read().await;
             for (id, conn_info) in connections.iter() {
                 if now.duration_since(conn_info.last_activity) > idle_timeout {
-                    warn!("Connection {} from {} is idle for {:?}, marking for cleanup", 
-                         id, conn_info.client_addr, now.duration_since(conn_info.last_activity));
+                    warn!(
+                        "Connection {} from {} is idle for {:?}, marking for cleanup",
+                        id,
+                        conn_info.client_addr,
+                        now.duration_since(conn_info.last_activity)
+                    );
                     to_remove.push(*id);
                 }
             }
@@ -335,21 +356,21 @@ impl ConnectionManager {
         let manager = Arc::new(self.connections.clone());
         let stats_interval = Duration::from_secs(60); // Log stats every minute
         let cleanup_interval = Duration::from_secs(300); // Cleanup every 5 minutes
-        
+
         tokio::spawn(async move {
             let mut stats_timer = tokio::time::interval(stats_interval);
             let mut cleanup_timer = tokio::time::interval(cleanup_interval);
-            
+
             loop {
                 tokio::select! {
                     _ = stats_timer.tick() => {
                         let connections = manager.read().await;
                         info!("Connection pool status: {} active connections", connections.len());
-                        
+
                         // Log connection details in debug mode
                         for (id, conn_info) in connections.iter() {
-                            debug!("Connection {}: {} (active for {:?})", 
-                                  id, conn_info.client_addr, 
+                            debug!("Connection {}: {} (active for {:?})",
+                                  id, conn_info.client_addr,
                                   Instant::now().duration_since(conn_info.started_at));
                         }
                     }

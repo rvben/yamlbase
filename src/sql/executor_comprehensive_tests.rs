@@ -430,12 +430,21 @@ mod comprehensive_tests {
 
         let mut projects_table = Table::new("sf_project_v2".to_string(), projects_columns);
         projects_table.rows = vec![
-            vec![Value::Text("123001".to_string()), Value::Text("Active".to_string())],
-            vec![Value::Text("123002".to_string()), Value::Text("Active".to_string())],
-            vec![Value::Text("123003".to_string()), Value::Text("Inactive".to_string())],
+            vec![
+                Value::Text("123001".to_string()),
+                Value::Text("Active".to_string()),
+            ],
+            vec![
+                Value::Text("123002".to_string()),
+                Value::Text("Active".to_string()),
+            ],
+            vec![
+                Value::Text("123003".to_string()),
+                Value::Text("Inactive".to_string()),
+            ],
         ];
 
-        // Create allocations table  
+        // Create allocations table
         let allocations_columns = vec![
             Column {
                 name: "sap_project_id".to_string(),
@@ -457,11 +466,21 @@ mod comprehensive_tests {
             },
         ];
 
-        let mut allocations_table = Table::new("sf_project_allocations".to_string(), allocations_columns);
+        let mut allocations_table =
+            Table::new("sf_project_allocations".to_string(), allocations_columns);
         allocations_table.rows = vec![
-            vec![Value::Text("123001".to_string()), Value::Text("Published".to_string())],
-            vec![Value::Text("123002".to_string()), Value::Text("Published".to_string())],
-            vec![Value::Text("123003".to_string()), Value::Text("Draft".to_string())],
+            vec![
+                Value::Text("123001".to_string()),
+                Value::Text("Published".to_string()),
+            ],
+            vec![
+                Value::Text("123002".to_string()),
+                Value::Text("Published".to_string()),
+            ],
+            vec![
+                Value::Text("123003".to_string()),
+                Value::Text("Draft".to_string()),
+            ],
         ];
 
         db.add_table(projects_table).unwrap();
@@ -482,15 +501,15 @@ mod comprehensive_tests {
         "#).unwrap();
 
         let result = executor.execute(&query[0]).await.unwrap();
-        
+
         // Verify we get results from both sources (4 total rows: 2 projects + 2 allocations)
         assert_eq!(result.columns, vec!["sap_project_id", "type"]);
         assert_eq!(result.rows.len(), 4);
-        
+
         // Count the different types
         let mut project_count = 0;
         let mut allocation_count = 0;
-        
+
         for row in &result.rows {
             match row[1].clone() {
                 Value::Text(ref type_name) if type_name == "project" => {
@@ -502,7 +521,7 @@ mod comprehensive_tests {
                 _ => panic!("Unexpected row data: {:?}", row),
             }
         }
-        
+
         assert_eq!(project_count, 2, "Should have 2 project entries");
         assert_eq!(allocation_count, 2, "Should have 2 allocation entries");
     }
@@ -545,9 +564,21 @@ mod comprehensive_tests {
 
         let mut projects_table = Table::new("SF_PROJECT_V2".to_string(), projects_columns);
         projects_table.rows = vec![
-            vec![Value::Text("123001".to_string()), Value::Text("Test Project Alpha".to_string()), Value::Text("Active".to_string())],
-            vec![Value::Text("123002".to_string()), Value::Text("Technology Research Beta".to_string()), Value::Text("Active".to_string())],
-            vec![Value::Text("123003".to_string()), Value::Text("Project Gamma".to_string()), Value::Text("Inactive".to_string())],
+            vec![
+                Value::Text("123001".to_string()),
+                Value::Text("Test Project Alpha".to_string()),
+                Value::Text("Active".to_string()),
+            ],
+            vec![
+                Value::Text("123002".to_string()),
+                Value::Text("Technology Research Beta".to_string()),
+                Value::Text("Active".to_string()),
+            ],
+            vec![
+                Value::Text("123003".to_string()),
+                Value::Text("Project Gamma".to_string()),
+                Value::Text("Inactive".to_string()),
+            ],
         ];
 
         db.add_table(projects_table).unwrap();
@@ -563,8 +594,11 @@ mod comprehensive_tests {
             )
             SELECT * FROM TestCTE
         "#;
-        
-        let basic_result = executor.execute(&parse_sql(basic_cte_sql).unwrap()[0]).await.unwrap();
+
+        let basic_result = executor
+            .execute(&parse_sql(basic_cte_sql).unwrap()[0])
+            .await
+            .unwrap();
         assert_eq!(basic_result.rows.len(), 2);
 
         // Test multiple CTEs with complex expressions (the Priority 1.1 requirement)
@@ -577,11 +611,16 @@ mod comprehensive_tests {
             )
             SELECT * FROM ProjectCount
         "#;
-        
-        let result = executor.execute(&parse_sql(multiple_cte_sql).unwrap()[0]).await;
+
+        let result = executor
+            .execute(&parse_sql(multiple_cte_sql).unwrap()[0])
+            .await;
         match result {
             Ok(res) => {
-                println!("Multiple CTEs with complex expressions worked! Got {} rows", res.rows.len());
+                println!(
+                    "Multiple CTEs with complex expressions worked! Got {} rows",
+                    res.rows.len()
+                );
                 println!("Result: {:?}", res);
                 // The test is currently working, which is great! Let's verify the results
                 // We expect 1 row with the count
@@ -590,7 +629,9 @@ mod comprehensive_tests {
                 } else {
                     // If it's returning the actual Projects CTE results instead of ProjectCount
                     // This suggests the complex expression part might not be fully working
-                    println!("Got Projects results instead of ProjectCount - this indicates partial CTE support");
+                    println!(
+                        "Got Projects results instead of ProjectCount - this indicates partial CTE support"
+                    );
                     assert_eq!(res.rows.len(), 2); // Should be the 2 active projects
                 }
             }
@@ -598,9 +639,11 @@ mod comprehensive_tests {
                 println!("Multiple CTEs with complex expressions failed: {}", e);
                 // Log the specific error to understand what's happening
                 println!("Error details: {}", e);
-                
+
                 // Check if it's the expected error from the report
-                if e.to_string().contains("Complex expressions") || e.to_string().contains("not yet supported") {
+                if e.to_string().contains("Complex expressions")
+                    || e.to_string().contains("not yet supported")
+                {
                     println!("This matches the error reported in the compatibility report");
                 } else {
                     // Some other error - let's see what it is
@@ -648,12 +691,24 @@ mod comprehensive_tests {
 
         let mut projects_table = Table::new("sf_project_v2".to_string(), projects_columns);
         projects_table.rows = vec![
-            vec![Value::Text("123001".to_string()), Value::Text("Project Alpha".to_string()), Value::Text("Active".to_string())],
-            vec![Value::Text("123002".to_string()), Value::Text("Project Beta".to_string()), Value::Text("Active".to_string())],
-            vec![Value::Text("123003".to_string()), Value::Text("Project Gamma".to_string()), Value::Text("Inactive".to_string())],
+            vec![
+                Value::Text("123001".to_string()),
+                Value::Text("Project Alpha".to_string()),
+                Value::Text("Active".to_string()),
+            ],
+            vec![
+                Value::Text("123002".to_string()),
+                Value::Text("Project Beta".to_string()),
+                Value::Text("Active".to_string()),
+            ],
+            vec![
+                Value::Text("123003".to_string()),
+                Value::Text("Project Gamma".to_string()),
+                Value::Text("Inactive".to_string()),
+            ],
         ];
 
-        // Create allocations table  
+        // Create allocations table
         let allocations_columns = vec![
             Column {
                 name: "sap_project_id".to_string(),
@@ -675,7 +730,8 @@ mod comprehensive_tests {
             },
         ];
 
-        let mut allocations_table = Table::new("sf_project_allocations".to_string(), allocations_columns);
+        let mut allocations_table =
+            Table::new("sf_project_allocations".to_string(), allocations_columns);
         allocations_table.rows = vec![
             vec![Value::Text("123001".to_string()), Value::Integer(1)],
             vec![Value::Text("123001".to_string()), Value::Integer(2)],
@@ -693,7 +749,8 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // First test - simple JOIN without aggregates to see if it works
-        let simple_query = parse_sql(r#"
+        let simple_query = parse_sql(
+            r#"
             WITH ProjectAllocations AS (
                 SELECT p.sap_project_id, p.project_name, a.wbi_id
                 FROM sf_project_v2 p
@@ -701,17 +758,19 @@ mod comprehensive_tests {
                 WHERE p.status_code = 'Active'
             )
             SELECT * FROM ProjectAllocations
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let simple_result = executor.execute(&simple_query[0]).await.unwrap();
-        
+
         // Should get all active project allocations (5 rows)
         assert_eq!(simple_result.rows.len(), 5);
-        
+
         // Verify JOIN data is correct - should have 5 active project allocations
         let mut alpha_count = 0;
         let mut beta_count = 0;
-        
+
         for row in &simple_result.rows {
             match row[0].clone() {
                 Value::Text(ref project_id) if project_id == "123001" => {
@@ -725,12 +784,13 @@ mod comprehensive_tests {
                 _ => panic!("Unexpected project ID: {:?}", row[0]),
             }
         }
-        
+
         assert_eq!(alpha_count, 3, "Project Alpha should have 3 allocations");
         assert_eq!(beta_count, 2, "Project Beta should have 2 allocations");
-        
+
         // Test the exact Priority 1.3 query pattern from the compatibility report
-        let complex_aggregate_query = parse_sql(r#"
+        let complex_aggregate_query = parse_sql(
+            r#"
             WITH ProjectAllocations AS (
                 SELECT p.sap_project_id, p.project_name, COUNT(*) as member_count
                 FROM sf_project_v2 p
@@ -739,34 +799,54 @@ mod comprehensive_tests {
                 GROUP BY p.sap_project_id, p.project_name
             )
             SELECT * FROM ProjectAllocations ORDER BY member_count DESC
-        "#).unwrap();
-        
+        "#,
+        )
+        .unwrap();
+
         let complex_result = executor.execute(&complex_aggregate_query[0]).await;
         match complex_result {
             Ok(res) => {
-                println!("✅ CTE with complex JOINs and aggregates works! Got {} rows", res.rows.len());
+                println!(
+                    "✅ CTE with complex JOINs and aggregates works! Got {} rows",
+                    res.rows.len()
+                );
                 println!("Result: {:?}", res);
                 // Should get 2 rows (one for each active project with their member counts)
                 // But currently getting 3 because WHERE clause in CTE isn't filtering properly
-                println!("Expected 2 active projects, got {} projects", res.rows.len());
+                println!(
+                    "Expected 2 active projects, got {} projects",
+                    res.rows.len()
+                );
                 for (i, row) in res.rows.iter().enumerate() {
-                    println!("  Row {}: {:?}", i+1, row);
+                    println!("  Row {}: {:?}", i + 1, row);
                 }
-                
+
                 // FIXME: This should be 2, but we're getting 3 because WHERE clause filtering isn't working in CTE JOINs
                 // assert_eq!(res.rows.len(), 2);
                 // For now, we'll accept 3 rows to confirm the JOIN aggregate functionality works
                 // The WHERE clause filtering will be fixed in a separate commit
-                assert!(res.rows.len() >= 2, "Should have at least 2 active projects");
+                assert!(
+                    res.rows.len() >= 2,
+                    "Should have at least 2 active projects"
+                );
                 // Verify we have the expected columns
-                assert_eq!(res.columns, vec!["sap_project_id", "project_name", "member_count"]);
+                assert_eq!(
+                    res.columns,
+                    vec!["sap_project_id", "project_name", "member_count"]
+                );
             }
             Err(e) => {
-                println!("❌ Priority 1.3 still failing: CTE with complex JOINs and aggregates: {}", e);
+                println!(
+                    "❌ Priority 1.3 still failing: CTE with complex JOINs and aggregates: {}",
+                    e
+                );
                 // This should be the error mentioned in the report
-                assert!(e.to_string().contains("Aggregate queries with JOINs are not yet fully implemented") 
-                       || e.to_string().contains("not yet supported")
-                       || e.to_string().contains("not yet fully implemented"));
+                assert!(
+                    e.to_string()
+                        .contains("Aggregate queries with JOINs are not yet fully implemented")
+                        || e.to_string().contains("not yet supported")
+                        || e.to_string().contains("not yet fully implemented")
+                );
             }
         }
     }
@@ -818,10 +898,30 @@ mod comprehensive_tests {
 
         let mut sales_table = Table::new("sales".to_string(), sales_columns);
         sales_table.rows = vec![
-            vec![Value::Integer(1), Value::Integer(100), Value::Integer(500), Value::Integer(2)],
-            vec![Value::Integer(2), Value::Integer(100), Value::Integer(300), Value::Integer(1)],
-            vec![Value::Integer(3), Value::Integer(101), Value::Integer(750), Value::Integer(3)],
-            vec![Value::Integer(4), Value::Integer(101), Value::Integer(200), Value::Integer(1)],
+            vec![
+                Value::Integer(1),
+                Value::Integer(100),
+                Value::Integer(500),
+                Value::Integer(2),
+            ],
+            vec![
+                Value::Integer(2),
+                Value::Integer(100),
+                Value::Integer(300),
+                Value::Integer(1),
+            ],
+            vec![
+                Value::Integer(3),
+                Value::Integer(101),
+                Value::Integer(750),
+                Value::Integer(3),
+            ],
+            vec![
+                Value::Integer(4),
+                Value::Integer(101),
+                Value::Integer(200),
+                Value::Integer(1),
+            ],
         ];
 
         // Create a products table
@@ -860,7 +960,8 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test CTE with SUM, AVG, MIN, MAX functions
-        let aggregate_query = parse_sql(r#"
+        let aggregate_query = parse_sql(
+            r#"
             WITH ProductStats AS (
                 SELECT 
                     p.name,
@@ -874,20 +975,43 @@ mod comprehensive_tests {
                 GROUP BY p.name
             )
             SELECT * FROM ProductStats ORDER BY total_amount DESC
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&aggregate_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ SUM, AVG, MIN, MAX in CTE JOINs works! Got {} rows", res.rows.len());
+                println!(
+                    "✅ SUM, AVG, MIN, MAX in CTE JOINs works! Got {} rows",
+                    res.rows.len()
+                );
                 println!("Result: {:?}", res);
-                
+
                 // Should get 2 rows (one for each product)
                 assert_eq!(res.rows.len(), 2);
-                assert_eq!(res.columns, vec!["name", "total_amount", "avg_amount", "min_amount", "max_amount", "sales_count"]);
-                
+                assert_eq!(
+                    res.columns,
+                    vec![
+                        "name",
+                        "total_amount",
+                        "avg_amount",
+                        "min_amount",
+                        "max_amount",
+                        "sales_count"
+                    ]
+                );
+
                 // Check the first row (Widget B should have higher total: 750 + 200 = 950)
-                if let [Value::Text(name), Value::Integer(total), Value::Double(avg), Value::Integer(min), Value::Integer(max), Value::Integer(count)] = &res.rows[0][..] {
+                if let [
+                    Value::Text(name),
+                    Value::Integer(total),
+                    Value::Double(avg),
+                    Value::Integer(min),
+                    Value::Integer(max),
+                    Value::Integer(count),
+                ] = &res.rows[0][..]
+                {
                     assert_eq!(name, "Widget B");
                     assert_eq!(*total, 950); // 750 + 200
                     assert_eq!(*avg, 475.0); // (750 + 200) / 2
@@ -897,9 +1021,17 @@ mod comprehensive_tests {
                 } else {
                     panic!("Unexpected row format: {:?}", res.rows[0]);
                 }
-                
+
                 // Check the second row (Widget A should have: 500 + 300 = 800)
-                if let [Value::Text(name), Value::Integer(total), Value::Double(avg), Value::Integer(min), Value::Integer(max), Value::Integer(count)] = &res.rows[1][..] {
+                if let [
+                    Value::Text(name),
+                    Value::Integer(total),
+                    Value::Double(avg),
+                    Value::Integer(min),
+                    Value::Integer(max),
+                    Value::Integer(count),
+                ] = &res.rows[1][..]
+                {
                     assert_eq!(name, "Widget A");
                     assert_eq!(*total, 800); // 500 + 300
                     assert_eq!(*avg, 400.0); // (500 + 300) / 2
@@ -987,36 +1119,40 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test CROSS JOIN in CTE - should produce Cartesian product
-        let cross_join_query = parse_sql(r#"
+        let cross_join_query = parse_sql(
+            r#"
             WITH ProductCombinations AS (
                 SELECT c.color, s.size 
                 FROM colors c 
                 CROSS JOIN sizes s
             )
             SELECT * FROM ProductCombinations ORDER BY color, size
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&cross_join_query[0]).await;
         match result {
             Ok(res) => {
                 println!("✅ CROSS JOIN in CTE works! Got {} rows", res.rows.len());
                 println!("Result: {:?}", res);
-                
+
                 // Should get 6 rows (2 colors × 3 sizes = 6 combinations)
                 assert_eq!(res.rows.len(), 6);
                 assert_eq!(res.columns, vec!["color", "size"]);
-                
+
                 // Check the Cartesian product combinations (actual order from result)
-                let expected_combinations = vec![
+                let expected_combinations = [
                     ("Red", "Small"),
                     ("Red", "Medium"),
                     ("Red", "Large"),
                     ("Blue", "Small"),
-                    ("Blue", "Medium"), 
+                    ("Blue", "Medium"),
                     ("Blue", "Large"),
                 ];
-                
-                for (i, (expected_color, expected_size)) in expected_combinations.iter().enumerate() {
+
+                for (i, (expected_color, expected_size)) in expected_combinations.iter().enumerate()
+                {
                     if let [Value::Text(color), Value::Text(size)] = &res.rows[i][..] {
                         assert_eq!(color, expected_color);
                         assert_eq!(size, expected_size);
@@ -1080,16 +1216,24 @@ mod comprehensive_tests {
         let mut events_table = Table::new("events".to_string(), events_columns);
         events_table.rows = vec![
             vec![
-                Value::Integer(1), 
+                Value::Integer(1),
                 Value::Date(chrono::NaiveDate::from_ymd_opt(2023, 12, 25).unwrap()),
-                Value::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(1703520000, 0).unwrap()), // 2023-12-25 12:00:00
-                Value::Text("2023-11-15".to_string())
+                Value::Timestamp(
+                    chrono::DateTime::from_timestamp(1703520000, 0)
+                        .unwrap()
+                        .naive_utc(),
+                ), // 2023-12-25 12:00:00
+                Value::Text("2023-11-15".to_string()),
             ],
             vec![
-                Value::Integer(2), 
+                Value::Integer(2),
                 Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 6, 15).unwrap()),
-                Value::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(1718445600, 0).unwrap()), // 2024-06-15 08:00:00  
-                Value::Text("2024-03-20 14:30:00".to_string())
+                Value::Timestamp(
+                    chrono::DateTime::from_timestamp(1718445600, 0)
+                        .unwrap()
+                        .naive_utc(),
+                ), // 2024-06-15 08:00:00
+                Value::Text("2024-03-20 14:30:00".to_string()),
             ],
         ];
 
@@ -1100,28 +1244,39 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test 1: DATE function - extract date from datetime
-        let date_query = parse_sql(r#"
+        let date_query = parse_sql(
+            r#"
             SELECT 
                 id, 
                 DATE(event_datetime) as extracted_date,
                 DATE(event_text) as parsed_date
             FROM events 
             ORDER BY id
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&date_query[0]).await;
         match result {
             Ok(res) => {
                 println!("✅ DATE function works! Got {} rows", res.rows.len());
                 println!("Result: {:?}", res);
-                
+
                 assert_eq!(res.rows.len(), 2);
                 assert_eq!(res.columns, vec!["id", "extracted_date", "parsed_date"]);
-                
+
                 // Check first row
-                if let [Value::Integer(1), Value::Date(date1), Value::Date(date2)] = &res.rows[0][..] {
-                    assert_eq!(*date1, chrono::NaiveDate::from_ymd_opt(2023, 12, 25).unwrap());
-                    assert_eq!(*date2, chrono::NaiveDate::from_ymd_opt(2023, 11, 15).unwrap());
+                if let [Value::Integer(1), Value::Date(date1), Value::Date(date2)] =
+                    &res.rows[0][..]
+                {
+                    assert_eq!(
+                        *date1,
+                        chrono::NaiveDate::from_ymd_opt(2023, 12, 25).unwrap()
+                    );
+                    assert_eq!(
+                        *date2,
+                        chrono::NaiveDate::from_ymd_opt(2023, 11, 15).unwrap()
+                    );
                 } else {
                     panic!("Unexpected row format: {:?}", res.rows[0]);
                 }
@@ -1133,7 +1288,8 @@ mod comprehensive_tests {
         }
 
         // Test 2: YEAR, MONTH, DAY functions
-        let ymd_query = parse_sql(r#"
+        let ymd_query = parse_sql(
+            r#"
             SELECT 
                 id,
                 YEAR(event_date) as year_val,
@@ -1143,19 +1299,42 @@ mod comprehensive_tests {
                 MONTH(event_text) as text_month
             FROM events 
             ORDER BY id
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&ymd_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ YEAR, MONTH, DAY functions work! Got {} rows", res.rows.len());
+                println!(
+                    "✅ YEAR, MONTH, DAY functions work! Got {} rows",
+                    res.rows.len()
+                );
                 println!("Result: {:?}", res);
-                
+
                 assert_eq!(res.rows.len(), 2);
-                assert_eq!(res.columns, vec!["id", "year_val", "month_val", "day_val", "datetime_year", "text_month"]);
-                
+                assert_eq!(
+                    res.columns,
+                    vec![
+                        "id",
+                        "year_val",
+                        "month_val",
+                        "day_val",
+                        "datetime_year",
+                        "text_month"
+                    ]
+                );
+
                 // Check first row: 2023-12-25
-                if let [Value::Integer(1), Value::Integer(year), Value::Integer(month), Value::Integer(day), Value::Integer(dt_year), Value::Integer(text_month)] = &res.rows[0][..] {
+                if let [
+                    Value::Integer(1),
+                    Value::Integer(year),
+                    Value::Integer(month),
+                    Value::Integer(day),
+                    Value::Integer(dt_year),
+                    Value::Integer(text_month),
+                ] = &res.rows[0][..]
+                {
                     assert_eq!(*year, 2023);
                     assert_eq!(*month, 12);
                     assert_eq!(*day, 25);
@@ -1164,9 +1343,17 @@ mod comprehensive_tests {
                 } else {
                     panic!("Unexpected row format: {:?}", res.rows[0]);
                 }
-                
+
                 // Check second row: 2024-06-15
-                if let [Value::Integer(2), Value::Integer(year), Value::Integer(month), Value::Integer(day), Value::Integer(dt_year), Value::Integer(text_month)] = &res.rows[1][..] {
+                if let [
+                    Value::Integer(2),
+                    Value::Integer(year),
+                    Value::Integer(month),
+                    Value::Integer(day),
+                    Value::Integer(dt_year),
+                    Value::Integer(text_month),
+                ] = &res.rows[1][..]
+                {
                     assert_eq!(*year, 2024);
                     assert_eq!(*month, 6);
                     assert_eq!(*day, 15);
@@ -1183,18 +1370,24 @@ mod comprehensive_tests {
         }
 
         // Test 3: Date functions in WHERE clauses for filtering
-        let where_query = parse_sql(r#"
+        let where_query = parse_sql(
+            r#"
             SELECT id, event_date 
             FROM events 
             WHERE YEAR(event_date) = 2023 AND MONTH(event_date) = 12
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&where_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ Date functions in WHERE clause work! Got {} rows", res.rows.len());
+                println!(
+                    "✅ Date functions in WHERE clause work! Got {} rows",
+                    res.rows.len()
+                );
                 println!("Result: {:?}", res);
-                
+
                 // Should get only the December 2023 event
                 assert_eq!(res.rows.len(), 1);
                 if let [Value::Integer(1), Value::Date(_)] = &res.rows[0][..] {
