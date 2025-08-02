@@ -1,11 +1,11 @@
 #![allow(clippy::uninlined_format_args)]
 
-use std::sync::Arc;
+use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::sync::Arc;
 use yamlbase::database::{Column, Database, Storage, Table, Value};
 use yamlbase::sql::{QueryExecutor, parse_sql};
 use yamlbase::yaml::schema::SqlType;
-use rust_decimal::Decimal;
 
 /// Test for complex expressions in aggregates to verify the fix
 #[tokio::test]
@@ -63,27 +63,33 @@ async fn test_complex_aggregate_expressions() {
     ];
 
     let mut sales_table = Table::new("sales".to_string(), sales_columns);
-    sales_table.insert_row(vec![
-        Value::Integer(1),
-        Value::Text("Widget A".to_string()),
-        Value::Decimal(Decimal::from_str("29.99").unwrap()),
-        Value::Integer(10),
-        Value::Float(0.1), // 10% discount
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(2),
-        Value::Text("Widget B".to_string()),
-        Value::Decimal(Decimal::from_str("49.99").unwrap()),
-        Value::Integer(5),
-        Value::Float(0.05), // 5% discount
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(3),
-        Value::Text("Widget A".to_string()),
-        Value::Decimal(Decimal::from_str("29.99").unwrap()),
-        Value::Integer(7),
-        Value::Float(0.15), // 15% discount
-    ]).unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Widget A".to_string()),
+            Value::Decimal(Decimal::from_str("29.99").unwrap()),
+            Value::Integer(10),
+            Value::Float(0.1), // 10% discount
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Widget B".to_string()),
+            Value::Decimal(Decimal::from_str("49.99").unwrap()),
+            Value::Integer(5),
+            Value::Float(0.05), // 5% discount
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(3),
+            Value::Text("Widget A".to_string()),
+            Value::Decimal(Decimal::from_str("29.99").unwrap()),
+            Value::Integer(7),
+            Value::Float(0.15), // 15% discount
+        ])
+        .unwrap();
 
     db.add_table(sales_table).unwrap();
 
@@ -103,12 +109,17 @@ async fn test_complex_aggregate_expressions() {
         GROUP BY product
         ORDER BY product
     "#;
-    
-    let mult_result = executor.execute(&parse_sql(multiplication_query).unwrap()[0]).await;
+
+    let mult_result = executor
+        .execute(&parse_sql(multiplication_query).unwrap()[0])
+        .await;
     match &mult_result {
         Ok(result) => {
-            println!("   ✓ Complex multiplication in SUM succeeded: {} product groups", result.rows.len());
-            assert!(result.rows.len() > 0);
+            println!(
+                "   ✓ Complex multiplication in SUM succeeded: {} product groups",
+                result.rows.len()
+            );
+            assert!(!result.rows.is_empty());
         }
         Err(e) => {
             let error_str = e.to_string();
@@ -128,8 +139,10 @@ async fn test_complex_aggregate_expressions() {
             SUM(quantity - 1) as adjusted_quantity_sum
         FROM sales
     "#;
-    
-    let add_result = executor.execute(&parse_sql(addition_query).unwrap()[0]).await;
+
+    let add_result = executor
+        .execute(&parse_sql(addition_query).unwrap()[0])
+        .await;
     match &add_result {
         Ok(result) => {
             println!("   ✓ Complex addition/subtraction in aggregates succeeded");
@@ -140,7 +153,7 @@ async fn test_complex_aggregate_expressions() {
         }
     }
 
-    // Test 3: Literal values in expressions  
+    // Test 3: Literal values in expressions
     println!("\n✅ Test 3: Expressions with Literal Values");
     let literal_query = r#"
         SELECT 
@@ -148,8 +161,10 @@ async fn test_complex_aggregate_expressions() {
             AVG(quantity + 5) as avg_adjusted_quantity
         FROM sales
     "#;
-    
-    let literal_result = executor.execute(&parse_sql(literal_query).unwrap()[0]).await;
+
+    let literal_result = executor
+        .execute(&parse_sql(literal_query).unwrap()[0])
+        .await;
     match &literal_result {
         Ok(result) => {
             println!("   ✓ Expressions with literal values succeeded");
@@ -168,7 +183,7 @@ async fn test_complex_aggregate_expressions() {
             COUNT(+price) as positive_price_count
         FROM sales
     "#;
-    
+
     let unary_result = executor.execute(&parse_sql(unary_query).unwrap()[0]).await;
     match &unary_result {
         Ok(result) => {
@@ -188,8 +203,10 @@ async fn test_complex_aggregate_expressions() {
         FROM sales
         WHERE quantity > 0
     "#;
-    
-    let div_result = executor.execute(&parse_sql(division_query).unwrap()[0]).await;
+
+    let div_result = executor
+        .execute(&parse_sql(division_query).unwrap()[0])
+        .await;
     match &div_result {
         Ok(result) => {
             println!("   ✓ Division in aggregates succeeded");
@@ -206,7 +223,7 @@ async fn test_complex_aggregate_expressions() {
     println!("   ✅ Literal values in aggregate expressions");
     println!("   ✅ Unary operations support");
     println!("   ✅ Division operations in aggregates");
-    
+
     println!("\n🚀 'Complex expressions in aggregates not supported yet' error has been RESOLVED!");
     println!("   Advanced business calculations now supported:");
     println!("   • Revenue calculations: SUM(price * quantity)");
@@ -252,8 +269,20 @@ async fn test_previous_complex_aggregate_error_fixed() {
     ];
 
     let mut test_table = Table::new("test_data".to_string(), test_columns);
-    test_table.insert_row(vec![Value::Integer(1), Value::Integer(100), Value::Integer(2)]).unwrap();
-    test_table.insert_row(vec![Value::Integer(2), Value::Integer(200), Value::Integer(3)]).unwrap();
+    test_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Integer(100),
+            Value::Integer(2),
+        ])
+        .unwrap();
+    test_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Integer(200),
+            Value::Integer(3),
+        ])
+        .unwrap();
 
     db.add_table(test_table).unwrap();
 
@@ -263,8 +292,10 @@ async fn test_previous_complex_aggregate_error_fixed() {
     // Query that would previously fail with "Complex expressions in aggregates not supported yet"
     let complex_agg_query = "SELECT SUM(amount * multiplier) as total FROM test_data";
 
-    let result = executor.execute(&parse_sql(complex_agg_query).unwrap()[0]).await;
-    
+    let result = executor
+        .execute(&parse_sql(complex_agg_query).unwrap()[0])
+        .await;
+
     match result {
         Ok(_) => {
             println!("✅ Complex aggregate expression executed without NotImplemented error!");
@@ -274,7 +305,10 @@ async fn test_previous_complex_aggregate_error_fixed() {
             if error_str.contains("Complex expressions in aggregates not supported yet") {
                 panic!("❌ The NotImplemented error still exists! Fix was not effective.");
             } else {
-                println!("✅ NotImplemented error is gone, but got different error: {}", error_str);
+                println!(
+                    "✅ NotImplemented error is gone, but got different error: {}",
+                    error_str
+                );
                 println!("   This indicates the fix worked but there may be other edge cases");
             }
         }

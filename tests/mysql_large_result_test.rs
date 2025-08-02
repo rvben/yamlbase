@@ -151,10 +151,7 @@ async fn test_mysql_packet_splitting_edge_cases() {
     // Create rows with very large text fields to test packet splitting
     for i in 1..=10 {
         let huge_text = "X".repeat(2 * 1024 * 1024); // 2MB per field
-        let row = vec![
-            Value::Integer(i),
-            Value::Text(huge_text),
-        ];
+        let row = vec![Value::Integer(i), Value::Text(huge_text)];
         table.insert_row(row).unwrap();
     }
 
@@ -174,7 +171,7 @@ async fn test_mysql_packet_splitting_edge_cases() {
 
     println!("✅ Packet splitting test completed in {:?}", duration);
     assert_eq!(packet_result.rows.len(), 10);
-    
+
     // Verify that the large text was transmitted correctly
     for row in &packet_result.rows {
         if let Value::Text(text) = &row[1] {

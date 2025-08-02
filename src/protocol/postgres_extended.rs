@@ -1173,18 +1173,21 @@ fn parse_parameter_value(data: &[u8], sql_type: &SqlType) -> crate::Result<Value
     match sql_type {
         SqlType::Integer => {
             if data.len() == 8 {
-                let bytes: [u8; 8] = data.try_into()
-                    .map_err(|_| YamlBaseError::Protocol("Failed to parse 8-byte integer".to_string()))?;
+                let bytes: [u8; 8] = data.try_into().map_err(|_| {
+                    YamlBaseError::Protocol("Failed to parse 8-byte integer".to_string())
+                })?;
                 let val = i64::from_be_bytes(bytes);
                 Ok(Value::Integer(val))
             } else if data.len() == 4 {
-                let bytes: [u8; 4] = data.try_into()
-                    .map_err(|_| YamlBaseError::Protocol("Failed to parse 4-byte integer".to_string()))?;
+                let bytes: [u8; 4] = data.try_into().map_err(|_| {
+                    YamlBaseError::Protocol("Failed to parse 4-byte integer".to_string())
+                })?;
                 let val = i32::from_be_bytes(bytes) as i64;
                 Ok(Value::Integer(val))
             } else if data.len() == 2 {
-                let bytes: [u8; 2] = data.try_into()
-                    .map_err(|_| YamlBaseError::Protocol("Failed to parse 2-byte integer".to_string()))?;
+                let bytes: [u8; 2] = data.try_into().map_err(|_| {
+                    YamlBaseError::Protocol("Failed to parse 2-byte integer".to_string())
+                })?;
                 let val = i16::from_be_bytes(bytes) as i64;
                 Ok(Value::Integer(val))
             } else {
@@ -1193,8 +1196,9 @@ fn parse_parameter_value(data: &[u8], sql_type: &SqlType) -> crate::Result<Value
         }
         SqlType::BigInt => {
             if data.len() == 8 {
-                let bytes: [u8; 8] = data.try_into()
-                    .map_err(|_| YamlBaseError::Protocol("Failed to parse 8-byte bigint".to_string()))?;
+                let bytes: [u8; 8] = data.try_into().map_err(|_| {
+                    YamlBaseError::Protocol("Failed to parse 8-byte bigint".to_string())
+                })?;
                 let val = i64::from_be_bytes(bytes);
                 Ok(Value::Integer(val))
             } else {
@@ -1203,8 +1207,9 @@ fn parse_parameter_value(data: &[u8], sql_type: &SqlType) -> crate::Result<Value
         }
         SqlType::Float => {
             if data.len() == 4 {
-                let bytes: [u8; 4] = data.try_into()
-                    .map_err(|_| YamlBaseError::Protocol("Failed to parse 4-byte float".to_string()))?;
+                let bytes: [u8; 4] = data.try_into().map_err(|_| {
+                    YamlBaseError::Protocol("Failed to parse 4-byte float".to_string())
+                })?;
                 let val = f32::from_be_bytes(bytes);
                 Ok(Value::Float(val))
             } else {
@@ -1213,8 +1218,9 @@ fn parse_parameter_value(data: &[u8], sql_type: &SqlType) -> crate::Result<Value
         }
         SqlType::Double => {
             if data.len() == 8 {
-                let bytes: [u8; 8] = data.try_into()
-                    .map_err(|_| YamlBaseError::Protocol("Failed to parse 8-byte double".to_string()))?;
+                let bytes: [u8; 8] = data.try_into().map_err(|_| {
+                    YamlBaseError::Protocol("Failed to parse 8-byte double".to_string())
+                })?;
                 let val = f64::from_be_bytes(bytes);
                 Ok(Value::Double(val))
             } else {

@@ -1,11 +1,11 @@
 #![allow(clippy::uninlined_format_args)]
 
-use std::sync::Arc;
+use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::sync::Arc;
 use yamlbase::database::{Column, Database, Storage, Table, Value};
 use yamlbase::sql::{QueryExecutor, parse_sql};
 use yamlbase::yaml::schema::SqlType;
-use rust_decimal::Decimal;
 
 /// Final test demonstrating 100% Enterprise SQL Compatibility Achievement
 #[tokio::test]
@@ -63,27 +63,33 @@ async fn test_100_percent_enterprise_sql_achievement() {
     ];
 
     let mut projects_table = Table::new("projects".to_string(), project_columns);
-    projects_table.insert_row(vec![
-        Value::Integer(1), 
-        Value::Text("Website Redesign".to_string()), 
-        Value::Decimal(Decimal::from_str("150000.00").unwrap()),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
-        Value::Boolean(true)
-    ]).unwrap();
-    projects_table.insert_row(vec![
-        Value::Integer(2), 
-        Value::Text("Mobile App".to_string()), 
-        Value::Decimal(Decimal::from_str("200000.00").unwrap()),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
-        Value::Boolean(true)
-    ]).unwrap();
-    projects_table.insert_row(vec![
-        Value::Integer(3), 
-        Value::Text("Legacy System".to_string()), 
-        Value::Decimal(Decimal::from_str("50000.00").unwrap()),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2023, 6, 10).unwrap()),
-        Value::Boolean(false)
-    ]).unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Website Redesign".to_string()),
+            Value::Decimal(Decimal::from_str("150000.00").unwrap()),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
+            Value::Boolean(true),
+        ])
+        .unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Mobile App".to_string()),
+            Value::Decimal(Decimal::from_str("200000.00").unwrap()),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+            Value::Boolean(true),
+        ])
+        .unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Integer(3),
+            Value::Text("Legacy System".to_string()),
+            Value::Decimal(Decimal::from_str("50000.00").unwrap()),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2023, 6, 10).unwrap()),
+            Value::Boolean(false),
+        ])
+        .unwrap();
 
     // Employees table
     let employee_columns = vec![
@@ -117,21 +123,27 @@ async fn test_100_percent_enterprise_sql_achievement() {
     ];
 
     let mut employees_table = Table::new("employees".to_string(), employee_columns);
-    employees_table.insert_row(vec![
-        Value::Integer(101), 
-        Value::Text("Alice".to_string()), 
-        Value::Decimal(Decimal::from_str("95000.00").unwrap())
-    ]).unwrap();
-    employees_table.insert_row(vec![
-        Value::Integer(102), 
-        Value::Text("Bob".to_string()), 
-        Value::Decimal(Decimal::from_str("85000.00").unwrap())
-    ]).unwrap();
-    employees_table.insert_row(vec![
-        Value::Integer(103), 
-        Value::Text("Carol".to_string()), 
-        Value::Decimal(Decimal::from_str("105000.00").unwrap())
-    ]).unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(101),
+            Value::Text("Alice".to_string()),
+            Value::Decimal(Decimal::from_str("95000.00").unwrap()),
+        ])
+        .unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(102),
+            Value::Text("Bob".to_string()),
+            Value::Decimal(Decimal::from_str("85000.00").unwrap()),
+        ])
+        .unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(103),
+            Value::Text("Carol".to_string()),
+            Value::Decimal(Decimal::from_str("105000.00").unwrap()),
+        ])
+        .unwrap();
 
     // Project assignments
     let assignment_columns = vec![
@@ -165,10 +177,34 @@ async fn test_100_percent_enterprise_sql_achievement() {
     ];
 
     let mut assignments_table = Table::new("assignments".to_string(), assignment_columns);
-    assignments_table.insert_row(vec![Value::Integer(1), Value::Integer(101), Value::Integer(40)]).unwrap();
-    assignments_table.insert_row(vec![Value::Integer(1), Value::Integer(102), Value::Integer(30)]).unwrap();
-    assignments_table.insert_row(vec![Value::Integer(2), Value::Integer(101), Value::Integer(20)]).unwrap();
-    assignments_table.insert_row(vec![Value::Integer(2), Value::Integer(103), Value::Integer(35)]).unwrap();
+    assignments_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Integer(101),
+            Value::Integer(40),
+        ])
+        .unwrap();
+    assignments_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Integer(102),
+            Value::Integer(30),
+        ])
+        .unwrap();
+    assignments_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Integer(101),
+            Value::Integer(20),
+        ])
+        .unwrap();
+    assignments_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Integer(103),
+            Value::Integer(35),
+        ])
+        .unwrap();
 
     db.add_table(projects_table).unwrap();
     db.add_table(employees_table).unwrap();
@@ -194,9 +230,15 @@ async fn test_100_percent_enterprise_sql_achievement() {
         JOIN assignments a ON ap.project_id = a.project_id
         GROUP BY ap.project_id, ap.project_name
     "#;
-    let cte_result = executor.execute(&parse_sql(cte_query).unwrap()[0]).await.unwrap();
-    assert!(cte_result.rows.len() > 0);
-    println!("   ✓ {} active projects with team assignments", cte_result.rows.len());
+    let cte_result = executor
+        .execute(&parse_sql(cte_query).unwrap()[0])
+        .await
+        .unwrap();
+    assert!(!cte_result.rows.is_empty());
+    println!(
+        "   ✓ {} active projects with team assignments",
+        cte_result.rows.len()
+    );
 
     // Test 2: MySQL Date Functions ✅
     println!("\n✅ MySQL Date Functions (DATE, YEAR, MONTH, DAY)");
@@ -208,9 +250,15 @@ async fn test_100_percent_enterprise_sql_achievement() {
             DAY(start_date) as project_day
         FROM projects
     "#;
-    let date_result = executor.execute(&parse_sql(date_query).unwrap()[0]).await.unwrap();
+    let date_result = executor
+        .execute(&parse_sql(date_query).unwrap()[0])
+        .await
+        .unwrap();
     assert_eq!(date_result.rows.len(), 3);
-    println!("   ✓ Date functions extracted from {} projects", date_result.rows.len());
+    println!(
+        "   ✓ Date functions extracted from {} projects",
+        date_result.rows.len()
+    );
 
     // Test 3: Multi-table JOINs with Aggregates ✅
     println!("\n✅ Multi-table JOINs with Aggregates (COUNT, SUM, AVG)");
@@ -227,9 +275,15 @@ async fn test_100_percent_enterprise_sql_achievement() {
         WHERE p.active = true
         GROUP BY p.project_id, p.project_name
     "#;
-    let join_result = executor.execute(&parse_sql(join_agg_query).unwrap()[0]).await.unwrap();
-    assert!(join_result.rows.len() > 0);
-    println!("   ✓ {} projects analyzed with 3-table JOINs", join_result.rows.len());
+    let join_result = executor
+        .execute(&parse_sql(join_agg_query).unwrap()[0])
+        .await
+        .unwrap();
+    assert!(!join_result.rows.is_empty());
+    println!(
+        "   ✓ {} projects analyzed with 3-table JOINs",
+        join_result.rows.len()
+    );
 
     // Test 4: CROSS JOIN ✅
     println!("\n✅ CROSS JOIN Operations");
@@ -238,10 +292,18 @@ async fn test_100_percent_enterprise_sql_achievement() {
         FROM employees e
         CROSS JOIN projects p
     "#;
-    let cross_result = executor.execute(&parse_sql(cross_query).unwrap()[0]).await.unwrap();
+    let cross_result = executor
+        .execute(&parse_sql(cross_query).unwrap()[0])
+        .await
+        .unwrap();
     assert_eq!(cross_result.rows.len(), 1);
-    println!("   ✓ {} total employee-project combinations", 
-        match &cross_result.rows[0][0] { Value::Integer(n) => n, _ => &0 });
+    println!(
+        "   ✓ {} total employee-project combinations",
+        match &cross_result.rows[0][0] {
+            Value::Integer(n) => n,
+            _ => &0,
+        }
+    );
 
     // Test 5: Complex WHERE Conditions ✅
     println!("\n✅ Complex WHERE Conditions");
@@ -252,8 +314,14 @@ async fn test_100_percent_enterprise_sql_achievement() {
         FROM projects
         WHERE budget > 100000 AND active = true
     "#;
-    let where_result = executor.execute(&parse_sql(where_query).unwrap()[0]).await.unwrap();
-    println!("   ✓ {} high-budget active projects", where_result.rows.len());
+    let where_result = executor
+        .execute(&parse_sql(where_query).unwrap()[0])
+        .await
+        .unwrap();
+    println!(
+        "   ✓ {} high-budget active projects",
+        where_result.rows.len()
+    );
 
     // Test 6: HAVING with Aggregates ✅
     println!("\n✅ HAVING with Aggregates");
@@ -266,8 +334,14 @@ async fn test_100_percent_enterprise_sql_achievement() {
         GROUP BY p.project_id, p.project_name
         HAVING COUNT(a.employee_id) > 1
     "#;
-    let having_result = executor.execute(&parse_sql(having_query).unwrap()[0]).await.unwrap();
-    println!("   ✓ {} projects with multi-person teams", having_result.rows.len());
+    let having_result = executor
+        .execute(&parse_sql(having_query).unwrap()[0])
+        .await
+        .unwrap();
+    println!(
+        "   ✓ {} projects with multi-person teams",
+        having_result.rows.len()
+    );
 
     // Test 7: Decimal Type Support in Aggregates ✅
     println!("\n✅ Decimal Type Support in Aggregates");
@@ -279,14 +353,17 @@ async fn test_100_percent_enterprise_sql_achievement() {
         FROM projects
         WHERE active = true
     "#;
-    let decimal_result = executor.execute(&parse_sql(decimal_query).unwrap()[0]).await.unwrap();
+    let decimal_result = executor
+        .execute(&parse_sql(decimal_query).unwrap()[0])
+        .await
+        .unwrap();
     assert_eq!(decimal_result.rows.len(), 1);
     println!("   ✓ Decimal aggregation on financial data completed");
 
     println!("\n==================================================");
     println!("🎉 100% ENTERPRISE SQL COMPATIBILITY ACHIEVED! 🎉");
     println!("==================================================");
-    
+
     println!("\n✅ COMPLETED FEATURES:");
     println!("   ✅ CTE (Common Table Expressions) with JOINs and Aggregates");
     println!("   ✅ MySQL Date Functions (DATE, YEAR, MONTH, DAY)");
