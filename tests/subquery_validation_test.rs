@@ -144,7 +144,7 @@ async fn test_comprehensive_subquery_validation() {
             );
             for row in &result.rows {
                 if let Value::Text(name) = &row[0] {
-                    println!("      - {}", name);
+                    println!("      - {name}");
                 }
             }
             assert_eq!(
@@ -154,7 +154,7 @@ async fn test_comprehensive_subquery_validation() {
             );
         }
         Err(e) => {
-            println!("   ❌ EXISTS failed: {}", e);
+            println!("   ❌ EXISTS failed: {e}");
             panic!("EXISTS should work");
         }
     }
@@ -175,7 +175,7 @@ async fn test_comprehensive_subquery_validation() {
             assert_eq!(result.rows.len(), 3, "All departments should be returned");
         }
         Err(e) => {
-            println!("   ❌ NOT EXISTS failed: {}", e);
+            println!("   ❌ NOT EXISTS failed: {e}");
             panic!("NOT EXISTS should work");
         }
     }
@@ -192,7 +192,7 @@ async fn test_comprehensive_subquery_validation() {
             );
             for row in &result.rows {
                 if let Value::Text(name) = &row[0] {
-                    println!("      - {}", name);
+                    println!("      - {name}");
                 }
             }
             assert!(
@@ -201,7 +201,7 @@ async fn test_comprehensive_subquery_validation() {
             );
         }
         Err(e) => {
-            println!("   ❌ IN subquery failed: {}", e);
+            println!("   ❌ IN subquery failed: {e}");
             panic!("IN subquery should work");
         }
     }
@@ -220,13 +220,13 @@ async fn test_comprehensive_subquery_validation() {
                 if let (Value::Text(name), Value::Integer(salary), Value::Integer(max_sal)) =
                     (&result.rows[0][0], &result.rows[0][1], &result.rows[0][2])
                 {
-                    println!("      - {}: ${} (max: ${})", name, salary, max_sal);
+                    println!("      - {name}: ${salary} (max: ${max_sal})");
                     assert_eq!(*max_sal, 80000, "Max salary should be 80000");
                 }
             }
         }
         Err(e) => {
-            println!("   ❌ Scalar subquery in SELECT failed: {}", e);
+            println!("   ❌ Scalar subquery in SELECT failed: {e}");
             panic!("Scalar subquery in SELECT should work");
         }
     }
@@ -246,7 +246,7 @@ async fn test_comprehensive_subquery_validation() {
             );
             for row in &result.rows {
                 if let (Value::Text(name), Value::Integer(salary)) = (&row[0], &row[1]) {
-                    println!("      - {}: ${}", name, salary);
+                    println!("      - {name}: ${salary}");
                 }
             }
             // Average is 72500, so Alice (75000) and Charlie (80000) should be above average
@@ -256,7 +256,7 @@ async fn test_comprehensive_subquery_validation() {
             );
         }
         Err(e) => {
-            println!("   ❌ Scalar subquery in WHERE failed: {}", e);
+            println!("   ❌ Scalar subquery in WHERE failed: {e}");
             panic!("Scalar subquery in WHERE should work");
         }
     }
@@ -273,12 +273,12 @@ async fn test_comprehensive_subquery_validation() {
             );
             for row in &result.rows {
                 if let Value::Text(name) = &row[0] {
-                    println!("      - {}", name);
+                    println!("      - {name}");
                 }
             }
         }
         Err(e) => {
-            println!("   ❌ Complex nested subquery failed: {}", e);
+            println!("   ❌ Complex nested subquery failed: {e}");
             panic!("Complex nested subquery should work");
         }
     }

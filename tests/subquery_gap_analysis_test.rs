@@ -57,7 +57,7 @@ async fn test_subquery_gap_analysis() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ EXISTS works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ EXISTS failed: {}", e),
+        Err(e) => println!("   ❌ EXISTS failed: {e}"),
     }
 
     // Test 2: IN subquery - should fail with NotImplemented
@@ -67,7 +67,7 @@ async fn test_subquery_gap_analysis() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ IN subquery works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ IN subquery failed: {}", e),
+        Err(e) => println!("   ❌ IN subquery failed: {e}"),
     }
 
     // Test 3: Scalar subquery in SELECT - should fail with NotImplemented
@@ -81,7 +81,7 @@ async fn test_subquery_gap_analysis() {
             "   ✅ Scalar subquery works! Got {} rows",
             result.rows.len()
         ),
-        Err(e) => println!("   ❌ Scalar subquery failed: {}", e),
+        Err(e) => println!("   ❌ Scalar subquery failed: {e}"),
     }
 
     // Test 4: Scalar subquery in WHERE - should fail with NotImplemented
@@ -94,7 +94,7 @@ async fn test_subquery_gap_analysis() {
             "   ✅ Scalar WHERE subquery works! Got {} rows",
             result.rows.len()
         ),
-        Err(e) => println!("   ❌ Scalar WHERE subquery failed: {}", e),
+        Err(e) => println!("   ❌ Scalar WHERE subquery failed: {e}"),
     }
 
     // Test 5: NOT EXISTS - should fail with NotImplemented
@@ -105,7 +105,7 @@ async fn test_subquery_gap_analysis() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ NOT EXISTS works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ NOT EXISTS failed: {}", e),
+        Err(e) => println!("   ❌ NOT EXISTS failed: {e}"),
     }
 
     // Control test: Basic query should work
@@ -114,7 +114,7 @@ async fn test_subquery_gap_analysis() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ Basic query works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ Basic query failed: {}", e),
+        Err(e) => println!("   ❌ Basic query failed: {e}"),
     }
 
     println!("\n=== GAP ANALYSIS COMPLETE ===");
