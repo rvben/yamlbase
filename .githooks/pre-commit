@@ -1,0 +1,72 @@
+#!/bin/bash
+set -euo pipefail
+
+# Pre-commit hook for yamlbase
+# This hook ensures Cargo.lock is always up to date before committing
+
+echo "🔍 Running pre-commit checks..."
+
+# Check if Cargo.lock is up to date
+if [ -f "Cargo.toml" ]; then
+    echo "📦 Checking if Cargo.lock is up to date..."
+    
+    # Save current Cargo.lock state
+    if [ -f "Cargo.lock" ]; then
+        cp Cargo.lock Cargo.lock.backup
+    fi
+    
+    # Run cargo check to update Cargo.lock if needed
+    if ! cargo check --quiet; then
+        echo "❌ ERROR: cargo check failed. Please fix build errors before committing."
+        if [ -f "Cargo.lock.backup" ]; then
+            mv Cargo.lock.backup Cargo.lock
+        fi
+        exit 1
+    fi
+    
+    # Check if Cargo.lock was modified by cargo check
+    if [ -f "Cargo.lock.backup" ]; then
+        if ! diff -q Cargo.lock Cargo.lock.backup >/dev/null 2>&1; then
+            echo "❌ ERROR: Cargo.lock is out of date!"
+            echo "   Run 'cargo check' to update it, then add the updated Cargo.lock to your commit."
+            echo "   This is required for consistent builds and crates.io publishing."
+            mv Cargo.lock.backup Cargo.lock
+            exit 1
+        fi
+        rm Cargo.lock.backup
+    elif [ ! -f "Cargo.lock" ]; then
+        echo "❌ ERROR: Cargo.lock was created by cargo check but is not committed!"
+        echo "   Please add Cargo.lock to your commit: git add Cargo.lock"
+        exit 1
+    fi
+    
+    # Check if Cargo.lock is staged (if it exists)
+    if [ -f "Cargo.lock" ]; then
+        if ! git diff --cached --name-only | grep -q "^Cargo.lock$"; then
+            # Check if Cargo.lock has unstaged changes
+            if ! git diff --name-only | grep -q "^Cargo.lock$"; then
+                # Cargo.lock exists and is clean, this is good
+                true
+            else
+                echo "❌ ERROR: Cargo.lock has unstaged changes!"
+                echo "   Please stage Cargo.lock: git add Cargo.lock"
+                exit 1
+            fi
+        fi
+    fi
+    
+    echo "✅ Cargo.lock is up to date and properly staged"
+fi
+
+# Run basic linting if available
+if command -v cargo >/dev/null 2>&1; then
+    echo "🔧 Running quick lint check..."
+    if ! cargo clippy --quiet -- -D warnings; then
+        echo "❌ ERROR: Clippy found warnings that must be fixed before committing"
+        echo "   Run 'make lint' to see and fix the issues"
+        exit 1
+    fi
+    echo "✅ Lint check passed"
+fi
+
+echo "✅ Pre-commit checks passed!"
