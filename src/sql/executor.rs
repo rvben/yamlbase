@@ -5472,7 +5472,7 @@ impl QueryExecutor {
         for item in &select.projection {
             match item {
                 SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
-                    if self.contains_aggregate_function(expr) {
+                    if Self::contains_aggregate_function(expr) {
                         return true;
                     }
                 }
@@ -5482,7 +5482,7 @@ impl QueryExecutor {
         false
     }
 
-    fn contains_aggregate_function(&self, expr: &Expr) -> bool {
+    fn contains_aggregate_function(expr: &Expr) -> bool {
         match expr {
             Expr::Function(func) => {
                 let func_name = func
@@ -5495,31 +5495,31 @@ impl QueryExecutor {
             }
             // Recursively check binary operations (e.g., MAX(salary) - MIN(salary))
             Expr::BinaryOp { left, right, .. } => {
-                self.contains_aggregate_function(left) || self.contains_aggregate_function(right)
+                Self::contains_aggregate_function(left) || Self::contains_aggregate_function(right)
             }
             // Recursively check unary operations
             Expr::UnaryOp { expr, .. } => {
-                self.contains_aggregate_function(expr)
+                Self::contains_aggregate_function(expr)
             }
             // Check CASE expressions
             Expr::Case { operand, conditions, results, else_result } => {
                 if let Some(operand_expr) = operand {
-                    if self.contains_aggregate_function(operand_expr) {
+                    if Self::contains_aggregate_function(operand_expr) {
                         return true;
                     }
                 }
                 for condition in conditions {
-                    if self.contains_aggregate_function(condition) {
+                    if Self::contains_aggregate_function(condition) {
                         return true;
                     }
                 }
                 for result in results {
-                    if self.contains_aggregate_function(result) {
+                    if Self::contains_aggregate_function(result) {
                         return true;
                     }
                 }
                 if let Some(else_expr) = else_result {
-                    if self.contains_aggregate_function(else_expr) {
+                    if Self::contains_aggregate_function(else_expr) {
                         return true;
                     }
                 }
