@@ -61,11 +61,11 @@ async fn test_debug_max_function() {
         Ok(result) => {
             println!("Simple MAX success! Got {} rows", result.rows.len());
             for (i, row) in result.rows.iter().enumerate() {
-                println!("Row {}: {:?}", i, row);
+                println!("Row {i}: {row:?}");
             }
         }
         Err(e) => {
-            println!("Simple MAX error: {}", e);
+            println!("Simple MAX error: {e}");
             panic!("Simple MAX should work");
         }
     }
@@ -81,11 +81,11 @@ async fn test_debug_max_function() {
         Ok(result) => {
             println!("Binary MAX success! Got {} rows", result.rows.len());
             for (i, row) in result.rows.iter().enumerate() {
-                println!("Row {}: {:?}", i, row);
+                println!("Row {i}: {row:?}");
             }
         }
         Err(e) => {
-            println!("Binary MAX error: {}", e);
+            println!("Binary MAX error: {e}");
             panic!("Binary MAX should work with our fix");
         }
     }

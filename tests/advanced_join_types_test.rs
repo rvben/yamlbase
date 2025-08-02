@@ -116,7 +116,7 @@ async fn test_advanced_join_types() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ INNER JOIN works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ INNER JOIN failed: {}", e),
+        Err(e) => println!("   ❌ INNER JOIN failed: {e}"),
     }
 
     // Test 2: LEFT OUTER JOIN (baseline)
@@ -125,7 +125,7 @@ async fn test_advanced_join_types() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ LEFT JOIN works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ LEFT JOIN failed: {}", e),
+        Err(e) => println!("   ❌ LEFT JOIN failed: {e}"),
     }
 
     // Test 3: RIGHT OUTER JOIN (baseline)
@@ -134,7 +134,7 @@ async fn test_advanced_join_types() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ RIGHT JOIN works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ RIGHT JOIN failed: {}", e),
+        Err(e) => println!("   ❌ RIGHT JOIN failed: {e}"),
     }
 
     // Test 4: FULL OUTER JOIN
@@ -151,7 +151,7 @@ async fn test_advanced_join_types() {
                 println!("     Row {}: {:?}", i + 1, row);
             }
         }
-        Err(e) => println!("   ❌ FULL OUTER JOIN failed: {}", e),
+        Err(e) => println!("   ❌ FULL OUTER JOIN failed: {e}"),
     }
 
     // Test 5: CROSS JOIN
@@ -167,7 +167,7 @@ async fn test_advanced_join_types() {
                 3 * 2
             );
         }
-        Err(e) => println!("   ❌ CROSS JOIN failed: {}", e),
+        Err(e) => println!("   ❌ CROSS JOIN failed: {e}"),
     }
 
     // Test 6: Alternative CROSS JOIN syntax
@@ -176,7 +176,7 @@ async fn test_advanced_join_types() {
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => println!("   ✅ Comma JOIN works! Got {} rows", result.rows.len()),
-        Err(e) => println!("   ❌ Comma JOIN failed: {}", e),
+        Err(e) => println!("   ❌ Comma JOIN failed: {e}"),
     }
 
     println!("\\n=== JOIN TYPES TEST COMPLETE ===");
@@ -286,7 +286,7 @@ async fn test_complex_join_scenarios() {
                 println!("     Row {}: {:?}", i + 1, row);
             }
         }
-        Err(e) => println!("   ❌ Complex FULL OUTER JOIN failed: {}", e),
+        Err(e) => println!("   ❌ Complex FULL OUTER JOIN failed: {e}"),
     }
 
     println!("\\n=== COMPLEX JOIN SCENARIOS COMPLETE ===");
