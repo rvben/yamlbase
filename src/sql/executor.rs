@@ -1171,8 +1171,15 @@ impl QueryExecutor {
                 debug!("Found EXISTS expression: negated={}", negated);
                 self.evaluate_exists_subquery(subquery, *negated)
             }
-            Expr::InSubquery { expr, subquery, negated } => {
-                debug!("Found IN subquery expression: expr={:?}, negated={}", expr, negated);
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
+                debug!(
+                    "Found IN subquery expression: expr={:?}, negated={}",
+                    expr, negated
+                );
                 self.evaluate_in_subquery(expr, subquery, *negated, row, table)
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
@@ -1262,24 +1269,23 @@ impl QueryExecutor {
 
     fn evaluate_exists_subquery(&self, subquery: &Query, negated: bool) -> crate::Result<bool> {
         debug!("Evaluating EXISTS subquery: negated={}", negated);
-        
+
         // Handle sync/async bridge for subquery execution
         let executor_clone = self.clone();
         let subquery_clone = subquery.clone();
-        
+
         let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
             // We're in a tokio runtime context - use spawn_blocking
             let (tx, rx) = std::sync::mpsc::channel();
             let _handle_clone = handle.clone();
-            
+
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                let result = rt.block_on(async {
-                    executor_clone.execute_query(&subquery_clone).await
-                });
+                let result =
+                    rt.block_on(async { executor_clone.execute_query(&subquery_clone).await });
                 tx.send(result).unwrap();
             });
-            
+
             rx.recv().map_err(|_| YamlBaseError::Database {
                 message: "Failed to receive subquery result".to_string(),
             })?
@@ -1288,14 +1294,16 @@ impl QueryExecutor {
             let rt = tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
                 message: "Failed to create tokio runtime".to_string(),
             })?;
-            rt.block_on(async {
-                executor_clone.execute_query(&subquery_clone).await
-            })
+            rt.block_on(async { executor_clone.execute_query(&subquery_clone).await })
         }?;
-        
+
         let exists = !result.rows.is_empty();
-        debug!("EXISTS subquery returned {} rows, exists={}", result.rows.len(), exists);
-        
+        debug!(
+            "EXISTS subquery returned {} rows, exists={}",
+            result.rows.len(),
+            exists
+        );
+
         Ok(if negated { !exists } else { exists })
     }
 
@@ -1307,26 +1315,28 @@ impl QueryExecutor {
         row: &[Value],
         table: &Table,
     ) -> crate::Result<bool> {
-        debug!("Evaluating IN subquery: expr={:?}, negated={}", expr, negated);
-        
+        debug!(
+            "Evaluating IN subquery: expr={:?}, negated={}",
+            expr, negated
+        );
+
         let target_value = self.get_expr_value(expr, row, table)?;
-        
+
         // Handle sync/async bridge for subquery execution
         let executor_clone = self.clone();
         let subquery_clone = subquery.clone();
-        
+
         let result = if let Ok(_handle) = tokio::runtime::Handle::try_current() {
             // We're in a tokio runtime context - use separate thread
             let (tx, rx) = std::sync::mpsc::channel();
-            
+
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                let result = rt.block_on(async {
-                    executor_clone.execute_query(&subquery_clone).await
-                });
+                let result =
+                    rt.block_on(async { executor_clone.execute_query(&subquery_clone).await });
                 tx.send(result).unwrap();
             });
-            
+
             rx.recv().map_err(|_| YamlBaseError::Database {
                 message: "Failed to receive subquery result".to_string(),
             })?
@@ -1335,11 +1345,9 @@ impl QueryExecutor {
             let rt = tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
                 message: "Failed to create tokio runtime".to_string(),
             })?;
-            rt.block_on(async {
-                executor_clone.execute_query(&subquery_clone).await
-            })
+            rt.block_on(async { executor_clone.execute_query(&subquery_clone).await })
         }?;
-        
+
         // Check if target_value exists in the first column of subquery results
         let found = result.rows.iter().any(|subquery_row| {
             if !subquery_row.is_empty() {
@@ -1348,8 +1356,12 @@ impl QueryExecutor {
                 false
             }
         });
-        
-        debug!("IN subquery returned {} rows, found={}", result.rows.len(), found);
+
+        debug!(
+            "IN subquery returned {} rows, found={}",
+            result.rows.len(),
+            found
+        );
         Ok(if negated { !found } else { found })
     }
 
@@ -1538,12 +1550,15 @@ impl QueryExecutor {
                 if parts.len() == 2 {
                     let table_name = &parts[0].value;
                     let column_name = &parts[1].value;
-                    
+
                     // For now, just match the column name ignoring the table name
                     // This is a simplified approach that works for basic cases
                     let col_idx = table.get_column_index(column_name).ok_or_else(|| {
                         YamlBaseError::Database {
-                            message: format!("Column '{}.{}' not found in table", table_name, column_name),
+                            message: format!(
+                                "Column '{}.{}' not found in table",
+                                table_name, column_name
+                            ),
                         }
                     })?;
                     Ok(row[col_idx].clone())
@@ -1676,15 +1691,15 @@ impl QueryExecutor {
             }
             Expr::Subquery(subquery) => {
                 debug!("Evaluating scalar subquery in expression");
-                
+
                 // Handle sync/async bridge for subquery execution
                 let executor_clone = self.clone();
                 let subquery_clone = subquery.clone();
-                
+
                 let result = if let Ok(_handle) = tokio::runtime::Handle::try_current() {
                     // We're in a tokio runtime context - use separate thread
                     let (tx, rx) = std::sync::mpsc::channel();
-                    
+
                     std::thread::spawn(move || {
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         let result = rt.block_on(async {
@@ -1692,20 +1707,19 @@ impl QueryExecutor {
                         });
                         tx.send(result).unwrap();
                     });
-                    
+
                     rx.recv().map_err(|_| YamlBaseError::Database {
                         message: "Failed to receive subquery result".to_string(),
                     })?
                 } else {
                     // Not in tokio context, create runtime
-                    let rt = tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
-                        message: "Failed to create tokio runtime".to_string(),
-                    })?;
-                    rt.block_on(async {
-                        executor_clone.execute_query(&subquery_clone).await
-                    })
+                    let rt =
+                        tokio::runtime::Runtime::new().map_err(|_| YamlBaseError::Database {
+                            message: "Failed to create tokio runtime".to_string(),
+                        })?;
+                    rt.block_on(async { executor_clone.execute_query(&subquery_clone).await })
                 }?;
-                
+
                 // Scalar subquery should return exactly one row and one column
                 if result.rows.is_empty() {
                     Ok(Value::Null)
@@ -1755,7 +1769,7 @@ impl QueryExecutor {
                 // Handle binary operations with row context
                 let left_val = self.get_expr_value(left, row, table)?;
                 let right_val = self.get_expr_value(right, row, table)?;
-                
+
                 match op {
                     BinaryOperator::Plus => match (&left_val, &right_val) {
                         (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l + r)),
@@ -1796,7 +1810,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(*l as f64 / *r as f64))
                             }
-                        },
+                        }
                         (Value::Double(l), Value::Double(r)) => {
                             if *r == 0.0 {
                                 Err(YamlBaseError::Database {
@@ -1805,7 +1819,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(l / r))
                             }
-                        },
+                        }
                         (Value::Integer(l), Value::Double(r)) => {
                             if *r == 0.0 {
                                 Err(YamlBaseError::Database {
@@ -1814,7 +1828,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(*l as f64 / r))
                             }
-                        },
+                        }
                         (Value::Double(l), Value::Integer(r)) => {
                             if *r == 0 {
                                 Err(YamlBaseError::Database {
@@ -1823,7 +1837,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(l / *r as f64))
                             }
-                        },
+                        }
                         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                         _ => Err(YamlBaseError::Database {
                             message: "Cannot divide non-numeric values".to_string(),
@@ -1838,7 +1852,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Integer(l % r))
                             }
-                        },
+                        }
                         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                         _ => Err(YamlBaseError::Database {
                             message: "Modulo operation requires integer values".to_string(),
@@ -3156,9 +3170,16 @@ impl QueryExecutor {
                             let date = match &date_val {
                                 Value::Date(d) => *d,
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -3168,7 +3189,8 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_ADD requires date as first argument".to_string(),
+                                        message: "DATE_ADD requires date as first argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3177,7 +3199,8 @@ impl QueryExecutor {
                                 Value::Integer(n) => *n,
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_ADD requires integer as second argument".to_string(),
+                                        message: "DATE_ADD requires integer as second argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3186,7 +3209,8 @@ impl QueryExecutor {
                                 Value::Text(s) => s.to_uppercase(),
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_ADD requires unit as third argument".to_string(),
+                                        message: "DATE_ADD requires unit as third argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3222,7 +3246,10 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
+                                        message: format!(
+                                            "Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)",
+                                            unit
+                                        ),
                                     });
                                 }
                             };
@@ -3261,9 +3288,16 @@ impl QueryExecutor {
                             let date = match &date_val {
                                 Value::Date(d) => *d,
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -3273,7 +3307,8 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_SUB requires date as first argument".to_string(),
+                                        message: "DATE_SUB requires date as first argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3282,7 +3317,8 @@ impl QueryExecutor {
                                 Value::Integer(n) => *n,
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_SUB requires integer as second argument".to_string(),
+                                        message: "DATE_SUB requires integer as second argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3291,7 +3327,8 @@ impl QueryExecutor {
                                 Value::Text(s) => s.to_uppercase(),
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATE_SUB requires unit as third argument".to_string(),
+                                        message: "DATE_SUB requires unit as third argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3327,7 +3364,10 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: format!("Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)", unit),
+                                        message: format!(
+                                            "Unsupported unit: {} (supported: YEAR, MONTH, DAY, WEEK)",
+                                            unit
+                                        ),
                                     });
                                 }
                             };
@@ -3374,7 +3414,8 @@ impl QueryExecutor {
                                 Value::Integer(n) => *n,
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATEADD requires integer as second argument".to_string(),
+                                        message: "DATEADD requires integer as second argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3382,9 +3423,16 @@ impl QueryExecutor {
                             let date = match &date_val {
                                 Value::Date(d) => *d,
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -3394,7 +3442,8 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATEADD requires date as third argument".to_string(),
+                                        message: "DATEADD requires date as third argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3430,7 +3479,10 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: format!("Unsupported datepart: {} (supported: year, month, day, week)", datepart),
+                                        message: format!(
+                                            "Unsupported datepart: {} (supported: year, month, day, week)",
+                                            datepart
+                                        ),
                                     });
                                 }
                             };
@@ -3470,7 +3522,8 @@ impl QueryExecutor {
                                 Value::Text(s) => s.to_lowercase(),
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATEDIFF requires datepart as first argument".to_string(),
+                                        message: "DATEDIFF requires datepart as first argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3478,9 +3531,16 @@ impl QueryExecutor {
                             let start_date = match &startdate_val {
                                 Value::Date(d) => *d,
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -3490,7 +3550,8 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATEDIFF requires date as second argument".to_string(),
+                                        message: "DATEDIFF requires date as second argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3498,9 +3559,16 @@ impl QueryExecutor {
                             let end_date = match &enddate_val {
                                 Value::Date(d) => *d,
                                 Value::Text(s) => {
-                                    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
                                         date
-                                    } else if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(datetime) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         datetime.date()
                                     } else {
                                         return Err(YamlBaseError::Database {
@@ -3510,7 +3578,8 @@ impl QueryExecutor {
                                 }
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: "DATEDIFF requires date as third argument".to_string(),
+                                        message: "DATEDIFF requires date as third argument"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -3519,14 +3588,18 @@ impl QueryExecutor {
                                 "year" => end_date.years_since(start_date).unwrap_or(0) as i64,
                                 "month" => {
                                     let years_diff = end_date.year() - start_date.year();
-                                    let months_diff = end_date.month() as i32 - start_date.month() as i32;
+                                    let months_diff =
+                                        end_date.month() as i32 - start_date.month() as i32;
                                     (years_diff * 12 + months_diff) as i64
                                 }
                                 "day" => (end_date - start_date).num_days(),
                                 "week" => (end_date - start_date).num_weeks(),
                                 _ => {
                                     return Err(YamlBaseError::Database {
-                                        message: format!("Unsupported datepart: {} (supported: year, month, day, week)", datepart),
+                                        message: format!(
+                                            "Unsupported datepart: {} (supported: year, month, day, week)",
+                                            datepart
+                                        ),
                                     });
                                 }
                             };
@@ -5498,11 +5571,14 @@ impl QueryExecutor {
                 Self::contains_aggregate_function(left) || Self::contains_aggregate_function(right)
             }
             // Recursively check unary operations
-            Expr::UnaryOp { expr, .. } => {
-                Self::contains_aggregate_function(expr)
-            }
+            Expr::UnaryOp { expr, .. } => Self::contains_aggregate_function(expr),
             // Check CASE expressions
-            Expr::Case { operand, conditions, results, else_result } => {
+            Expr::Case {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => {
                 if let Some(operand_expr) = operand {
                     if Self::contains_aggregate_function(operand_expr) {
                         return true;
@@ -5749,17 +5825,36 @@ impl QueryExecutor {
         group_by_exprs: &[Expr],
         table: &Table,
     ) -> crate::Result<(String, crate::yaml::schema::SqlType, Value)> {
-        println!("DEBUG: evaluate_group_by_expr called with expression: {}", self.expr_to_string(expr));
+        println!(
+            "DEBUG: evaluate_group_by_expr called with expression: {}",
+            self.expr_to_string(expr)
+        );
         match expr {
             // Handle binary operations in GROUP BY context (e.g., MAX(salary) - MIN(salary))
             Expr::BinaryOp { left, op, right } => {
-                println!("DEBUG: Evaluating binary operation in GROUP BY context: {} {:?} {}", 
-                       self.expr_to_string(left), op, self.expr_to_string(right));
-                
+                println!(
+                    "DEBUG: Evaluating binary operation in GROUP BY context: {} {:?} {}",
+                    self.expr_to_string(left),
+                    op,
+                    self.expr_to_string(right)
+                );
+
                 // Recursively evaluate left and right sides in GROUP BY context
-                let (_, _, left_val) = self.evaluate_group_by_expr(left, group_rows, group_values, group_by_exprs, table)?;
-                let (_, _, right_val) = self.evaluate_group_by_expr(right, group_rows, group_values, group_by_exprs, table)?;
-                
+                let (_, _, left_val) = self.evaluate_group_by_expr(
+                    left,
+                    group_rows,
+                    group_values,
+                    group_by_exprs,
+                    table,
+                )?;
+                let (_, _, right_val) = self.evaluate_group_by_expr(
+                    right,
+                    group_rows,
+                    group_values,
+                    group_by_exprs,
+                    table,
+                )?;
+
                 // Perform the binary operation
                 let result = match op {
                     BinaryOperator::Plus => match (&left_val, &right_val) {
@@ -5801,7 +5896,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(*l as f64 / *r as f64))
                             }
-                        },
+                        }
                         (Value::Double(l), Value::Double(r)) => {
                             if *r == 0.0 {
                                 Err(YamlBaseError::Database {
@@ -5810,7 +5905,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(l / r))
                             }
-                        },
+                        }
                         (Value::Integer(l), Value::Double(r)) => {
                             if *r == 0.0 {
                                 Err(YamlBaseError::Database {
@@ -5819,7 +5914,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(*l as f64 / r))
                             }
-                        },
+                        }
                         (Value::Double(l), Value::Integer(r)) => {
                             if *r == 0 {
                                 Err(YamlBaseError::Database {
@@ -5828,7 +5923,7 @@ impl QueryExecutor {
                             } else {
                                 Ok(Value::Double(l / *r as f64))
                             }
-                        },
+                        }
                         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
                         _ => Err(YamlBaseError::Database {
                             message: "Cannot divide non-numeric values".to_string(),
@@ -5841,15 +5936,18 @@ impl QueryExecutor {
                             message: "Cannot concatenate non-text values".to_string(),
                         }),
                     },
-                    _ => Err(YamlBaseError::NotImplemented(
-                        format!("Binary operator {:?} not implemented in GROUP BY context", op)
-                    )),
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not implemented in GROUP BY context",
+                        op
+                    ))),
                 }?;
-                
-                let col_name = format!("{} {} {}", 
-                                     self.expr_to_string(left), 
-                                     self.binary_op_to_string(op), 
-                                     self.expr_to_string(right));
+
+                let col_name = format!(
+                    "{} {} {}",
+                    self.expr_to_string(left),
+                    self.binary_op_to_string(op),
+                    self.expr_to_string(right)
+                );
                 let col_type = self.infer_value_type(&result);
                 Ok((col_name, col_type, result))
             }
@@ -6480,7 +6578,7 @@ impl QueryExecutor {
 
         // Process joins and comma-separated tables
         let mut table_idx = 1;
-        
+
         for (from_idx, table_with_joins) in from.iter().enumerate() {
             // Handle comma-separated tables (implicit CROSS JOIN)
             // Skip the first table since it's already initialized
@@ -6504,7 +6602,7 @@ impl QueryExecutor {
 
                 table_idx += 1;
             }
-            
+
             // Handle explicit joins within each table_with_joins
             for join in &table_with_joins.joins {
                 if table_idx >= tables.len() {
@@ -7574,24 +7672,42 @@ impl QueryExecutor {
                 }
             }
             // CASE expressions in JOIN conditions
-            Expr::Case { operand, conditions, results, else_result } => {
+            Expr::Case {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => {
                 if let Some(operand_expr) = operand {
-                    let operand_val = self.get_join_expr_value(operand_expr, row, tables, table_aliases)?;
+                    let operand_val =
+                        self.get_join_expr_value(operand_expr, row, tables, table_aliases)?;
                     for (i, condition) in conditions.iter().enumerate() {
-                        let condition_val = self.get_join_expr_value(condition, row, tables, table_aliases)?;
+                        let condition_val =
+                            self.get_join_expr_value(condition, row, tables, table_aliases)?;
                         if self.compare_values_equal(&operand_val, &condition_val) {
-                            return self.get_join_expr_value(&results[i], row, tables, table_aliases);
+                            return self.get_join_expr_value(
+                                &results[i],
+                                row,
+                                tables,
+                                table_aliases,
+                            );
                         }
                     }
                 } else {
                     for (i, condition) in conditions.iter().enumerate() {
-                        let condition_result = self.evaluate_join_condition(condition, row, tables, table_aliases)?;
+                        let condition_result =
+                            self.evaluate_join_condition(condition, row, tables, table_aliases)?;
                         if condition_result {
-                            return self.get_join_expr_value(&results[i], row, tables, table_aliases);
+                            return self.get_join_expr_value(
+                                &results[i],
+                                row,
+                                tables,
+                                table_aliases,
+                            );
                         }
                     }
                 }
-                
+
                 if let Some(else_expr) = else_result {
                     self.get_join_expr_value(else_expr, row, tables, table_aliases)
                 } else {
@@ -7612,7 +7728,9 @@ impl QueryExecutor {
                 self.get_join_expr_value(inner_expr, row, tables, table_aliases)
             }
             // CAST expressions in JOIN conditions
-            Expr::Cast { expr, data_type, .. } => {
+            Expr::Cast {
+                expr, data_type, ..
+            } => {
                 let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
                 self.cast_value(val, data_type)
             }
@@ -7620,13 +7738,15 @@ impl QueryExecutor {
             Expr::Like { expr, pattern, .. } => {
                 let text_val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
                 let pattern_val = self.get_join_expr_value(pattern, row, tables, table_aliases)?;
-                
+
                 match (text_val, pattern_val) {
                     (Value::Text(text), Value::Text(pattern)) => {
                         let regex_pattern = pattern.replace('%', ".*").replace('_', ".");
-                        let regex = regex::Regex::new(&format!("^{}$", regex_pattern))
-                            .map_err(|_| YamlBaseError::Database {
-                                message: "Invalid LIKE pattern".to_string(),
+                        let regex =
+                            regex::Regex::new(&format!("^{}$", regex_pattern)).map_err(|_| {
+                                YamlBaseError::Database {
+                                    message: "Invalid LIKE pattern".to_string(),
+                                }
                             })?;
                         Ok(Value::Boolean(regex.is_match(&text)))
                     }
@@ -7637,14 +7757,18 @@ impl QueryExecutor {
                 }
             }
             // BETWEEN expressions in JOIN conditions
-            Expr::Between { expr, low, high, .. } => {
+            Expr::Between {
+                expr, low, high, ..
+            } => {
                 let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
                 let low_val = self.get_join_expr_value(low, row, tables, table_aliases)?;
                 let high_val = self.get_join_expr_value(high, row, tables, table_aliases)?;
-                
-                let ge_low = self.evaluate_binary_op_constant(&val, &BinaryOperator::GtEq, &low_val)?;
-                let le_high = self.evaluate_binary_op_constant(&val, &BinaryOperator::LtEq, &high_val)?;
-                
+
+                let ge_low =
+                    self.evaluate_binary_op_constant(&val, &BinaryOperator::GtEq, &low_val)?;
+                let le_high =
+                    self.evaluate_binary_op_constant(&val, &BinaryOperator::LtEq, &high_val)?;
+
                 match (ge_low, le_high) {
                     (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(a && b)),
                     _ => Ok(Value::Null),
@@ -7653,7 +7777,7 @@ impl QueryExecutor {
             // IN expressions in JOIN conditions
             Expr::InList { expr, list, .. } => {
                 let val = self.get_join_expr_value(expr, row, tables, table_aliases)?;
-                
+
                 for item in list {
                     let item_val = self.get_join_expr_value(item, row, tables, table_aliases)?;
                     if self.compare_values_equal(&val, &item_val) {
@@ -7679,7 +7803,7 @@ impl QueryExecutor {
             )),
         }
     }
-    
+
     /// Compare two values for equality in JOIN contexts
     fn compare_values_equal(&self, left: &Value, right: &Value) -> bool {
         match (left, right) {

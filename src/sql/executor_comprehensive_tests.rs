@@ -390,7 +390,9 @@ mod comprehensive_tests {
         assert_eq!(result.rows.len(), 2); // Both users exist since orders table has data
 
         // Test NOT EXISTS subquery - should now work!
-        let query = parse_sql("SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM orders WHERE id = 999)").unwrap();
+        let query =
+            parse_sql("SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM orders WHERE id = 999)")
+                .unwrap();
         let result = executor.execute(&query[0]).await;
         assert!(result.is_ok(), "NOT EXISTS subquery should work now");
         let result = result.unwrap();

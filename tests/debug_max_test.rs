@@ -6,7 +6,7 @@ use yamlbase::yaml::schema::SqlType;
 #[tokio::test]
 async fn test_debug_max_function() {
     let mut db = Database::new("test_db".to_string());
-    
+
     // Create employees table
     let mut employees_table = Table::new(
         "employees".to_string(),
@@ -31,22 +31,32 @@ async fn test_debug_max_function() {
             },
         ],
     );
-    
+
     // Insert test data
-    employees_table.insert_row(vec![Value::Integer(1), Value::Double(50000.0)]).unwrap();
-    employees_table.insert_row(vec![Value::Integer(1), Value::Double(60000.0)]).unwrap();
-    employees_table.insert_row(vec![Value::Integer(2), Value::Double(70000.0)]).unwrap();
-    employees_table.insert_row(vec![Value::Integer(2), Value::Double(80000.0)]).unwrap();
-    
+    employees_table
+        .insert_row(vec![Value::Integer(1), Value::Double(50000.0)])
+        .unwrap();
+    employees_table
+        .insert_row(vec![Value::Integer(1), Value::Double(60000.0)])
+        .unwrap();
+    employees_table
+        .insert_row(vec![Value::Integer(2), Value::Double(70000.0)])
+        .unwrap();
+    employees_table
+        .insert_row(vec![Value::Integer(2), Value::Double(80000.0)])
+        .unwrap();
+
     db.add_table(employees_table).unwrap();
     let storage = Arc::new(Storage::new(db));
     let executor = QueryExecutor::new(storage).await.unwrap();
-    
+
     // Test 1: Simple MAX function should work
     println!("Testing: SELECT department_id, MAX(salary) FROM employees GROUP BY department_id");
-    let stmts = parse_sql("SELECT department_id, MAX(salary) FROM employees GROUP BY department_id").unwrap();
+    let stmts =
+        parse_sql("SELECT department_id, MAX(salary) FROM employees GROUP BY department_id")
+            .unwrap();
     let result = executor.execute(&stmts[0]).await;
-    
+
     match result {
         Ok(result) => {
             println!("Simple MAX success! Got {} rows", result.rows.len());
@@ -59,12 +69,14 @@ async fn test_debug_max_function() {
             panic!("Simple MAX should work");
         }
     }
-    
+
     // Test 2: Binary operation with MAX functions
-    println!("Testing: SELECT department_id, MAX(salary) - MIN(salary) as salary_range FROM employees GROUP BY department_id");
+    println!(
+        "Testing: SELECT department_id, MAX(salary) - MIN(salary) as salary_range FROM employees GROUP BY department_id"
+    );
     let stmts = parse_sql("SELECT department_id, MAX(salary) - MIN(salary) as salary_range FROM employees GROUP BY department_id").unwrap();
     let result = executor.execute(&stmts[0]).await;
-    
+
     match result {
         Ok(result) => {
             println!("Binary MAX success! Got {} rows", result.rows.len());
