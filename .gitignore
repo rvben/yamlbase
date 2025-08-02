@@ -33,3 +33,6 @@ assets/*.png
 fuzz/target/
 fuzz/corpus/
 fuzz/artifacts/
+
+CLAUDE.md
+PRD.md

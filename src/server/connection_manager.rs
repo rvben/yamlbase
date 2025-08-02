@@ -163,48 +163,64 @@ impl ConnectionManager {
 
     /// Configure TCP socket options for connection stability
     async fn configure_tcp_socket(&self, stream: &mut TcpStream) -> crate::Result<()> {
-        use std::mem::size_of;
-        use std::os::unix::io::AsRawFd;
+        #[cfg(unix)]
+        {
+            use std::mem::size_of;
+            use std::os::unix::io::AsRawFd;
 
-        let fd = stream.as_raw_fd();
+            let fd = stream.as_raw_fd();
 
-        // Enable TCP_NODELAY to reduce latency
-        let nodelay: libc::c_int = 1;
-        unsafe {
-            if libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_NODELAY,
-                &nodelay as *const _ as *const libc::c_void,
-                size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0
-            {
-                return Err(crate::YamlBaseError::Database {
-                    message: "Failed to set TCP_NODELAY".to_string(),
-                });
+            // Enable TCP_NODELAY to reduce latency
+            let nodelay: libc::c_int = 1;
+            unsafe {
+                if libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    libc::TCP_NODELAY,
+                    &nodelay as *const _ as *const libc::c_void,
+                    size_of::<libc::c_int>() as libc::socklen_t,
+                ) != 0
+                {
+                    return Err(crate::YamlBaseError::Database {
+                        message: "Failed to set TCP_NODELAY".to_string(),
+                    });
+                }
+            }
+
+            // Enable SO_KEEPALIVE for connection health monitoring
+            let keepalive: libc::c_int = 1;
+            unsafe {
+                if libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_KEEPALIVE,
+                    &keepalive as *const _ as *const libc::c_void,
+                    size_of::<libc::c_int>() as libc::socklen_t,
+                ) != 0
+                {
+                    return Err(crate::YamlBaseError::Database {
+                        message: "Failed to set SO_KEEPALIVE".to_string(),
+                    });
+                }
             }
         }
 
-        // Enable SO_KEEPALIVE for connection health monitoring
-        let keepalive: libc::c_int = 1;
-        unsafe {
-            if libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_KEEPALIVE,
-                &keepalive as *const _ as *const libc::c_void,
-                size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0
-            {
-                return Err(crate::YamlBaseError::Database {
-                    message: "Failed to set SO_KEEPALIVE".to_string(),
-                });
-            }
+        #[cfg(windows)]
+        {
+            // On Windows, TCP_NODELAY and SO_KEEPALIVE can be set using the socket2 crate
+            // or the standard library's socket options. For now, we'll skip these optimizations
+            // on Windows to maintain cross-platform compatibility.
+            // These socket options are performance optimizations and not critical for functionality.
         }
 
         // Set keepalive parameters (Linux-specific)
         #[cfg(target_os = "linux")]
         {
+            use std::mem::size_of;
+            use std::os::unix::io::AsRawFd;
+            
+            let fd = stream.as_raw_fd();
+            
             // Time before starting keepalive probes (seconds)
             let keepalive_time: libc::c_int = 60;
             unsafe {
