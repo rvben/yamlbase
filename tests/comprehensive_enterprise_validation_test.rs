@@ -314,7 +314,7 @@ async fn test_advanced_date_arithmetic(executor: &QueryExecutor) {
         "SELECT employee_id, DATEDIFF('year', hire_date, '2024-12-31') as years_since_hire FROM employees WHERE employee_id <= 5",
         "SELECT employee_id, DATEDIFF('month', hire_date, '2024-12-31') as months_since_hire FROM employees WHERE employee_id <= 5",
         "SELECT employee_id, DATEDIFF('day', hire_date, '2024-12-31') as days_since_hire FROM employees WHERE employee_id <= 5",
-        // DATE_ADD function tests (MySQL style)  
+        // DATE_ADD function tests (MySQL style)
         "SELECT employee_id, DATE_ADD(hire_date, 1, 'YEAR') as mysql_year_add FROM employees WHERE employee_id <= 5",
         "SELECT employee_id, DATE_ADD(hire_date, 6, 'MONTH') as mysql_month_add FROM employees WHERE employee_id <= 5",
         // DATE_SUB function tests (MySQL style)

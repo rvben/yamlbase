@@ -218,9 +218,9 @@ impl ConnectionManager {
         {
             use std::mem::size_of;
             use std::os::unix::io::AsRawFd;
-            
+
             let fd = stream.as_raw_fd();
-            
+
             // Time before starting keepalive probes (seconds)
             let keepalive_time: libc::c_int = 60;
             unsafe {
