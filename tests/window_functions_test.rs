@@ -62,50 +62,62 @@ async fn test_window_functions() {
     ];
 
     let mut sales_table = Table::new("sales".to_string(), sales_columns);
-    
+
     // Insert test data for window function testing
-    sales_table.insert_row(vec![
-        Value::Integer(1),
-        Value::Text("Alice".to_string()),
-        Value::Text("North".to_string()),
-        Value::Integer(150000),
-        Value::Integer(1),
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(2),
-        Value::Text("Bob".to_string()),
-        Value::Text("South".to_string()),
-        Value::Integer(120000),
-        Value::Integer(1),
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(3),
-        Value::Text("Carol".to_string()),
-        Value::Text("North".to_string()),
-        Value::Integer(175000),
-        Value::Integer(1),
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(4),
-        Value::Text("Alice".to_string()),
-        Value::Text("North".to_string()),
-        Value::Integer(160000),
-        Value::Integer(2),
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(5),
-        Value::Text("Bob".to_string()),
-        Value::Text("South".to_string()),
-        Value::Integer(130000),
-        Value::Integer(2),
-    ]).unwrap();
-    sales_table.insert_row(vec![
-        Value::Integer(6),
-        Value::Text("Carol".to_string()),
-        Value::Text("North".to_string()),
-        Value::Integer(185000),
-        Value::Integer(2),
-    ]).unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Alice".to_string()),
+            Value::Text("North".to_string()),
+            Value::Integer(150000),
+            Value::Integer(1),
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Bob".to_string()),
+            Value::Text("South".to_string()),
+            Value::Integer(120000),
+            Value::Integer(1),
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(3),
+            Value::Text("Carol".to_string()),
+            Value::Text("North".to_string()),
+            Value::Integer(175000),
+            Value::Integer(1),
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(4),
+            Value::Text("Alice".to_string()),
+            Value::Text("North".to_string()),
+            Value::Integer(160000),
+            Value::Integer(2),
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(5),
+            Value::Text("Bob".to_string()),
+            Value::Text("South".to_string()),
+            Value::Integer(130000),
+            Value::Integer(2),
+        ])
+        .unwrap();
+    sales_table
+        .insert_row(vec![
+            Value::Integer(6),
+            Value::Text("Carol".to_string()),
+            Value::Text("North".to_string()),
+            Value::Integer(185000),
+            Value::Integer(2),
+        ])
+        .unwrap();
 
     db.add_table(sales_table).unwrap();
 
@@ -125,16 +137,23 @@ async fn test_window_functions() {
         FROM sales
         ORDER BY row_num
     "#;
-    
-    let row_number_result = executor.execute(&parse_sql(row_number_query).unwrap()[0]).await;
+
+    let row_number_result = executor
+        .execute(&parse_sql(row_number_query).unwrap()[0])
+        .await;
     match &row_number_result {
         Ok(result) => {
-            println!("   ✓ ROW_NUMBER() function succeeded: {} rows", result.rows.len());
-            assert!(result.rows.len() > 0);
+            println!(
+                "   ✓ ROW_NUMBER() function succeeded: {} rows",
+                result.rows.len()
+            );
+            assert!(!result.rows.is_empty());
         }
         Err(e) => {
             let error_str = e.to_string();
-            if error_str.contains("Window functions not yet supported") || error_str.contains("ROW_NUMBER") {
+            if error_str.contains("Window functions not yet supported")
+                || error_str.contains("ROW_NUMBER")
+            {
                 println!("   ❌ ROW_NUMBER() not implemented yet: {}", error_str);
             } else {
                 println!("   ⚠️  Different error: {}", error_str);
@@ -153,7 +172,7 @@ async fn test_window_functions() {
         FROM sales
         ORDER BY region, region_rank
     "#;
-    
+
     let rank_result = executor.execute(&parse_sql(rank_query).unwrap()[0]).await;
     match &rank_result {
         Ok(result) => {
@@ -161,7 +180,9 @@ async fn test_window_functions() {
         }
         Err(e) => {
             let error_str = e.to_string();
-            if error_str.contains("Window functions not yet supported") || error_str.contains("RANK") {
+            if error_str.contains("Window functions not yet supported")
+                || error_str.contains("RANK")
+            {
                 println!("   ❌ RANK() not implemented yet: {}", error_str);
             } else {
                 println!("   ⚠️  Different error: {}", error_str);
@@ -179,15 +200,22 @@ async fn test_window_functions() {
         FROM sales
         ORDER BY dense_rank
     "#;
-    
-    let dense_rank_result = executor.execute(&parse_sql(dense_rank_query).unwrap()[0]).await;
+
+    let dense_rank_result = executor
+        .execute(&parse_sql(dense_rank_query).unwrap()[0])
+        .await;
     match &dense_rank_result {
         Ok(result) => {
-            println!("   ✓ DENSE_RANK() function succeeded: {} rows", result.rows.len());
+            println!(
+                "   ✓ DENSE_RANK() function succeeded: {} rows",
+                result.rows.len()
+            );
         }
         Err(e) => {
             let error_str = e.to_string();
-            if error_str.contains("Window functions not yet supported") || error_str.contains("DENSE_RANK") {
+            if error_str.contains("Window functions not yet supported")
+                || error_str.contains("DENSE_RANK")
+            {
                 println!("   ❌ DENSE_RANK() not implemented yet: {}", error_str);
             } else {
                 println!("   ⚠️  Different error: {}", error_str);
@@ -206,7 +234,7 @@ async fn test_window_functions() {
         FROM sales
         ORDER BY salesperson, quarter
     "#;
-    
+
     let lag_result = executor.execute(&parse_sql(lag_query).unwrap()[0]).await;
     match &lag_result {
         Ok(result) => {
@@ -214,7 +242,8 @@ async fn test_window_functions() {
         }
         Err(e) => {
             let error_str = e.to_string();
-            if error_str.contains("Window functions not yet supported") || error_str.contains("LAG") {
+            if error_str.contains("Window functions not yet supported") || error_str.contains("LAG")
+            {
                 println!("   ❌ LAG() not implemented yet: {}", error_str);
             } else {
                 println!("   ⚠️  Different error: {}", error_str);
@@ -233,7 +262,7 @@ async fn test_window_functions() {
         FROM sales
         ORDER BY salesperson, quarter
     "#;
-    
+
     let lead_result = executor.execute(&parse_sql(lead_query).unwrap()[0]).await;
     match &lead_result {
         Ok(result) => {
@@ -241,7 +270,9 @@ async fn test_window_functions() {
         }
         Err(e) => {
             let error_str = e.to_string();
-            if error_str.contains("Window functions not yet supported") || error_str.contains("LEAD") {
+            if error_str.contains("Window functions not yet supported")
+                || error_str.contains("LEAD")
+            {
                 println!("   ❌ LEAD() not implemented yet: {}", error_str);
             } else {
                 println!("   ⚠️  Different error: {}", error_str);
@@ -262,16 +293,24 @@ async fn test_window_functions() {
         FROM sales
         ORDER BY region, region_rank
     "#;
-    
-    let multi_result = executor.execute(&parse_sql(multi_window_query).unwrap()[0]).await;
+
+    let multi_result = executor
+        .execute(&parse_sql(multi_window_query).unwrap()[0])
+        .await;
     match &multi_result {
         Ok(result) => {
-            println!("   ✓ Multiple window functions succeeded: {} rows", result.rows.len());
+            println!(
+                "   ✓ Multiple window functions succeeded: {} rows",
+                result.rows.len()
+            );
         }
         Err(e) => {
             let error_str = e.to_string();
             if error_str.contains("Window functions not yet supported") {
-                println!("   ❌ Multiple window functions not implemented yet: {}", error_str);
+                println!(
+                    "   ❌ Multiple window functions not implemented yet: {}",
+                    error_str
+                );
             } else {
                 println!("   ⚠️  Different error: {}", error_str);
             }
@@ -284,7 +323,7 @@ async fn test_window_functions() {
     println!("   • DENSE_RANK(): Dense ranking without gaps");
     println!("   • LAG(): Access previous row values");
     println!("   • LEAD(): Access next row values");
-    
+
     println!("\n🚀 These are CRITICAL for enterprise SQL compatibility!");
     println!("   Window functions enable advanced analytics and reporting queries");
     println!("   that are essential for business intelligence and data analysis.");
@@ -318,8 +357,12 @@ async fn test_window_function_errors() {
     ];
 
     let mut test_table = Table::new("test_data".to_string(), test_columns);
-    test_table.insert_row(vec![Value::Integer(1), Value::Integer(100)]).unwrap();
-    test_table.insert_row(vec![Value::Integer(2), Value::Integer(200)]).unwrap();
+    test_table
+        .insert_row(vec![Value::Integer(1), Value::Integer(100)])
+        .unwrap();
+    test_table
+        .insert_row(vec![Value::Integer(2), Value::Integer(200)])
+        .unwrap();
 
     db.add_table(test_table).unwrap();
     let storage = Arc::new(Storage::new(db));
@@ -330,9 +373,11 @@ async fn test_window_function_errors() {
 
     // Test invalid window function usage
     let invalid_window_query = "SELECT ROW_NUMBER() FROM test_data";
-    
-    let result = executor.execute(&parse_sql(invalid_window_query).unwrap()[0]).await;
-    
+
+    let result = executor
+        .execute(&parse_sql(invalid_window_query).unwrap()[0])
+        .await;
+
     match result {
         Err(e) => {
             let error_str = e.to_string();

@@ -54,17 +54,18 @@ impl Server {
         }
 
         // Create connection manager for stable connection handling
-        let connection_manager = ConnectionManager::new(
-            self.config.clone(),
-            Arc::new(self.storage.clone())
-        );
+        let connection_manager =
+            ConnectionManager::new(self.config.clone(), Arc::new(self.storage.clone()));
 
         // Start background monitoring for connection stability
         let _monitoring_handle = connection_manager.start_monitoring();
 
         // Start listening
         let listener = TcpListener::bind(&addr).await?;
-        info!("Server listening on {} with connection stability features", addr);
+        info!(
+            "Server listening on {} with connection stability features",
+            addr
+        );
 
         // Accept connections with enhanced stability handling
         loop {
@@ -74,7 +75,10 @@ impl Server {
 
             let manager = connection_manager.clone();
             tokio::spawn(async move {
-                if let Err(e) = manager.handle_connection(stream, client_addr_str.clone()).await {
+                if let Err(e) = manager
+                    .handle_connection(stream, client_addr_str.clone())
+                    .await
+                {
                     error!("Connection error from {}: {}", client_addr_str, e);
                 }
             });

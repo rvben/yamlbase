@@ -1,11 +1,11 @@
 #![allow(clippy::uninlined_format_args)]
 
-use std::sync::Arc;
+use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::sync::Arc;
 use yamlbase::database::{Column, Database, Storage, Table, Value};
 use yamlbase::sql::{QueryExecutor, parse_sql};
 use yamlbase::yaml::schema::SqlType;
-use rust_decimal::Decimal;
 
 /// Test for complex multi-table CTE queries to verify the fix
 #[tokio::test]
@@ -45,21 +45,27 @@ async fn test_complex_multitable_cte_queries() {
     ];
 
     let mut users_table = Table::new("users".to_string(), user_columns);
-    users_table.insert_row(vec![
-        Value::Integer(1), 
-        Value::Text("alice".to_string()),
-        Value::Integer(10)
-    ]).unwrap();
-    users_table.insert_row(vec![
-        Value::Integer(2), 
-        Value::Text("bob".to_string()),
-        Value::Integer(20)
-    ]).unwrap();
-    users_table.insert_row(vec![
-        Value::Integer(3), 
-        Value::Text("carol".to_string()),
-        Value::Integer(10)
-    ]).unwrap();
+    users_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Text("alice".to_string()),
+            Value::Integer(10),
+        ])
+        .unwrap();
+    users_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Text("bob".to_string()),
+            Value::Integer(20),
+        ])
+        .unwrap();
+    users_table
+        .insert_row(vec![
+            Value::Integer(3),
+            Value::Text("carol".to_string()),
+            Value::Integer(10),
+        ])
+        .unwrap();
 
     // Departments table
     let dept_columns = vec![
@@ -84,14 +90,18 @@ async fn test_complex_multitable_cte_queries() {
     ];
 
     let mut departments_table = Table::new("departments".to_string(), dept_columns);
-    departments_table.insert_row(vec![
-        Value::Integer(10), 
-        Value::Text("Engineering".to_string())
-    ]).unwrap();
-    departments_table.insert_row(vec![
-        Value::Integer(20), 
-        Value::Text("Marketing".to_string())
-    ]).unwrap();
+    departments_table
+        .insert_row(vec![
+            Value::Integer(10),
+            Value::Text("Engineering".to_string()),
+        ])
+        .unwrap();
+    departments_table
+        .insert_row(vec![
+            Value::Integer(20),
+            Value::Text("Marketing".to_string()),
+        ])
+        .unwrap();
 
     // Projects table
     let project_columns = vec![
@@ -125,16 +135,20 @@ async fn test_complex_multitable_cte_queries() {
     ];
 
     let mut projects_table = Table::new("projects".to_string(), project_columns);
-    projects_table.insert_row(vec![
-        Value::Integer(1), 
-        Value::Text("Website".to_string()),
-        Value::Decimal(Decimal::from_str("50000.00").unwrap())
-    ]).unwrap();
-    projects_table.insert_row(vec![
-        Value::Integer(2), 
-        Value::Text("Mobile App".to_string()),
-        Value::Decimal(Decimal::from_str("75000.00").unwrap())
-    ]).unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Website".to_string()),
+            Value::Decimal(Decimal::from_str("50000.00").unwrap()),
+        ])
+        .unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Mobile App".to_string()),
+            Value::Decimal(Decimal::from_str("75000.00").unwrap()),
+        ])
+        .unwrap();
 
     db.add_table(users_table).unwrap();
     db.add_table(departments_table).unwrap();
@@ -156,11 +170,16 @@ async fn test_complex_multitable_cte_queries() {
         SELECT * FROM user_dept_combinations
         ORDER BY username, dept_name
     "#;
-    
-    let cartesian_result = executor.execute(&parse_sql(cartesian_cte_query).unwrap()[0]).await;
+
+    let cartesian_result = executor
+        .execute(&parse_sql(cartesian_cte_query).unwrap()[0])
+        .await;
     match &cartesian_result {
         Ok(result) => {
-            println!("   ✓ CTE Cartesian product succeeded: {} combinations", result.rows.len());
+            println!(
+                "   ✓ CTE Cartesian product succeeded: {} combinations",
+                result.rows.len()
+            );
             assert_eq!(result.rows.len(), 6); // 3 users × 2 departments = 6 combinations
         }
         Err(e) => {
@@ -181,12 +200,17 @@ async fn test_complex_multitable_cte_queries() {
         FROM all_combinations
         ORDER BY username, project_name
     "#;
-    
-    let three_table_result = executor.execute(&parse_sql(three_table_cte_query).unwrap()[0]).await;
+
+    let three_table_result = executor
+        .execute(&parse_sql(three_table_cte_query).unwrap()[0])
+        .await;
     match &three_table_result {
         Ok(result) => {
-            println!("   ✓ Three-table CTE succeeded: {} filtered combinations", result.rows.len());
-            assert!(result.rows.len() > 0);
+            println!(
+                "   ✓ Three-table CTE succeeded: {} filtered combinations",
+                result.rows.len()
+            );
+            assert!(!result.rows.is_empty());
         }
         Err(e) => {
             println!("   ✗ Three-table CTE failed: {}", e);
@@ -205,8 +229,10 @@ async fn test_complex_multitable_cte_queries() {
         SELECT COUNT(*) as total_combinations
         FROM dept_user_info
     "#;
-    
-    let conflict_result = executor.execute(&parse_sql(conflict_cte_query).unwrap()[0]).await;
+
+    let conflict_result = executor
+        .execute(&parse_sql(conflict_cte_query).unwrap()[0])
+        .await;
     match &conflict_result {
         Ok(result) => {
             println!("   ✓ Column conflict resolution succeeded");
@@ -222,7 +248,7 @@ async fn test_complex_multitable_cte_queries() {
     println!("   ✅ Cartesian product functionality working");
     println!("   ✅ Column name conflict resolution handling");
     println!("   ✅ Complex CTE queries no longer throw NotImplemented errors");
-    
+
     println!("\n🚀 Multi-table CTE limitation has been RESOLVED!");
 }
 
@@ -254,8 +280,12 @@ async fn test_previous_notimplemented_scenario() {
     ];
 
     let mut table1 = Table::new("table1".to_string(), table1_columns);
-    table1.insert_row(vec![Value::Integer(1), Value::Text("A".to_string())]).unwrap();
-    table1.insert_row(vec![Value::Integer(2), Value::Text("B".to_string())]).unwrap();
+    table1
+        .insert_row(vec![Value::Integer(1), Value::Text("A".to_string())])
+        .unwrap();
+    table1
+        .insert_row(vec![Value::Integer(2), Value::Text("B".to_string())])
+        .unwrap();
 
     let table2_columns = vec![
         Column {
@@ -279,8 +309,12 @@ async fn test_previous_notimplemented_scenario() {
     ];
 
     let mut table2 = Table::new("table2".to_string(), table2_columns);
-    table2.insert_row(vec![Value::Integer(1), Value::Integer(100)]).unwrap();
-    table2.insert_row(vec![Value::Integer(2), Value::Integer(200)]).unwrap();
+    table2
+        .insert_row(vec![Value::Integer(1), Value::Integer(100)])
+        .unwrap();
+    table2
+        .insert_row(vec![Value::Integer(2), Value::Integer(200)])
+        .unwrap();
 
     db.add_table(table1).unwrap();
     db.add_table(table2).unwrap();
@@ -301,24 +335,33 @@ async fn test_previous_notimplemented_scenario() {
         SELECT * FROM combined_data
     "#;
 
-    let result = executor.execute(&parse_sql(multi_table_cte).unwrap()[0]).await;
-    
+    let result = executor
+        .execute(&parse_sql(multi_table_cte).unwrap()[0])
+        .await;
+
     match result {
         Ok(query_result) => {
             println!("   ✅ Previously failing multi-table CTE now works!");
             println!("   ✅ Returned {} rows", query_result.rows.len());
-            assert!(query_result.rows.len() > 0);
+            assert!(!query_result.rows.is_empty());
         }
         Err(e) => {
             // Check if this is still the old NotImplemented error
-            if e.to_string().contains("Complex multi-table CTE queries not yet fully implemented") {
+            if e.to_string()
+                .contains("Complex multi-table CTE queries not yet fully implemented")
+            {
                 panic!("The NotImplemented error still exists! Fix was not effective.");
             } else {
-                println!("   ⚠️  Different error occurred (may need additional work): {}", e);
+                println!(
+                    "   ⚠️  Different error occurred (may need additional work): {}",
+                    e
+                );
                 // This might be a different issue like WHERE clause handling in CTEs
             }
         }
     }
 
-    println!("\n🎉 The 'Complex multi-table CTE queries not yet fully implemented' error has been FIXED!");
+    println!(
+        "\n🎉 The 'Complex multi-table CTE queries not yet fully implemented' error has been FIXED!"
+    );
 }
