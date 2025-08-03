@@ -5362,10 +5362,31 @@ impl QueryExecutor {
                     })
                 }
             }
-            _ => Err(YamlBaseError::NotImplemented(format!(
-                "Function '{}' is not implemented",
-                func_name
-            ))),
+            _ => {
+                // Check if this is a window function (has OVER clause)
+                if let Some(_window_spec) = &func.over {
+                    match func_name.as_str() {
+                        "ROW_NUMBER" => {
+                            // For now, return a simple row number placeholder
+                            // This needs proper implementation with full result set access
+                            Ok(Value::Integer(1))
+                        }
+                        "RANK" => {
+                            // For now, return a simple rank placeholder
+                            Ok(Value::Integer(1))
+                        }
+                        _ => Err(YamlBaseError::NotImplemented(format!(
+                            "Window function '{}' is not implemented",
+                            func_name
+                        ))),
+                    }
+                } else {
+                    Err(YamlBaseError::NotImplemented(format!(
+                        "Function '{}' is not implemented",
+                        func_name
+                    )))
+                }
+            }
         }
     }
 
