@@ -1907,11 +1907,14 @@ impl QueryExecutor {
         columns: &[ProjectionItem],
         table: &Table,
     ) -> crate::Result<Vec<Vec<Value>>> {
+        // Pre-compute window function values for all rows
+        let window_values = self.compute_window_functions(rows, columns, table)?;
+        
         let mut result = Vec::new();
 
-        for row in rows {
+        for (row_idx, row) in rows.iter().enumerate() {
             let mut projected_row = Vec::new();
-            for item in columns {
+            for (col_idx, item) in columns.iter().enumerate() {
                 match item {
                     ProjectionItem::TableColumn(_, idx) => {
                         projected_row.push(row[*idx].clone());
@@ -1920,8 +1923,13 @@ impl QueryExecutor {
                         projected_row.push(value.clone());
                     }
                     ProjectionItem::Expression(_, expr) => {
-                        let value = self.get_expr_value(expr.as_ref(), row, table)?;
-                        projected_row.push(value);
+                        // Check if this is a window function
+                        if let Some(window_val) = window_values.get(&(row_idx, col_idx)) {
+                            projected_row.push(window_val.clone());
+                        } else {
+                            let value = self.get_expr_value(expr.as_ref(), row, table)?;
+                            projected_row.push(value);
+                        }
                     }
                 }
             }
@@ -1929,6 +1937,74 @@ impl QueryExecutor {
         }
 
         Ok(result)
+    }
+
+    fn compute_window_functions(
+        &self,
+        rows: &[&Vec<Value>],
+        columns: &[ProjectionItem],
+        table: &Table,
+    ) -> crate::Result<std::collections::HashMap<(usize, usize), Value>> {
+        use std::collections::HashMap;
+        let mut window_values = HashMap::new();
+
+        // Find window functions in the projection
+        for (col_idx, item) in columns.iter().enumerate() {
+            if let ProjectionItem::Expression(_, expr) = item {
+                if let Some(window_result) = self.evaluate_window_function_for_all_rows(expr, rows, table)? {
+                    // Store the computed values for each row
+                    for (row_idx, value) in window_result.into_iter().enumerate() {
+                        window_values.insert((row_idx, col_idx), value);
+                    }
+                }
+            }
+        }
+
+        Ok(window_values)
+    }
+
+    fn evaluate_window_function_for_all_rows(
+        &self,
+        expr: &Expr,
+        rows: &[&Vec<Value>],
+        _table: &Table,
+    ) -> crate::Result<Option<Vec<Value>>> {
+        match expr {
+            Expr::Function(func) => {
+                if let Some(_window_spec) = &func.over {
+                    let func_name = func
+                        .name
+                        .0
+                        .first()
+                        .map(|ident| ident.value.to_uppercase())
+                        .unwrap_or_default();
+
+                    match func_name.as_str() {
+                        "ROW_NUMBER" => {
+                            // Generate sequential row numbers
+                            let mut result = Vec::new();
+                            for i in 1..=rows.len() {
+                                result.push(Value::Integer(i as i64));
+                            }
+                            Ok(Some(result))
+                        }
+                        "RANK" => {
+                            // For now, simple rank implementation (all get rank 1)
+                            // TODO: Implement proper ranking based on ORDER BY
+                            let mut result = Vec::new();
+                            for _ in 0..rows.len() {
+                                result.push(Value::Integer(1));
+                            }
+                            Ok(Some(result))
+                        }
+                        _ => Ok(None), // Not a supported window function
+                    }
+                } else {
+                    Ok(None) // Not a window function
+                }
+            }
+            _ => Ok(None), // Not a function expression
+        }
     }
 
     fn sort_rows(
