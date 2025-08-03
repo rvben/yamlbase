@@ -364,46 +364,53 @@ impl PostgresProtocol {
         stream: &mut TcpStream,
         result: &crate::sql::executor::QueryResult,
     ) -> crate::Result<()> {
-        // Send row description
-        let mut buf = BytesMut::new();
-        buf.put_u8(b'T');
+        // For empty results (like transaction commands), skip row description
+        if !result.columns.is_empty() {
+            // Send row description
+            let mut buf = BytesMut::new();
+            buf.put_u8(b'T');
 
-        // Calculate length
-        let mut length = 6; // 4 bytes for length + 2 bytes for field count
-        for col in &result.columns {
-            length += col.len() + 1 + 18; // name + null + field info
+            // Calculate length
+            let mut length = 6; // 4 bytes for length + 2 bytes for field count
+            for col in &result.columns {
+                length += col.len() + 1 + 18; // name + null + field info
+            }
+            buf.put_u32(length as u32);
+            buf.put_u16(result.columns.len() as u16);
+
+            // Send field descriptions
+            for (i, col) in result.columns.iter().enumerate() {
+                buf.put_slice(col.as_bytes());
+                buf.put_u8(0); // Null terminator
+                buf.put_u32(0); // Table OID
+                buf.put_u16(i as u16); // Column number
+
+                // For simple protocol, we always send text format, so declare as text
+                // to match the text data we send
+                buf.put_u32(25); // text OID
+
+                buf.put_i16(-1); // Type size
+                buf.put_i32(-1); // Type modifier
+                buf.put_i16(0); // Format code (text)
+            }
+
+            stream.write_all(&buf).await?;
         }
-        buf.put_u32(length as u32);
-        buf.put_u16(result.columns.len() as u16);
-
-        // Send field descriptions
-        for (i, col) in result.columns.iter().enumerate() {
-            buf.put_slice(col.as_bytes());
-            buf.put_u8(0); // Null terminator
-            buf.put_u32(0); // Table OID
-            buf.put_u16(i as u16); // Column number
-
-            // For simple protocol, we always send text format, so declare as text
-            // to match the text data we send
-            buf.put_u32(25); // text OID
-
-            buf.put_i16(-1); // Type size
-            buf.put_i32(-1); // Type modifier
-            buf.put_i16(0); // Format code (text)
-        }
-
-        stream.write_all(&buf).await?;
 
         // Send data rows
         for row in &result.rows {
-            buf.clear();
+            let mut buf = BytesMut::new();
             buf.put_u8(b'D');
 
             // Calculate row length
             let mut row_length = 6; // 4 bytes for length + 2 bytes for field count
             for val in row {
-                let val_str = val.to_string();
-                row_length += 4 + val_str.len(); // 4 bytes for value length + value
+                if matches!(val, Value::Null) {
+                    row_length += 4; // Just 4 bytes for NULL (-1)
+                } else {
+                    let val_str = val.to_string();
+                    row_length += 4 + val_str.len(); // 4 bytes for value length + value
+                }
             }
 
             buf.put_u32(row_length as u32);
@@ -424,9 +431,14 @@ impl PostgresProtocol {
         }
 
         // Send command complete
-        buf.clear();
+        let mut buf = BytesMut::new();
         buf.put_u8(b'C');
-        let tag = format!("SELECT {}", result.rows.len());
+        let tag = if result.columns.is_empty() {
+            // For transaction commands, use appropriate command tag
+            "BEGIN".to_string() // This is generic - ideally we'd track the actual command
+        } else {
+            format!("SELECT {}", result.rows.len())
+        };
         buf.put_u32(4 + tag.len() as u32 + 1);
         buf.put_slice(tag.as_bytes());
         buf.put_u8(0);
