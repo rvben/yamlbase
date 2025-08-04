@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2025-08-04
+
+### Added
+- **Complex JOIN Conditions Support**:
+  - Multiple AND conditions in JOIN clauses (e.g., `ON t1.id = t2.parent_id AND t2.status = 'Active' AND t2.version = 'Published'`)
+  - NOT IN expressions in JOIN conditions (e.g., `ON ... AND t2.status NOT IN ('Cancelled', 'Closed')`)
+  - Fixed table alias resolution for self-joins
+  - Async evaluation of IN/NOT IN expressions to prevent runtime deadlocks
+  - Proper logical operator (AND/OR) evaluation in JOIN conditions
+
+### Fixed
+- Runtime hang when using NOT IN expressions in queries
+- "Binary operator not supported in constant expressions" error for complex JOIN conditions
+- Table alias resolution in self-joins now correctly distinguishes between different instances of the same table
+
 ## [0.4.6] - 2025-08-04
 
 ### Changed

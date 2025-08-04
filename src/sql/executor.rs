@@ -847,8 +847,11 @@ impl QueryExecutor {
 
             if let Some(alias_name) = alias {
                 table_aliases.insert(alias_name.clone(), table_name.clone());
+                // Use alias as the identifier in all_tables for proper resolution
+                all_tables.push((alias_name.clone(), table));
+            } else {
+                all_tables.push((table_name.clone(), table));
             }
-            all_tables.push((table_name.clone(), table));
 
             // Add joined tables
             for join in &table_with_joins.joins {
@@ -861,8 +864,11 @@ impl QueryExecutor {
 
                 if let Some(alias_name) = join_alias {
                     table_aliases.insert(alias_name.clone(), join_table_name.clone());
+                    // Use alias as the identifier in all_tables for proper resolution
+                    all_tables.push((alias_name.clone(), join_table));
+                } else {
+                    all_tables.push((join_table_name.clone(), join_table));
                 }
-                all_tables.push((join_table_name.clone(), join_table));
             }
         }
 
@@ -1244,7 +1250,7 @@ impl QueryExecutor {
                         "Found InList expression: expr={:?}, negated={}",
                         expr, negated
                     );
-                    self.evaluate_in_list(expr, list, *negated, row, table)
+                    self.evaluate_in_list_async(expr, list, *negated, row, table).await
                 }
                 Expr::Like {
                     expr,
@@ -1600,6 +1606,26 @@ impl QueryExecutor {
 
         for list_expr in list {
             let list_value = self.get_expr_value(list_expr, row, table)?;
+            if value == list_value {
+                return Ok(!negated);
+            }
+        }
+
+        Ok(negated)
+    }
+
+    async fn evaluate_in_list_async(
+        &self,
+        expr: &Expr,
+        list: &[Expr],
+        negated: bool,
+        row: &[Value],
+        table: &Table,
+    ) -> crate::Result<bool> {
+        let value = self.get_expr_value_async(expr, row, table).await?;
+
+        for list_expr in list {
+            let list_value = self.get_expr_value_async(list_expr, row, table).await?;
             if value == list_value {
                 return Ok(!negated);
             }
@@ -7870,10 +7896,28 @@ impl QueryExecutor {
     ) -> crate::Result<bool> {
         match expr {
             Expr::BinaryOp { left, op, right } => {
-                let left_val = self.get_join_expr_value(left, row, tables, table_aliases)?;
-                let right_val = self.get_join_expr_value(right, row, tables, table_aliases)?;
-
+                // Check if this is a logical operator first
                 match op {
+                    BinaryOperator::And => {
+                        let left_bool =
+                            self.evaluate_join_condition(left, row, tables, table_aliases)?;
+                        let right_bool =
+                            self.evaluate_join_condition(right, row, tables, table_aliases)?;
+                        Ok(left_bool && right_bool)
+                    }
+                    BinaryOperator::Or => {
+                        let left_bool =
+                            self.evaluate_join_condition(left, row, tables, table_aliases)?;
+                        let right_bool =
+                            self.evaluate_join_condition(right, row, tables, table_aliases)?;
+                        Ok(left_bool || right_bool)
+                    }
+                    _ => {
+                        // For comparison operators, evaluate as values
+                        let left_val = self.get_join_expr_value(left, row, tables, table_aliases)?;
+                        let right_val = self.get_join_expr_value(right, row, tables, table_aliases)?;
+
+                        match op {
                     BinaryOperator::Eq => Ok(left_val == right_val),
                     BinaryOperator::NotEq => Ok(left_val != right_val),
                     BinaryOperator::Lt => {
@@ -7904,23 +7948,11 @@ impl QueryExecutor {
                             Ok(false)
                         }
                     }
-                    BinaryOperator::And => {
-                        let left_bool =
-                            self.evaluate_join_condition(left, row, tables, table_aliases)?;
-                        let right_bool =
-                            self.evaluate_join_condition(right, row, tables, table_aliases)?;
-                        Ok(left_bool && right_bool)
-                    }
-                    BinaryOperator::Or => {
-                        let left_bool =
-                            self.evaluate_join_condition(left, row, tables, table_aliases)?;
-                        let right_bool =
-                            self.evaluate_join_condition(right, row, tables, table_aliases)?;
-                        Ok(left_bool || right_bool)
-                    }
                     _ => Err(YamlBaseError::NotImplemented(
                         "This operator is not supported in JOIN conditions".to_string(),
                     )),
+                        }
+                    }
                 }
             }
             Expr::Between {
@@ -8048,6 +8080,21 @@ impl QueryExecutor {
             Expr::IsNotNull(expr) => {
                 let value = self.get_join_expr_value(expr, row, tables, table_aliases)?;
                 Ok(!matches!(value, Value::Null))
+            }
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                let value = self.get_join_expr_value(expr, row, tables, table_aliases)?;
+                
+                for item in list {
+                    let item_value = self.get_join_expr_value(item, row, tables, table_aliases)?;
+                    if self.compare_values_equal(&value, &item_value) {
+                        return Ok(!negated);
+                    }
+                }
+                Ok(*negated)
             }
             _ => Err(YamlBaseError::NotImplemented(
                 "Complex JOIN conditions are not yet supported".to_string(),
