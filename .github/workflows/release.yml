@@ -56,11 +56,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: yamlbase.exe
             asset_name: yamlbase-windows-amd64.exe
-          - os: macos-latest
+          - os: macos-14
             target: x86_64-apple-darwin
             artifact_name: yamlbase
             asset_name: yamlbase-macos-amd64
-          - os: macos-latest
+          - os: macos-14
             target: aarch64-apple-darwin
             artifact_name: yamlbase
             asset_name: yamlbase-macos-arm64
