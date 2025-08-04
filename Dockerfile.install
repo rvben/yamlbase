@@ -4,9 +4,16 @@ FROM rust:1.88-alpine AS builder
 # Install build dependencies
 RUN apk add --no-cache musl-dev
 
+# Accept version as build arg (defaults to latest)
+ARG VERSION
+
 # Install yamlbase from crates.io
-# Use --locked to ensure we use the exact dependencies from Cargo.lock
-RUN cargo install yamlbase --locked
+# If VERSION is provided, install that specific version, otherwise latest
+RUN if [ -z "$VERSION" ]; then \
+        cargo install yamlbase --locked; \
+    else \
+        cargo install yamlbase --version "$VERSION" --locked; \
+    fi
 
 # Runtime stage
 FROM alpine:3.22

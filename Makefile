@@ -93,16 +93,6 @@ docker-build:
 docker-build-install:
 	docker build -f Dockerfile.install -t yamlbase:crates-latest .
 
-# Build Docker image from pre-built binary (for CI/CD)
-docker-build-binary:
-	@if [ ! -f "yamlbase" ]; then \
-		echo "Error: yamlbase binary not found. Build it first with 'make build'"; \
-		exit 1; \
-	fi
-	cp target/release/yamlbase yamlbase
-	docker build -f Dockerfile.binary -t yamlbase:binary-latest .
-	rm yamlbase
-
 # Setup Docker buildx for multi-platform builds
 docker-setup:
 	@if ! docker buildx ls | grep -q yamlbase-builder; then \
