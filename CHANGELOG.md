@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2025-08-04
+
+### Changed
+- **CI/CD Improvements**:
+  - Simplified Docker build process to use `cargo install` from crates.io
+  - Updated GitHub Actions to use `macos-14` explicitly (preparing for macOS 15 migration)
+  - Docker images now built using published crates instead of compiling from source
+
+### Internal
+- Improved release pipeline efficiency
+- Reduced Docker image build time significantly
+
 ## [0.4.5] - 2025-08-04
 
 ### Added
@@ -274,6 +286,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.4.6]: https://github.com/rvben/yamlbase/releases/tag/v0.4.6
 [0.4.5]: https://github.com/rvben/yamlbase/releases/tag/v0.4.5
 [0.4.4]: https://github.com/rvben/yamlbase/releases/tag/v0.4.4
 [0.3.0]: https://github.com/rvben/yamlbase/releases/tag/v0.3.0
