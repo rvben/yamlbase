@@ -1967,11 +1967,11 @@ impl QueryExecutor {
         &self,
         expr: &Expr,
         rows: &[&Vec<Value>],
-        _table: &Table,
+        table: &Table,
     ) -> crate::Result<Option<Vec<Value>>> {
         match expr {
             Expr::Function(func) => {
-                if let Some(_window_spec) = &func.over {
+                if let Some(window_spec) = &func.over {
                     let func_name = func
                         .name
                         .0
@@ -1981,21 +1981,10 @@ impl QueryExecutor {
 
                     match func_name.as_str() {
                         "ROW_NUMBER" => {
-                            // Generate sequential row numbers
-                            let mut result = Vec::new();
-                            for i in 1..=rows.len() {
-                                result.push(Value::Integer(i as i64));
-                            }
-                            Ok(Some(result))
+                            self.compute_row_number_with_partitions(rows, window_spec, table)
                         }
                         "RANK" => {
-                            // For now, simple rank implementation (all get rank 1)
-                            // TODO: Implement proper ranking based on ORDER BY
-                            let mut result = Vec::new();
-                            for _ in 0..rows.len() {
-                                result.push(Value::Integer(1));
-                            }
-                            Ok(Some(result))
+                            self.compute_rank_with_partitions(rows, window_spec, table)
                         }
                         _ => Ok(None), // Not a supported window function
                     }
@@ -2005,6 +1994,115 @@ impl QueryExecutor {
             }
             _ => Ok(None), // Not a function expression
         }
+    }
+
+    fn compute_row_number_with_partitions(
+        &self,
+        rows: &[&Vec<Value>],
+        window_type: &sqlparser::ast::WindowType,
+        table: &Table,
+    ) -> crate::Result<Option<Vec<Value>>> {
+        use std::collections::HashMap;
+        
+        // Extract WindowSpec from WindowType
+        let window_spec = match window_type {
+            sqlparser::ast::WindowType::WindowSpec(spec) => spec,
+            sqlparser::ast::WindowType::NamedWindow(_) => {
+                // TODO: Support named windows
+                return Err(YamlBaseError::NotImplemented(
+                    "Named windows are not yet supported".to_string()
+                ));
+            }
+        };
+        
+        // If no PARTITION BY, treat all rows as one partition
+        if window_spec.partition_by.is_empty() {
+            let mut result = Vec::new();
+            for i in 1..=rows.len() {
+                result.push(Value::Integer(i as i64));
+            }
+            return Ok(Some(result));
+        }
+
+        // Group rows by partition values
+        let mut partitions: HashMap<Vec<Value>, Vec<usize>> = HashMap::new();
+        
+        for (row_idx, row) in rows.iter().enumerate() {
+            // Evaluate partition expressions for this row
+            let mut partition_key = Vec::new();
+            for partition_expr in &window_spec.partition_by {
+                let partition_value = self.get_expr_value(partition_expr, row, table)?;
+                partition_key.push(partition_value);
+            }
+            
+            partitions.entry(partition_key).or_default().push(row_idx);
+        }
+
+        // Compute ROW_NUMBER within each partition
+        let mut result = vec![Value::Integer(0); rows.len()];
+        
+        for partition_rows in partitions.values() {
+            for (pos, &row_idx) in partition_rows.iter().enumerate() {
+                result[row_idx] = Value::Integer((pos + 1) as i64);
+            }
+        }
+
+        Ok(Some(result))
+    }
+
+    fn compute_rank_with_partitions(
+        &self,
+        rows: &[&Vec<Value>],
+        window_type: &sqlparser::ast::WindowType,
+        table: &Table,
+    ) -> crate::Result<Option<Vec<Value>>> {
+        use std::collections::HashMap;
+        
+        // Extract WindowSpec from WindowType
+        let window_spec = match window_type {
+            sqlparser::ast::WindowType::WindowSpec(spec) => spec,
+            sqlparser::ast::WindowType::NamedWindow(_) => {
+                // TODO: Support named windows
+                return Err(YamlBaseError::NotImplemented(
+                    "Named windows are not yet supported".to_string()
+                ));
+            }
+        };
+        
+        // If no PARTITION BY, treat all rows as one partition
+        if window_spec.partition_by.is_empty() {
+            let mut result = Vec::new();
+            for _ in 0..rows.len() {
+                result.push(Value::Integer(1));
+            }
+            return Ok(Some(result));
+        }
+
+        // Group rows by partition values
+        let mut partitions: HashMap<Vec<Value>, Vec<usize>> = HashMap::new();
+        
+        for (row_idx, row) in rows.iter().enumerate() {
+            // Evaluate partition expressions for this row
+            let mut partition_key = Vec::new();
+            for partition_expr in &window_spec.partition_by {
+                let partition_value = self.get_expr_value(partition_expr, row, table)?;
+                partition_key.push(partition_value);
+            }
+            
+            partitions.entry(partition_key).or_default().push(row_idx);
+        }
+
+        // Compute RANK within each partition (for now, all get rank 1)
+        // TODO: Implement proper ranking based on ORDER BY
+        let mut result = vec![Value::Integer(0); rows.len()];
+        
+        for partition_rows in partitions.values() {
+            for &row_idx in partition_rows {
+                result[row_idx] = Value::Integer(1);
+            }
+        }
+
+        Ok(Some(result))
     }
 
     fn sort_rows(
