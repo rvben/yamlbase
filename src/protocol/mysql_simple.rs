@@ -432,15 +432,15 @@ impl MySqlProtocol {
 
         for statement in statements {
             debug!("Executing statement: {:?}", statement);
-            
+
             // Check if this is a transaction command that should return OK
             let is_transaction_command = matches!(
                 statement,
                 sqlparser::ast::Statement::StartTransaction { .. }
-                | sqlparser::ast::Statement::Commit { .. }
-                | sqlparser::ast::Statement::Rollback { .. }
+                    | sqlparser::ast::Statement::Commit { .. }
+                    | sqlparser::ast::Statement::Rollback { .. }
             );
-            
+
             match self.executor.execute(&statement).await {
                 Ok(result) => {
                     debug!(
@@ -448,9 +448,11 @@ impl MySqlProtocol {
                         result.columns.len(),
                         result.rows.len()
                     );
-                    
+
                     // Send OK packet for transaction commands or empty results
-                    if is_transaction_command || (result.columns.is_empty() && result.rows.is_empty()) {
+                    if is_transaction_command
+                        || (result.columns.is_empty() && result.rows.is_empty())
+                    {
                         debug!("Sending OK packet for transaction command or empty result");
                         self.send_ok(stream, state, 0, 0).await?;
                     } else {

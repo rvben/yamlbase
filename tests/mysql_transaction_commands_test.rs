@@ -12,31 +12,35 @@ fn test_transaction_command_parsing() {
         "ROLLBACK",
         "ROLLBACK WORK",
     ];
-    
+
     for cmd in commands {
         let result = parse_sql(cmd);
-        assert!(result.is_ok(), "Failed to parse '{}': {:?}", cmd, result);
-        
+        assert!(result.is_ok(), "Failed to parse '{cmd}': {result:?}");
+
         let statements = result.unwrap();
-        assert_eq!(statements.len(), 1, "{} should parse to one statement", cmd);
-        
+        assert_eq!(statements.len(), 1, "{cmd} should parse to one statement");
+
         // Check that it's a transaction statement
         match &statements[0] {
             sqlparser::ast::Statement::StartTransaction { .. } => {
-                assert!(cmd.contains("BEGIN") || cmd.contains("START"), 
-                        "Unexpected START TRANSACTION for: {}", cmd);
+                assert!(
+                    cmd.contains("BEGIN") || cmd.contains("START"),
+                    "Unexpected START TRANSACTION for: {cmd}"
+                );
             }
             sqlparser::ast::Statement::Commit { .. } => {
-                assert!(cmd.contains("COMMIT"), "Unexpected COMMIT for: {}", cmd);
+                assert!(cmd.contains("COMMIT"), "Unexpected COMMIT for: {cmd}");
             }
             sqlparser::ast::Statement::Rollback { .. } => {
-                assert!(cmd.contains("ROLLBACK"), "Unexpected ROLLBACK for: {}", cmd);
+                assert!(cmd.contains("ROLLBACK"), "Unexpected ROLLBACK for: {cmd}");
             }
-            _ => panic!("'{}' parsed to unexpected statement type: {:?}", cmd, statements[0]),
+            _ => panic!(
+                "'{cmd}' parsed to unexpected statement type: {:?}",
+                statements[0]
+            ),
         }
     }
 }
-
 
 #[test]
 fn test_mysql_handler_identifies_transaction_commands() {
@@ -52,19 +56,21 @@ fn test_mysql_handler_identifies_transaction_commands() {
         ("UPDATE test SET id = 1", false),
         ("DELETE FROM test", false),
     ];
-    
+
     for (cmd, expected_is_transaction) in commands {
         let statements = parse_sql(cmd).expect("Failed to parse");
         let statement = &statements[0];
-        
+
         let is_transaction = matches!(
             statement,
             sqlparser::ast::Statement::StartTransaction { .. }
-            | sqlparser::ast::Statement::Commit { .. }
-            | sqlparser::ast::Statement::Rollback { .. }
+                | sqlparser::ast::Statement::Commit { .. }
+                | sqlparser::ast::Statement::Rollback { .. }
         );
-        
-        assert_eq!(is_transaction, expected_is_transaction,
-                   "Command '{}' transaction detection mismatch", cmd);
+
+        assert_eq!(
+            is_transaction, expected_is_transaction,
+            "Command '{cmd}' transaction detection mismatch"
+        );
     }
 }
