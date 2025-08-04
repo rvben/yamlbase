@@ -10544,8 +10544,25 @@ impl QueryExecutor {
                 self.execute_select_with_cte_context(db, select, query, &cte_results)
                     .await
             }
+            SetExpr::SetOperation {
+                op,
+                set_quantifier,
+                left,
+                right,
+            } => {
+                // Handle UNION, UNION ALL, INTERSECT, EXCEPT operations in main query
+                self.execute_cte_set_operation(
+                    db,
+                    op,
+                    set_quantifier,
+                    left,
+                    right,
+                    &cte_results,
+                )
+                .await
+            }
             _ => Err(YamlBaseError::NotImplemented(
-                "Only SELECT queries are supported with CTEs".to_string(),
+                "This type of query is not yet supported with CTEs".to_string(),
             )),
         }
     }
@@ -10560,9 +10577,10 @@ impl QueryExecutor {
     ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT with CTE context");
 
-        // Check if any tables in FROM clause are CTE references
+        // Check if any tables in FROM clause or JOINs are CTE references
         let mut has_cte_references = false;
         for table_with_joins in &select.from {
+            // Check the main table
             if let TableFactor::Table { name, .. } = &table_with_joins.relation {
                 let table_name = name
                     .0
@@ -10575,9 +10593,29 @@ impl QueryExecutor {
                     break;
                 }
             }
+            
+            // Check joined tables
+            for join in &table_with_joins.joins {
+                if let TableFactor::Table { name, .. } = &join.relation {
+                    let table_name = name
+                        .0
+                        .first()
+                        .map(|ident| ident.value.clone())
+                        .unwrap_or_else(String::new);
+
+                    if cte_results.contains_key(&table_name) {
+                        has_cte_references = true;
+                        break;
+                    }
+                }
+            }
+            
+            if has_cte_references {
+                break;
+            }
         }
 
-        // If no CTE references, execute normally
+        // If no CTE references anywhere, execute normally
         if !has_cte_references {
             return self.execute_select(db, select, query).await;
         }
