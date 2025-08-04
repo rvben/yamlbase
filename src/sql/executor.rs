@@ -1228,81 +1228,85 @@ impl QueryExecutor {
         table: &'a Table,
     ) -> futures::future::BoxFuture<'a, crate::Result<bool>> {
         Box::pin(async move {
-        debug!("Evaluating expression (async): {:?}", expr);
-        match expr {
-            Expr::BinaryOp { left, op, right } => {
-                self.evaluate_binary_op_async(left, op, right, row, table).await
+            debug!("Evaluating expression (async): {:?}", expr);
+            match expr {
+                Expr::BinaryOp { left, op, right } => {
+                    self.evaluate_binary_op_async(left, op, right, row, table)
+                        .await
+                }
+                Expr::Value(sqlparser::ast::Value::Boolean(b)) => Ok(*b),
+                Expr::InList {
+                    expr,
+                    list,
+                    negated,
+                } => {
+                    debug!(
+                        "Found InList expression: expr={:?}, negated={}",
+                        expr, negated
+                    );
+                    self.evaluate_in_list(expr, list, *negated, row, table)
+                }
+                Expr::Like {
+                    expr,
+                    pattern,
+                    negated,
+                    ..
+                } => {
+                    debug!(
+                        "Found Like expression: expr={:?}, pattern={:?}, negated={}",
+                        expr, pattern, negated
+                    );
+                    self.evaluate_like(expr, pattern, *negated, row, table)
+                }
+                Expr::IsNull(expr) => {
+                    debug!("Found IsNull expression: expr={:?}", expr);
+                    let value = self.get_expr_value_async(expr, row, table).await?;
+                    Ok(matches!(value, Value::Null))
+                }
+                Expr::IsNotNull(expr) => {
+                    debug!("Found IsNotNull expression: expr={:?}", expr);
+                    let value = self.get_expr_value_async(expr, row, table).await?;
+                    Ok(!matches!(value, Value::Null))
+                }
+                Expr::Between {
+                    expr,
+                    negated,
+                    low,
+                    high,
+                } => {
+                    debug!(
+                        "Found Between expression: expr={:?}, negated={}",
+                        expr, negated
+                    );
+                    self.evaluate_between_async(expr, *negated, low, high, row, table)
+                        .await
+                }
+                Expr::Nested(inner) => {
+                    debug!("Found nested expression: {:?}", inner);
+                    self.evaluate_expr_async(inner, row, table).await
+                }
+                Expr::Exists { subquery, negated } => {
+                    debug!("Found EXISTS expression: negated={}", negated);
+                    self.evaluate_exists_subquery_async(subquery, *negated)
+                        .await
+                }
+                Expr::InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                } => {
+                    debug!(
+                        "Found IN subquery expression: expr={:?}, negated={}",
+                        expr, negated
+                    );
+                    self.evaluate_in_subquery_async(expr, subquery, *negated, row, table)
+                        .await
+                }
+                _ => Err(YamlBaseError::NotImplemented(format!(
+                    "Expression type not supported: {:?}",
+                    expr
+                ))),
             }
-            Expr::Value(sqlparser::ast::Value::Boolean(b)) => Ok(*b),
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => {
-                debug!(
-                    "Found InList expression: expr={:?}, negated={}",
-                    expr, negated
-                );
-                self.evaluate_in_list(expr, list, *negated, row, table)
-            }
-            Expr::Like {
-                expr,
-                pattern,
-                negated,
-                ..
-            } => {
-                debug!(
-                    "Found Like expression: expr={:?}, pattern={:?}, negated={}",
-                    expr, pattern, negated
-                );
-                self.evaluate_like(expr, pattern, *negated, row, table)
-            }
-            Expr::IsNull(expr) => {
-                debug!("Found IsNull expression: expr={:?}", expr);
-                let value = self.get_expr_value_async(expr, row, table).await?;
-                Ok(matches!(value, Value::Null))
-            }
-            Expr::IsNotNull(expr) => {
-                debug!("Found IsNotNull expression: expr={:?}", expr);
-                let value = self.get_expr_value_async(expr, row, table).await?;
-                Ok(!matches!(value, Value::Null))
-            }
-            Expr::Between {
-                expr,
-                negated,
-                low,
-                high,
-            } => {
-                debug!(
-                    "Found Between expression: expr={:?}, negated={}",
-                    expr, negated
-                );
-                self.evaluate_between_async(expr, *negated, low, high, row, table).await
-            }
-            Expr::Nested(inner) => {
-                debug!("Found nested expression: {:?}", inner);
-                self.evaluate_expr_async(inner, row, table).await
-            }
-            Expr::Exists { subquery, negated } => {
-                debug!("Found EXISTS expression: negated={}", negated);
-                self.evaluate_exists_subquery_async(subquery, *negated).await
-            }
-            Expr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => {
-                debug!(
-                    "Found IN subquery expression: expr={:?}, negated={}",
-                    expr, negated
-                );
-                self.evaluate_in_subquery_async(expr, subquery, *negated, row, table).await
-            }
-            _ => Err(YamlBaseError::NotImplemented(format!(
-                "Expression type not supported: {:?}",
-                expr
-            ))),
-        }
         })
     }
 
@@ -1342,10 +1346,9 @@ impl QueryExecutor {
         }
 
         // Check if value is between low and high
-        let is_between = if let (Some(low_ord), Some(high_ord)) = (
-            value.compare(&low_value),
-            value.compare(&high_value),
-        ) {
+        let is_between = if let (Some(low_ord), Some(high_ord)) =
+            (value.compare(&low_value), value.compare(&high_value))
+        {
             low_ord.is_ge() && high_ord.is_le()
         } else {
             false
@@ -1432,19 +1435,23 @@ impl QueryExecutor {
         Ok(if negated { !is_between } else { is_between })
     }
 
-    async fn evaluate_exists_subquery_async(&self, subquery: &Query, negated: bool) -> crate::Result<bool> {
+    async fn evaluate_exists_subquery_async(
+        &self,
+        subquery: &Query,
+        negated: bool,
+    ) -> crate::Result<bool> {
         debug!("Evaluating EXISTS subquery (async): negated={}", negated);
-        
+
         // Execute subquery directly in the async context
         let result = self.execute_query(subquery).await?;
-        
+
         let exists = !result.rows.is_empty();
         debug!(
             "EXISTS subquery returned {} rows, exists={}",
             result.rows.len(),
             exists
         );
-        
+
         Ok(if negated { !exists } else { exists })
     }
 
@@ -1500,12 +1507,12 @@ impl QueryExecutor {
             "Evaluating IN subquery (async): expr={:?}, negated={}",
             expr, negated
         );
-        
+
         let target_value = self.get_expr_value_async(expr, row, table).await?;
-        
+
         // Execute subquery directly in the async context
         let result = self.execute_query(subquery).await?;
-        
+
         // Check if target_value exists in the first column of subquery results
         let found = result.rows.iter().any(|subquery_row| {
             if !subquery_row.is_empty() {
@@ -1514,12 +1521,12 @@ impl QueryExecutor {
                 false
             }
         });
-        
+
         debug!(
             "IN subquery: target_value={:?}, found={}, negated={}",
             target_value, found, negated
         );
-        
+
         Ok(if negated { !found } else { found })
     }
 
@@ -1821,388 +1828,414 @@ impl QueryExecutor {
         }
     }
 
-    fn get_expr_value_async<'a>(&'a self, expr: &'a Expr, row: &'a [Value], table: &'a Table) -> futures::future::BoxFuture<'a, crate::Result<Value>> {
+    fn get_expr_value_async<'a>(
+        &'a self,
+        expr: &'a Expr,
+        row: &'a [Value],
+        table: &'a Table,
+    ) -> futures::future::BoxFuture<'a, crate::Result<Value>> {
         Box::pin(async move {
-        match expr {
-            Expr::Identifier(ident) => {
-                let col_idx = table.get_column_index(&ident.value).ok_or_else(|| {
-                    YamlBaseError::Database {
-                        message: format!("Column '{}' not found", ident.value),
-                    }
-                })?;
-                Ok(row[col_idx].clone())
-            }
-            Expr::CompoundIdentifier(parts) => {
-                if parts.len() == 2 {
-                    let table_name = &parts[0].value;
-                    let column_name = &parts[1].value;
-
-                    // For now, just match the column name ignoring the table name
-                    // This is a simplified approach that works for basic cases
-                    let col_idx = table.get_column_index(column_name).ok_or_else(|| {
+            match expr {
+                Expr::Identifier(ident) => {
+                    let col_idx = table.get_column_index(&ident.value).ok_or_else(|| {
                         YamlBaseError::Database {
-                            message: format!(
-                                "Column '{}.{}' not found in table",
-                                table_name, column_name
-                            ),
+                            message: format!("Column '{}' not found", ident.value),
                         }
                     })?;
                     Ok(row[col_idx].clone())
-                } else {
-                    Err(YamlBaseError::NotImplemented(
-                        "Complex compound identifiers not supported in get_expr_value".to_string(),
-                    ))
                 }
-            }
-            Expr::Value(val) => self.sql_value_to_db_value(val),
-            Expr::TypedString { data_type, value } => {
-                // Handle DATE '2025-01-01' and similar typed strings
-                match data_type {
-                    DataType::Date => {
-                        // Parse the date string into NaiveDate
-                        match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-                            Ok(date) => Ok(Value::Date(date)),
-                            Err(_) => Err(YamlBaseError::TypeConversion(format!(
-                                "Invalid date format: {}",
-                                value
-                            ))),
-                        }
+                Expr::CompoundIdentifier(parts) => {
+                    if parts.len() == 2 {
+                        let table_name = &parts[0].value;
+                        let column_name = &parts[1].value;
+
+                        // For now, just match the column name ignoring the table name
+                        // This is a simplified approach that works for basic cases
+                        let col_idx = table.get_column_index(column_name).ok_or_else(|| {
+                            YamlBaseError::Database {
+                                message: format!(
+                                    "Column '{}.{}' not found in table",
+                                    table_name, column_name
+                                ),
+                            }
+                        })?;
+                        Ok(row[col_idx].clone())
+                    } else {
+                        Err(YamlBaseError::NotImplemented(
+                            "Complex compound identifiers not supported in get_expr_value"
+                                .to_string(),
+                        ))
                     }
-                    _ => Ok(Value::Text(value.clone())),
                 }
-            }
-            Expr::Function(func) => {
-                // Evaluate functions with row context
-                self.evaluate_function_with_row(func, row, table)
-            }
-            Expr::Extract { field, expr, .. } => {
-                // Handle EXTRACT expression
-                let val = self.get_expr_value_async(expr, row, table).await?;
-                self.evaluate_extract_from_value(field, &val)
-            }
-            Expr::Trim { expr, .. } => {
-                // Handle TRIM expression
-                let inner_val = self.get_expr_value_async(expr, row, table).await?;
-                match &inner_val {
-                    Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
-                    Value::Null => Ok(Value::Null),
-                    _ => Err(YamlBaseError::Database {
-                        message: "TRIM requires string argument".to_string(),
-                    }),
+                Expr::Value(val) => self.sql_value_to_db_value(val),
+                Expr::TypedString { data_type, value } => {
+                    // Handle DATE '2025-01-01' and similar typed strings
+                    match data_type {
+                        DataType::Date => {
+                            // Parse the date string into NaiveDate
+                            match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                                Ok(date) => Ok(Value::Date(date)),
+                                Err(_) => Err(YamlBaseError::TypeConversion(format!(
+                                    "Invalid date format: {}",
+                                    value
+                                ))),
+                            }
+                        }
+                        _ => Ok(Value::Text(value.clone())),
+                    }
                 }
-            }
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => {
-                // CASE WHEN expression - needs async version
-                self.evaluate_case_when_async(
-                    operand.as_deref(),
+                Expr::Function(func) => {
+                    // Evaluate functions with row context
+                    self.evaluate_function_with_row(func, row, table)
+                }
+                Expr::Extract { field, expr, .. } => {
+                    // Handle EXTRACT expression
+                    let val = self.get_expr_value_async(expr, row, table).await?;
+                    self.evaluate_extract_from_value(field, &val)
+                }
+                Expr::Trim { expr, .. } => {
+                    // Handle TRIM expression
+                    let inner_val = self.get_expr_value_async(expr, row, table).await?;
+                    match &inner_val {
+                        Value::Text(s) => Ok(Value::Text(s.trim().to_string())),
+                        Value::Null => Ok(Value::Null),
+                        _ => Err(YamlBaseError::Database {
+                            message: "TRIM requires string argument".to_string(),
+                        }),
+                    }
+                }
+                Expr::Case {
+                    operand,
                     conditions,
                     results,
-                    else_result.as_deref(),
-                    row,
-                    table,
-                ).await
-            }
-            Expr::Substring {
-                expr,
-                substring_from,
-                substring_for,
-                ..
-            } => {
-                // PostgreSQL-style SUBSTRING expression with row context
-                let str_val = self.get_expr_value_async(expr, row, table).await?;
+                    else_result,
+                } => {
+                    // CASE WHEN expression - needs async version
+                    self.evaluate_case_when_async(
+                        operand.as_deref(),
+                        conditions,
+                        results,
+                        else_result.as_deref(),
+                        row,
+                        table,
+                    )
+                    .await
+                }
+                Expr::Substring {
+                    expr,
+                    substring_from,
+                    substring_for,
+                    ..
+                } => {
+                    // PostgreSQL-style SUBSTRING expression with row context
+                    let str_val = self.get_expr_value_async(expr, row, table).await?;
 
-                let start = if let Some(from_expr) = substring_from {
-                    let start_val = self.get_expr_value_async(from_expr, row, table).await?;
-                    match start_val {
-                        Value::Integer(i) => (i - 1).max(0) as usize,
-                        Value::Null => return Ok(Value::Null),
-                        _ => {
-                            return Err(YamlBaseError::Database {
-                                message: "SUBSTRING start position must be an integer".to_string(),
-                            })
-                        }
-                    }
-                } else {
-                    0
-                };
-
-                match &str_val {
-                    Value::Text(s) => {
-                        let start_idx = start;
-                        if let Some(for_expr) = substring_for {
-                            let len_val = self.get_expr_value_async(for_expr, row, table).await?;
-                            match len_val {
-                                Value::Integer(len) => {
-                                    let length = len.max(0) as usize;
-                                    let chars: Vec<char> = s.chars().collect();
-                                    let result: String = chars
-                                        .iter()
-                                        .skip(start_idx)
-                                        .take(length)
-                                        .collect();
-                                    Ok(Value::Text(result))
-                                }
-                                Value::Null => Ok(Value::Null),
-                                _ => Err(YamlBaseError::Database {
-                                    message: "SUBSTRING length must be an integer".to_string(),
-                                }),
+                    let start = if let Some(from_expr) = substring_from {
+                        let start_val = self.get_expr_value_async(from_expr, row, table).await?;
+                        match start_val {
+                            Value::Integer(i) => (i - 1).max(0) as usize,
+                            Value::Null => return Ok(Value::Null),
+                            _ => {
+                                return Err(YamlBaseError::Database {
+                                    message: "SUBSTRING start position must be an integer"
+                                        .to_string(),
+                                });
                             }
-                        } else {
-                            // No length specified, take rest of string
-                            let chars: Vec<char> = s.chars().collect();
-                            let result: String = chars.iter().skip(start_idx).collect();
-                            Ok(Value::Text(result))
                         }
-                    }
-                    Value::Null => Ok(Value::Null),
-                    _ => Err(YamlBaseError::Database {
-                        message: "SUBSTRING requires a string argument".to_string(),
-                    }),
-                }
-            }
-            Expr::Cast {
-                expr, data_type, ..
-            } => {
-                // Handle CAST expression
-                let value = self.get_expr_value_async(expr, row, table).await?;
-                self.cast_value(value, data_type)
-            }
-            Expr::Subquery(subquery) => {
-                debug!("Evaluating scalar subquery in expression (async)");
-                
-                // Execute subquery directly in the async context
-                let result = self.execute_query(subquery).await?;
-                
-                // Scalar subquery should return exactly one row and one column
-                if result.rows.is_empty() {
-                    Ok(Value::Null)
-                } else if result.rows.len() == 1 && !result.rows[0].is_empty() {
-                    Ok(result.rows[0][0].clone())
-                } else {
-                    Err(YamlBaseError::Database {
-                        message: format!(
-                            "Scalar subquery returned {} rows, expected 1",
-                            result.rows.len()
-                        ),
-                    })
-                }
-            }
-            Expr::UnaryOp { op, expr } => {
-                // Handle unary operations with row context
-                let val = self.get_expr_value_async(expr, row, table).await?;
-                match op {
-                    UnaryOperator::Minus => match val {
-                        Value::Integer(i) => Ok(Value::Integer(-i)),
-                        Value::Double(d) => Ok(Value::Double(-d)),
+                    } else {
+                        0
+                    };
+
+                    match &str_val {
+                        Value::Text(s) => {
+                            let start_idx = start;
+                            if let Some(for_expr) = substring_for {
+                                let len_val =
+                                    self.get_expr_value_async(for_expr, row, table).await?;
+                                match len_val {
+                                    Value::Integer(len) => {
+                                        let length = len.max(0) as usize;
+                                        let chars: Vec<char> = s.chars().collect();
+                                        let result: String =
+                                            chars.iter().skip(start_idx).take(length).collect();
+                                        Ok(Value::Text(result))
+                                    }
+                                    Value::Null => Ok(Value::Null),
+                                    _ => Err(YamlBaseError::Database {
+                                        message: "SUBSTRING length must be an integer".to_string(),
+                                    }),
+                                }
+                            } else {
+                                // No length specified, take rest of string
+                                let chars: Vec<char> = s.chars().collect();
+                                let result: String = chars.iter().skip(start_idx).collect();
+                                Ok(Value::Text(result))
+                            }
+                        }
                         Value::Null => Ok(Value::Null),
                         _ => Err(YamlBaseError::Database {
-                            message: "Unary minus requires numeric value".to_string(),
+                            message: "SUBSTRING requires a string argument".to_string(),
                         }),
-                    },
-                    UnaryOperator::Plus => match val {
-                        Value::Integer(_) | Value::Double(_) | Value::Null => Ok(val),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Unary plus requires numeric value".to_string(),
-                        }),
-                    },
-                    UnaryOperator::Not => match val {
-                        Value::Boolean(b) => Ok(Value::Boolean(!b)),
-                        Value::Null => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Unary NOT requires boolean value".to_string(),
-                        }),
-                    },
-                    _ => Err(YamlBaseError::NotImplemented(format!(
-                        "Unary operator {:?} not supported in get_expr_value",
-                        op
-                    ))),
+                    }
                 }
-            }
-            Expr::BinaryOp { left, op, right } => {
-                // Handle binary operations with row context
-                let left_val = self.get_expr_value_async(left, row, table).await?;
-                let right_val = self.get_expr_value_async(right, row, table).await?;
+                Expr::Cast {
+                    expr, data_type, ..
+                } => {
+                    // Handle CAST expression
+                    let value = self.get_expr_value_async(expr, row, table).await?;
+                    self.cast_value(value, data_type)
+                }
+                Expr::Subquery(subquery) => {
+                    debug!("Evaluating scalar subquery in expression (async)");
 
-                match op {
-                    BinaryOperator::Plus => match (&left_val, &right_val) {
-                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l + r)),
-                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l + r)),
-                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 + r)),
-                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l + *r as f64)),
-                        // Date arithmetic: DATE + INTEGER (days)
-                        (Value::Date(date), Value::Integer(days)) => {
-                            match date.checked_add_days(chrono::Days::new(*days as u64)) {
-                                Some(new_date) => Ok(Value::Date(new_date)),
-                                None => Err(YamlBaseError::Database {
-                                    message: "Date arithmetic overflow".to_string(),
-                                }),
-                            }
-                        }
-                        (Value::Integer(days), Value::Date(date)) => {
-                            match date.checked_add_days(chrono::Days::new(*days as u64)) {
-                                Some(new_date) => Ok(Value::Date(new_date)),
-                                None => Err(YamlBaseError::Database {
-                                    message: "Date arithmetic overflow".to_string(),
-                                }),
-                            }
-                        }
-                        (Value::Date(date), Value::Double(days)) => {
-                            let days_int = days.round() as i64;
-                            if days_int >= 0 {
-                                match date.checked_add_days(chrono::Days::new(days_int as u64)) {
-                                    Some(new_date) => Ok(Value::Date(new_date)),
-                                    None => Err(YamlBaseError::Database {
-                                        message: "Date arithmetic overflow".to_string(),
-                                    }),
-                                }
-                            } else {
-                                match date.checked_sub_days(chrono::Days::new((-days_int) as u64)) {
-                                    Some(new_date) => Ok(Value::Date(new_date)),
-                                    None => Err(YamlBaseError::Database {
-                                        message: "Date arithmetic overflow".to_string(),
-                                    }),
-                                }
-                            }
-                        }
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Cannot add non-numeric values".to_string(),
-                        }),
-                    },
-                    BinaryOperator::Minus => match (&left_val, &right_val) {
-                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l - r)),
-                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l - r)),
-                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 - r)),
-                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l - *r as f64)),
-                        // Date arithmetic: DATE - INTEGER (days)
-                        (Value::Date(date), Value::Integer(days)) => {
-                            if *days >= 0 {
-                                match date.checked_sub_days(chrono::Days::new(*days as u64)) {
-                                    Some(new_date) => Ok(Value::Date(new_date)),
-                                    None => Err(YamlBaseError::Database {
-                                        message: "Date arithmetic overflow".to_string(),
-                                    }),
-                                }
-                            } else {
-                                match date.checked_add_days(chrono::Days::new((-days) as u64)) {
-                                    Some(new_date) => Ok(Value::Date(new_date)),
-                                    None => Err(YamlBaseError::Database {
-                                        message: "Date arithmetic overflow".to_string(),
-                                    }),
-                                }
-                            }
-                        }
-                        (Value::Date(date), Value::Double(days)) => {
-                            let days_int = days.round() as i64;
-                            if days_int >= 0 {
-                                match date.checked_sub_days(chrono::Days::new(days_int as u64)) {
-                                    Some(new_date) => Ok(Value::Date(new_date)),
-                                    None => Err(YamlBaseError::Database {
-                                        message: "Date arithmetic overflow".to_string(),
-                                    }),
-                                }
-                            } else {
-                                match date.checked_add_days(chrono::Days::new((-days_int) as u64)) {
-                                    Some(new_date) => Ok(Value::Date(new_date)),
-                                    None => Err(YamlBaseError::Database {
-                                        message: "Date arithmetic overflow".to_string(),
-                                    }),
-                                }
-                            }
-                        }
-                        // Date - Date = Integer (days difference)
-                        (Value::Date(date1), Value::Date(date2)) => {
-                            let days_diff = (*date1 - *date2).num_days();
-                            Ok(Value::Integer(days_diff))
-                        }
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Cannot subtract non-numeric values".to_string(),
-                        }),
-                    },
-                    BinaryOperator::Multiply => match (&left_val, &right_val) {
-                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l * r)),
-                        (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l * r)),
-                        (Value::Integer(l), Value::Double(r)) => Ok(Value::Double(*l as f64 * r)),
-                        (Value::Double(l), Value::Integer(r)) => Ok(Value::Double(l * *r as f64)),
-                        (Value::Float(l), Value::Float(r)) => Ok(Value::Float(l * r)),
-                        (Value::Integer(l), Value::Float(r)) => Ok(Value::Float(*l as f32 * r)),
-                        (Value::Float(l), Value::Integer(r)) => Ok(Value::Float(l * *r as f32)),
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Cannot multiply non-numeric values".to_string(),
-                        }),
-                    },
-                    BinaryOperator::Divide => match (&left_val, &right_val) {
-                        (Value::Integer(l), Value::Integer(r)) => {
-                            if *r == 0 {
-                                Ok(Value::Null) // SQL standard: division by zero returns NULL
-                            } else {
-                                Ok(Value::Double(*l as f64 / *r as f64))
-                            }
-                        }
-                        (Value::Double(l), Value::Double(r)) => {
-                            if *r == 0.0 {
-                                Ok(Value::Null)
-                            } else {
-                                Ok(Value::Double(l / r))
-                            }
-                        }
-                        (Value::Integer(l), Value::Double(r)) => {
-                            if *r == 0.0 {
-                                Ok(Value::Null)
-                            } else {
-                                Ok(Value::Double(*l as f64 / r))
-                            }
-                        }
-                        (Value::Double(l), Value::Integer(r)) => {
-                            if *r == 0 {
-                                Ok(Value::Null)
-                            } else {
-                                Ok(Value::Double(l / *r as f64))
-                            }
-                        }
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Cannot divide non-numeric values".to_string(),
-                        }),
-                    },
-                    BinaryOperator::Modulo => match (&left_val, &right_val) {
-                        (Value::Integer(l), Value::Integer(r)) => {
-                            if *r == 0 {
-                                Ok(Value::Null)
-                            } else {
-                                Ok(Value::Integer(l % r))
-                            }
-                        }
-                        (Value::Double(l), Value::Double(r)) => {
-                            if *r == 0.0 {
-                                Ok(Value::Null)
-                            } else {
-                                Ok(Value::Double(l % r))
-                            }
-                        }
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Modulo requires numeric values".to_string(),
-                        }),
-                    },
-                    // Comparison operators should not be here - they return boolean in evaluate_expr
-                    _ => Err(YamlBaseError::Database {
-                        message: "Binary comparison operations cannot be used as values directly".to_string(),
-                    }),
+                    // Execute subquery directly in the async context
+                    let result = self.execute_query(subquery).await?;
+
+                    // Scalar subquery should return exactly one row and one column
+                    if result.rows.is_empty() {
+                        Ok(Value::Null)
+                    } else if result.rows.len() == 1 && !result.rows[0].is_empty() {
+                        Ok(result.rows[0][0].clone())
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!(
+                                "Scalar subquery returned {} rows, expected 1",
+                                result.rows.len()
+                            ),
+                        })
+                    }
                 }
+                Expr::UnaryOp { op, expr } => {
+                    // Handle unary operations with row context
+                    let val = self.get_expr_value_async(expr, row, table).await?;
+                    match op {
+                        UnaryOperator::Minus => match val {
+                            Value::Integer(i) => Ok(Value::Integer(-i)),
+                            Value::Double(d) => Ok(Value::Double(-d)),
+                            Value::Null => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Unary minus requires numeric value".to_string(),
+                            }),
+                        },
+                        UnaryOperator::Plus => match val {
+                            Value::Integer(_) | Value::Double(_) | Value::Null => Ok(val),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Unary plus requires numeric value".to_string(),
+                            }),
+                        },
+                        UnaryOperator::Not => match val {
+                            Value::Boolean(b) => Ok(Value::Boolean(!b)),
+                            Value::Null => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Unary NOT requires boolean value".to_string(),
+                            }),
+                        },
+                        _ => Err(YamlBaseError::NotImplemented(format!(
+                            "Unary operator {:?} not supported in get_expr_value",
+                            op
+                        ))),
+                    }
+                }
+                Expr::BinaryOp { left, op, right } => {
+                    // Handle binary operations with row context
+                    let left_val = self.get_expr_value_async(left, row, table).await?;
+                    let right_val = self.get_expr_value_async(right, row, table).await?;
+
+                    match op {
+                        BinaryOperator::Plus => match (&left_val, &right_val) {
+                            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l + r)),
+                            (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l + r)),
+                            (Value::Integer(l), Value::Double(r)) => {
+                                Ok(Value::Double(*l as f64 + r))
+                            }
+                            (Value::Double(l), Value::Integer(r)) => {
+                                Ok(Value::Double(l + *r as f64))
+                            }
+                            // Date arithmetic: DATE + INTEGER (days)
+                            (Value::Date(date), Value::Integer(days)) => {
+                                match date.checked_add_days(chrono::Days::new(*days as u64)) {
+                                    Some(new_date) => Ok(Value::Date(new_date)),
+                                    None => Err(YamlBaseError::Database {
+                                        message: "Date arithmetic overflow".to_string(),
+                                    }),
+                                }
+                            }
+                            (Value::Integer(days), Value::Date(date)) => {
+                                match date.checked_add_days(chrono::Days::new(*days as u64)) {
+                                    Some(new_date) => Ok(Value::Date(new_date)),
+                                    None => Err(YamlBaseError::Database {
+                                        message: "Date arithmetic overflow".to_string(),
+                                    }),
+                                }
+                            }
+                            (Value::Date(date), Value::Double(days)) => {
+                                let days_int = days.round() as i64;
+                                if days_int >= 0 {
+                                    match date.checked_add_days(chrono::Days::new(days_int as u64))
+                                    {
+                                        Some(new_date) => Ok(Value::Date(new_date)),
+                                        None => Err(YamlBaseError::Database {
+                                            message: "Date arithmetic overflow".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    match date
+                                        .checked_sub_days(chrono::Days::new((-days_int) as u64))
+                                    {
+                                        Some(new_date) => Ok(Value::Date(new_date)),
+                                        None => Err(YamlBaseError::Database {
+                                            message: "Date arithmetic overflow".to_string(),
+                                        }),
+                                    }
+                                }
+                            }
+                            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Cannot add non-numeric values".to_string(),
+                            }),
+                        },
+                        BinaryOperator::Minus => match (&left_val, &right_val) {
+                            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l - r)),
+                            (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l - r)),
+                            (Value::Integer(l), Value::Double(r)) => {
+                                Ok(Value::Double(*l as f64 - r))
+                            }
+                            (Value::Double(l), Value::Integer(r)) => {
+                                Ok(Value::Double(l - *r as f64))
+                            }
+                            // Date arithmetic: DATE - INTEGER (days)
+                            (Value::Date(date), Value::Integer(days)) => {
+                                if *days >= 0 {
+                                    match date.checked_sub_days(chrono::Days::new(*days as u64)) {
+                                        Some(new_date) => Ok(Value::Date(new_date)),
+                                        None => Err(YamlBaseError::Database {
+                                            message: "Date arithmetic overflow".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    match date.checked_add_days(chrono::Days::new((-days) as u64)) {
+                                        Some(new_date) => Ok(Value::Date(new_date)),
+                                        None => Err(YamlBaseError::Database {
+                                            message: "Date arithmetic overflow".to_string(),
+                                        }),
+                                    }
+                                }
+                            }
+                            (Value::Date(date), Value::Double(days)) => {
+                                let days_int = days.round() as i64;
+                                if days_int >= 0 {
+                                    match date.checked_sub_days(chrono::Days::new(days_int as u64))
+                                    {
+                                        Some(new_date) => Ok(Value::Date(new_date)),
+                                        None => Err(YamlBaseError::Database {
+                                            message: "Date arithmetic overflow".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    match date
+                                        .checked_add_days(chrono::Days::new((-days_int) as u64))
+                                    {
+                                        Some(new_date) => Ok(Value::Date(new_date)),
+                                        None => Err(YamlBaseError::Database {
+                                            message: "Date arithmetic overflow".to_string(),
+                                        }),
+                                    }
+                                }
+                            }
+                            // Date - Date = Integer (days difference)
+                            (Value::Date(date1), Value::Date(date2)) => {
+                                let days_diff = (*date1 - *date2).num_days();
+                                Ok(Value::Integer(days_diff))
+                            }
+                            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Cannot subtract non-numeric values".to_string(),
+                            }),
+                        },
+                        BinaryOperator::Multiply => match (&left_val, &right_val) {
+                            (Value::Integer(l), Value::Integer(r)) => Ok(Value::Integer(l * r)),
+                            (Value::Double(l), Value::Double(r)) => Ok(Value::Double(l * r)),
+                            (Value::Integer(l), Value::Double(r)) => {
+                                Ok(Value::Double(*l as f64 * r))
+                            }
+                            (Value::Double(l), Value::Integer(r)) => {
+                                Ok(Value::Double(l * *r as f64))
+                            }
+                            (Value::Float(l), Value::Float(r)) => Ok(Value::Float(l * r)),
+                            (Value::Integer(l), Value::Float(r)) => Ok(Value::Float(*l as f32 * r)),
+                            (Value::Float(l), Value::Integer(r)) => Ok(Value::Float(l * *r as f32)),
+                            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Cannot multiply non-numeric values".to_string(),
+                            }),
+                        },
+                        BinaryOperator::Divide => match (&left_val, &right_val) {
+                            (Value::Integer(l), Value::Integer(r)) => {
+                                if *r == 0 {
+                                    Ok(Value::Null) // SQL standard: division by zero returns NULL
+                                } else {
+                                    Ok(Value::Double(*l as f64 / *r as f64))
+                                }
+                            }
+                            (Value::Double(l), Value::Double(r)) => {
+                                if *r == 0.0 {
+                                    Ok(Value::Null)
+                                } else {
+                                    Ok(Value::Double(l / r))
+                                }
+                            }
+                            (Value::Integer(l), Value::Double(r)) => {
+                                if *r == 0.0 {
+                                    Ok(Value::Null)
+                                } else {
+                                    Ok(Value::Double(*l as f64 / r))
+                                }
+                            }
+                            (Value::Double(l), Value::Integer(r)) => {
+                                if *r == 0 {
+                                    Ok(Value::Null)
+                                } else {
+                                    Ok(Value::Double(l / *r as f64))
+                                }
+                            }
+                            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Cannot divide non-numeric values".to_string(),
+                            }),
+                        },
+                        BinaryOperator::Modulo => match (&left_val, &right_val) {
+                            (Value::Integer(l), Value::Integer(r)) => {
+                                if *r == 0 {
+                                    Ok(Value::Null)
+                                } else {
+                                    Ok(Value::Integer(l % r))
+                                }
+                            }
+                            (Value::Double(l), Value::Double(r)) => {
+                                if *r == 0.0 {
+                                    Ok(Value::Null)
+                                } else {
+                                    Ok(Value::Double(l % r))
+                                }
+                            }
+                            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                            _ => Err(YamlBaseError::Database {
+                                message: "Modulo requires numeric values".to_string(),
+                            }),
+                        },
+                        // Comparison operators should not be here - they return boolean in evaluate_expr
+                        _ => Err(YamlBaseError::Database {
+                            message:
+                                "Binary comparison operations cannot be used as values directly"
+                                    .to_string(),
+                        }),
+                    }
+                }
+                _ => Err(YamlBaseError::NotImplemented(format!(
+                    "Expression type not supported in get_expr_value_async: {:?}",
+                    expr
+                ))),
             }
-            _ => Err(YamlBaseError::NotImplemented(format!(
-                "Expression type not supported in get_expr_value_async: {:?}",
-                expr
-            ))),
-        }
         })
     }
 
@@ -13687,7 +13720,10 @@ mod tests {
 
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 2, 28).unwrap()));
+        assert_eq!(
+            result.rows[0][0],
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 2, 28).unwrap())
+        );
 
         // Test 4: Complex date expression
         let _stmt = parse_statement(
