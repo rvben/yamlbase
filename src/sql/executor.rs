@@ -11137,6 +11137,26 @@ impl QueryExecutor {
                     _ => false,
                 })
             }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                let low_val = self.evaluate_expr_with_columns(low, row, columns)?;
+                let high_val = self.evaluate_expr_with_columns(high, row, columns)?;
+                
+                let result = if let (Some(low_ord), Some(high_ord)) = 
+                    (val.compare(&low_val), val.compare(&high_val)) 
+                {
+                    low_ord.is_ge() && high_ord.is_le()
+                } else {
+                    false
+                };
+                
+                Ok(if *negated { !result } else { result })
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "WHERE expression {:?} not supported in CTE context",
                 expr
@@ -11213,6 +11233,121 @@ impl QueryExecutor {
                 }
             }
             Expr::Value(value) => self.sql_value_to_db_value(value),
+            Expr::BinaryOp { left, right, op } => {
+                let left_val = self.evaluate_expr_with_columns(left, row, columns)?;
+                let right_val = self.evaluate_expr_with_columns(right, row, columns)?;
+                
+                match op {
+                    BinaryOperator::Plus => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
+                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 + b)),
+                        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f32)),
+                        (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a + b)),
+                        (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 + b)),
+                        (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a + *b as f64)),
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "Unsupported types for addition".to_string(),
+                        )),
+                    },
+                    BinaryOperator::Minus => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
+                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+                        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 - b)),
+                        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f32)),
+                        (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a - b)),
+                        (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 - b)),
+                        (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a - *b as f64)),
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "Unsupported types for subtraction".to_string(),
+                        )),
+                    },
+                    BinaryOperator::Multiply => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
+                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+                        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f32 * b)),
+                        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a * *b as f32)),
+                        (Value::Double(a), Value::Double(b)) => Ok(Value::Double(a * b)),
+                        (Value::Integer(a), Value::Double(b)) => Ok(Value::Double(*a as f64 * b)),
+                        (Value::Double(a), Value::Integer(b)) => Ok(Value::Double(a * *b as f64)),
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "Unsupported types for multiplication".to_string(),
+                        )),
+                    },
+                    BinaryOperator::Divide => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            if *b == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(*a as f64 / *b as f64))
+                            }
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            if *b == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Float(a / b))
+                            }
+                        }
+                        (Value::Integer(a), Value::Float(b)) => {
+                            if *b == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Float(*a as f32 / b))
+                            }
+                        }
+                        (Value::Float(a), Value::Integer(b)) => {
+                            if *b == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Float(a / *b as f32))
+                            }
+                        }
+                        (Value::Double(a), Value::Double(b)) => {
+                            if *b == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(a / b))
+                            }
+                        }
+                        (Value::Integer(a), Value::Double(b)) => {
+                            if *b == 0.0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(*a as f64 / b))
+                            }
+                        }
+                        (Value::Double(a), Value::Integer(b)) => {
+                            if *b == 0 {
+                                Err(YamlBaseError::Database {
+                                    message: "Division by zero".to_string(),
+                                })
+                            } else {
+                                Ok(Value::Double(a / *b as f64))
+                            }
+                        }
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "Unsupported types for division".to_string(),
+                        )),
+                    },
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not supported in CTE expressions",
+                        op
+                    ))),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in CTE context",
                 expr
@@ -11356,10 +11491,26 @@ impl QueryExecutor {
                             .push(CteProjectionItem::Expression(Box::new(expr.clone())));
                     }
                 }
-                _ => {
-                    return Err(YamlBaseError::NotImplemented(
-                        "This type of SELECT item not yet supported in CTE projection".to_string(),
-                    ));
+                SelectItem::QualifiedWildcard(object_name, _) => {
+                    // Handle table.* syntax
+                    let table_alias = object_name.0.first()
+                        .map(|ident| ident.value.as_str())
+                        .unwrap_or("");
+                    
+                    // Include all columns that match the table alias
+                    for (idx, col) in available_columns.iter().enumerate() {
+                        if let Some(table_part) = col.split('.').next() {
+                            if table_part == table_alias || table_alias.is_empty() {
+                                let column_name = col.split('.').next_back().unwrap_or(col).to_string();
+                                selected_columns.push(column_name);
+                                projection_items.push(CteProjectionItem::Column(idx));
+                            }
+                        } else if table_alias.is_empty() {
+                            // No table alias in column name, include it
+                            selected_columns.push(col.clone());
+                            projection_items.push(CteProjectionItem::Column(idx));
+                        }
+                    }
                 }
             }
         }

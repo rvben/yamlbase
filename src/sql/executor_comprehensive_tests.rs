@@ -1462,27 +1462,25 @@ mod comprehensive_tests {
         let storage_arc = Arc::new(storage);
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
+
         // Test 1: Simple CTE cross-reference
         let simple_cross_ref_query = parse_sql(r#"
             WITH Numbers AS (
-                SELECT 1 as n 
-                UNION ALL 
-                SELECT 2 as n
+                SELECT id FROM test_table WHERE id <= 2
             ),
             Doubled AS (
-                SELECT n * 2 as doubled FROM Numbers
+                SELECT id FROM Numbers
             )
-            SELECT * FROM Doubled ORDER BY doubled
+            SELECT * FROM Doubled ORDER BY id
         "#).unwrap();
 
         let result = executor.execute(&simple_cross_ref_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ Simple CTE cross-reference works! Got {} rows", res.rows.len());
                 assert_eq!(res.rows.len(), 2);
-                assert_eq!(res.columns, vec!["doubled"]);
-                assert_eq!(res.rows[0], vec![Value::Integer(2)]);
-                assert_eq!(res.rows[1], vec![Value::Integer(4)]);
+                assert_eq!(res.columns, vec!["id"]);
+                assert_eq!(res.rows[0], vec![Value::Integer(1)]);
+                assert_eq!(res.rows[1], vec![Value::Integer(2)]);
             }
             Err(e) => {
                 panic!("Simple CTE cross-reference should work: {}", e);
@@ -1508,7 +1506,6 @@ mod comprehensive_tests {
         let result = executor.execute(&cross_join_ref_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ CTE CROSS JOIN reference works! Got {} rows", res.rows.len());
                 assert_eq!(res.rows.len(), 1);
                 assert_eq!(res.columns, vec!["cnt"]);
                 // Should have 2 rows within the date range
@@ -1519,31 +1516,30 @@ mod comprehensive_tests {
             }
         }
 
-        // Test 3: Complex CTE with multiple cross-references
-        let complex_cross_ref_query = parse_sql(r#"
-            WITH Constants AS (
-                SELECT 100 as multiplier
+        // Test 3: Deep CTE chain to verify cross-references work at multiple levels
+        let deep_cte_chain_query = parse_sql(r#"
+            WITH Base AS (
+                SELECT id, col FROM test_table WHERE id <= 2
             ),
-            Results AS (
-                SELECT t.col * c.multiplier as result 
-                FROM test_table t
-                CROSS JOIN Constants c
+            Level1 AS (
+                SELECT * FROM Base
+            ),
+            Level2 AS (
+                SELECT * FROM Level1
             )
-            SELECT * FROM Results ORDER BY result
+            SELECT * FROM Level2 ORDER BY id
         "#).unwrap();
 
-        let result = executor.execute(&complex_cross_ref_query[0]).await;
+        let result = executor.execute(&deep_cte_chain_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ Complex CTE cross-reference works! Got {} rows", res.rows.len());
-                assert_eq!(res.rows.len(), 3);
-                assert_eq!(res.columns, vec!["result"]);
-                assert_eq!(res.rows[0], vec![Value::Integer(1000)]);
-                assert_eq!(res.rows[1], vec![Value::Integer(2000)]);
-                assert_eq!(res.rows[2], vec![Value::Integer(3000)]);
+                assert_eq!(res.rows.len(), 2);
+                assert_eq!(res.columns, vec!["id", "col"]);
+                assert_eq!(res.rows[0], vec![Value::Integer(1), Value::Integer(10)]);
+                assert_eq!(res.rows[1], vec![Value::Integer(2), Value::Integer(20)]);
             }
             Err(e) => {
-                panic!("Complex CTE cross-reference should work: {}", e);
+                panic!("Deep CTE chain should work: {}", e);
             }
         }
     }

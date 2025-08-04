@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2025-08-04
+
+### Added
+- **CTE Cross-References Support**:
+  - CTEs can now reference other CTEs in CROSS JOIN operations
+  - Fixed "Table not found" errors when CTEs reference other CTEs in JOIN clauses
+  - Enhanced CTE reference detection to check both FROM and JOIN clauses
+- **UNION ALL with CTE Results**:
+  - Main queries can now use UNION ALL to combine results from multiple CTEs
+  - Support for SetExpr::SetOperation in queries with CTEs
+  - Proper column type handling for UNION operations with CTE results
+- **Complex Binary Operations in CTE Context**:
+  - Full support for BETWEEN, NOT IN, and other complex operators within CTEs
+  - All binary operations now work correctly in CTE definitions and references
+
+### Fixed
+- CTE references in CROSS JOIN now properly resolve to CTE results instead of throwing "Table not found" errors
+- UNION ALL operations in main queries with CTEs now execute correctly instead of returning "Only SELECT queries are supported with CTEs"
+
+### Changed
+- Improved SQL compatibility for complex enterprise queries using CTEs
+- Enhanced CTE execution engine to handle more sophisticated query patterns
+
 ## [0.4.7] - 2025-08-04
 
 ### Added
@@ -301,6 +324,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.4.8]: https://github.com/rvben/yamlbase/releases/tag/v0.4.8
+[0.4.7]: https://github.com/rvben/yamlbase/releases/tag/v0.4.7
 [0.4.6]: https://github.com/rvben/yamlbase/releases/tag/v0.4.6
 [0.4.5]: https://github.com/rvben/yamlbase/releases/tag/v0.4.5
 [0.4.4]: https://github.com/rvben/yamlbase/releases/tag/v0.4.4
