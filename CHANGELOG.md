@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Full support for date arithmetic in SELECT, WHERE, and CTE expressions
   - Compatible with enterprise SQL patterns for date calculations
 
+### Changed
+- **Function Return Types**:
+  - ADD_MONTHS now returns Value::Date instead of Value::Text for proper date arithmetic
+  - LAST_DAY now returns Value::Date instead of Value::Text for proper date arithmetic
+
 ### Fixed
 - Subquery performance optimization: Fixed performance regression where subqueries were creating new threads
   - Subquery execution time improved from 479ms to 8ms (58x faster)

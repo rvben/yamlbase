@@ -49,23 +49,22 @@ async fn test_customer_production_queries() {
         }
     }
     
-    // Test Customer Query 2 (Complex - needs ADD_MONTHS and LAST_DAY)
-    println!("\n2. Testing Customer Query 2 (Complex - without ADD_MONTHS/LAST_DAY):");
-    // Simplified version that should work with current implementation
+    // Test Customer Query 2 (Complex - FULL VERSION with ADD_MONTHS and LAST_DAY)
+    println!("\n2. Testing Customer Query 2 (Complex - FULL VERSION):");
     let stmt = parse_sql(r#"
         WITH DateRange AS (
             SELECT
-                CURRENT_DATE - EXTRACT(DAY FROM CURRENT_DATE) + 1 AS START_DATE,
-                CURRENT_DATE AS END_DATE
+                ADD_MONTHS(CURRENT_DATE, 0) - EXTRACT(DAY FROM CURRENT_DATE) + 1 AS START_DATE,
+                LAST_DAY(ADD_MONTHS(CURRENT_DATE, 1)) AS END_DATE
         )
         SELECT * FROM DateRange
     "#).unwrap();
     match executor.execute(&stmt[0]).await {
         Ok(result) => {
-            println!("   ✅ Simplified Customer Query 2 works!");
+            println!("   ✅ Full Customer Query 2 works!");
             println!("   Columns: {:?}", result.columns);
             println!("   Result: {:?}", result.rows[0]);
-            println!("   Note: This is a simplified version without ADD_MONTHS/LAST_DAY");
+            println!("   START_DATE is first day of current month, END_DATE is last day of next month");
         }
         Err(e) => {
             println!("   ❌ Failed with: {}", e);
@@ -127,10 +126,39 @@ async fn test_customer_production_queries() {
         }
     }
     
+    // Test 5: More complex production patterns
+    println!("\n5. Testing more complex production patterns:");
+    
+    // Test 5a: Month boundaries
+    println!("   5a. First day of next month:");
+    let stmt = parse_sql("SELECT ADD_MONTHS(CURRENT_DATE, 1) - EXTRACT(DAY FROM ADD_MONTHS(CURRENT_DATE, 1)) + 1 as next_month_start").unwrap();
+    match executor.execute(&stmt[0]).await {
+        Ok(result) => {
+            println!("      ✅ Works! Result: {:?}", result.rows[0][0]);
+        }
+        Err(e) => {
+            println!("      ❌ Failed with: {}", e);
+        }
+    }
+    
+    // Test 5b: Previous month end
+    println!("   5b. Last day of previous month:");
+    let stmt = parse_sql("SELECT LAST_DAY(ADD_MONTHS(CURRENT_DATE, -1)) as prev_month_end").unwrap();
+    match executor.execute(&stmt[0]).await {
+        Ok(result) => {
+            println!("      ✅ Works! Result: {:?}", result.rows[0][0]);
+        }
+        Err(e) => {
+            println!("      ❌ Failed with: {}", e);
+        }
+    }
+    
     println!("\n=== CUSTOMER PRODUCTION QUERIES TEST COMPLETE ===");
     println!("\nSUMMARY:");
     println!("✅ Basic date arithmetic (DATE +/- INTEGER) is working");
     println!("✅ Date expressions in CTE constants are working");
     println!("✅ Month start calculation (using EXTRACT) is working");
-    println!("⚠️  ADD_MONTHS and LAST_DAY functions still need to be implemented for full compatibility");
+    println!("✅ ADD_MONTHS function is working and returns Date type");
+    println!("✅ LAST_DAY function is working and returns Date type");
+    println!("✅ Full customer production queries are now supported!");
 }

@@ -4686,7 +4686,7 @@ impl QueryExecutor {
                             } else {
                                 date - chrono::Months::new((-months) as u32)
                             };
-                            Ok(Value::Text(result.format("%Y-%m-%d").to_string()))
+                            Ok(Value::Date(result))
                         } else {
                             Err(YamlBaseError::Database {
                                 message: "Invalid arguments for ADD_MONTHS".to_string(),
@@ -4742,7 +4742,7 @@ impl QueryExecutor {
                             };
                             // Subtract one day to get last day of current month
                             let last_day = next_month - chrono::Duration::days(1);
-                            Ok(Value::Text(last_day.format("%Y-%m-%d").to_string()))
+                            Ok(Value::Date(last_day))
                         } else {
                             Err(YamlBaseError::Database {
                                 message: "Invalid argument for LAST_DAY".to_string(),
@@ -13666,11 +13666,11 @@ mod tests {
 
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
-        // Result should be a date string 3 months from now
-        if let Value::Text(date_str) = &result.rows[0][0] {
-            assert_eq!(date_str.len(), 10); // YYYY-MM-DD format
+        // Result should be a date 3 months from now
+        if let Value::Date(_date) = &result.rows[0][0] {
+            // Date should be valid
         } else {
-            panic!("Expected text value for ADD_MONTHS");
+            panic!("Expected date value for ADD_MONTHS");
         }
 
         // Test 2: EXTRACT from literal date
@@ -13687,7 +13687,7 @@ mod tests {
 
         assert_eq!(result.columns.len(), 1);
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], Value::Text("2025-02-28".to_string()));
+        assert_eq!(result.rows[0][0], Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 2, 28).unwrap()));
 
         // Test 4: Complex date expression
         let _stmt = parse_statement(
