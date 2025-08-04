@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2025-08-04
+
+### Added
+- **Window Functions Support**:
+  - ROW_NUMBER() - Sequential row numbering
+  - RANK() - Ranking with ties
+  - PARTITION BY clause for grouping within window functions
+  - Comprehensive parsing and execution for window specifications
+- **SQLAlchemy Compatibility**:
+  - Full support for SQLAlchemy connection initialization
+  - Proper handling of transaction commands (BEGIN, COMMIT, ROLLBACK)
+  - Compatible with both PostgreSQL (psycopg2) and MySQL (PyMySQL) drivers
+  - Transparent handling of SQLAlchemy's connection pooling behavior
+- **LEFT JOIN Protocol Enhancement**:
+  - Fixed protocol synchronization for LEFT JOIN queries
+  - Proper NULL handling for unmatched rows
+
+### Fixed
+- MySQL protocol "Command Out of Sync" error with SQLAlchemy
+- Protocol synchronization issues with LEFT JOIN operations
+- Window function type compatibility with sqlparser 0.52
+
+### Changed
+- Enhanced MySQL protocol to properly handle transaction commands
+- Improved SQL compatibility for ORM frameworks
+
 ## [0.3.0] - 2025-07-22
 
 ### Added
