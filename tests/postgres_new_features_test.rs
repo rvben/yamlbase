@@ -146,6 +146,7 @@ fn execute_query(port: u16, query: &str) -> String {
 }
 
 #[test]
+#[ignore = "Integration test - requires PostgreSQL client"]
 fn test_postgres_string_functions() {
     let yaml = r#"
 database:
@@ -200,6 +201,7 @@ tables:
 }
 
 #[test]
+#[ignore = "Integration test - requires PostgreSQL client"]
 fn test_postgres_math_functions() {
     let yaml = r#"
 database:
@@ -254,6 +256,7 @@ tables:
 }
 
 #[test]
+#[ignore = "Integration test - requires PostgreSQL client"]
 fn test_postgres_cast_function() {
     let yaml = r#"
 database:
@@ -296,6 +299,7 @@ tables:
 }
 
 #[test]
+#[ignore = "Integration test - requires PostgreSQL client"]
 fn test_postgres_right_join() {
     let yaml = r#"
 database:
@@ -345,6 +349,7 @@ tables:
 }
 
 #[test]
+#[ignore = "Integration test - requires PostgreSQL client"]
 fn test_postgres_date_functions() {
     let yaml = r#"
 database:
