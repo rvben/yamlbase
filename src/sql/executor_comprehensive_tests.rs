@@ -1400,4 +1400,251 @@ mod comprehensive_tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_cte_cross_references() {
+        // Test CTEs referencing other CTEs - Feature Request Priority 1
+        let mut db = Database::new("test_db".to_string());
+
+        // Create test_table for cross-reference tests
+        let test_table_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: SqlType::Integer,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: true,
+                references: None,
+            },
+            Column {
+                name: "col".to_string(),
+                sql_type: SqlType::Integer,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+            Column {
+                name: "date_col".to_string(),
+                sql_type: SqlType::Varchar(20),
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+        ];
+
+        let mut test_table = Table::new("test_table".to_string(), test_table_columns);
+        test_table.rows = vec![
+            vec![
+                Value::Integer(1),
+                Value::Integer(10),
+                Value::Text("2025-01-15".to_string()),
+            ],
+            vec![
+                Value::Integer(2),
+                Value::Integer(20),
+                Value::Text("2025-01-20".to_string()),
+            ],
+            vec![
+                Value::Integer(3),
+                Value::Integer(30),
+                Value::Text("2025-02-05".to_string()),
+            ],
+        ];
+
+        db.add_table(test_table).unwrap();
+
+        let storage = Storage::new(db);
+        let storage_arc = Arc::new(storage);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
+
+        // Test 1: Simple CTE cross-reference
+        let simple_cross_ref_query = parse_sql(r#"
+            WITH Numbers AS (
+                SELECT 1 as n 
+                UNION ALL 
+                SELECT 2 as n
+            ),
+            Doubled AS (
+                SELECT n * 2 as doubled FROM Numbers
+            )
+            SELECT * FROM Doubled ORDER BY doubled
+        "#).unwrap();
+
+        let result = executor.execute(&simple_cross_ref_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ Simple CTE cross-reference works! Got {} rows", res.rows.len());
+                assert_eq!(res.rows.len(), 2);
+                assert_eq!(res.columns, vec!["doubled"]);
+                assert_eq!(res.rows[0], vec![Value::Integer(2)]);
+                assert_eq!(res.rows[1], vec![Value::Integer(4)]);
+            }
+            Err(e) => {
+                panic!("Simple CTE cross-reference should work: {}", e);
+            }
+        }
+
+        // Test 2: CTE with CROSS JOIN referencing another CTE
+        let cross_join_ref_query = parse_sql(r#"
+            WITH DateRange AS (
+                SELECT 
+                    '2025-01-01' AS START_DATE,
+                    '2025-01-31' AS END_DATE
+            ),
+            FilteredData AS (
+                SELECT a.*
+                FROM test_table a
+                CROSS JOIN DateRange dr
+                WHERE a.date_col BETWEEN dr.START_DATE AND dr.END_DATE
+            )
+            SELECT COUNT(*) as cnt FROM FilteredData
+        "#).unwrap();
+
+        let result = executor.execute(&cross_join_ref_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ CTE CROSS JOIN reference works! Got {} rows", res.rows.len());
+                assert_eq!(res.rows.len(), 1);
+                assert_eq!(res.columns, vec!["cnt"]);
+                // Should have 2 rows within the date range
+                assert_eq!(res.rows[0], vec![Value::Integer(2)]);
+            }
+            Err(e) => {
+                panic!("CTE CROSS JOIN reference should work: {}", e);
+            }
+        }
+
+        // Test 3: Complex CTE with multiple cross-references
+        let complex_cross_ref_query = parse_sql(r#"
+            WITH Constants AS (
+                SELECT 100 as multiplier
+            ),
+            Results AS (
+                SELECT t.col * c.multiplier as result 
+                FROM test_table t
+                CROSS JOIN Constants c
+            )
+            SELECT * FROM Results ORDER BY result
+        "#).unwrap();
+
+        let result = executor.execute(&complex_cross_ref_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ Complex CTE cross-reference works! Got {} rows", res.rows.len());
+                assert_eq!(res.rows.len(), 3);
+                assert_eq!(res.columns, vec!["result"]);
+                assert_eq!(res.rows[0], vec![Value::Integer(1000)]);
+                assert_eq!(res.rows[1], vec![Value::Integer(2000)]);
+                assert_eq!(res.rows[2], vec![Value::Integer(3000)]);
+            }
+            Err(e) => {
+                panic!("Complex CTE cross-reference should work: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cte_union_all_main_query() {
+        // Test UNION ALL in main query with CTEs - Feature Request Priority 2
+        let mut db = Database::new("test_db".to_string());
+
+        // Create table1 and table2 for UNION ALL tests
+        let table1_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: SqlType::Integer,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: true,
+                references: None,
+            },
+            Column {
+                name: "active".to_string(),
+                sql_type: SqlType::Varchar(1),
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+        ];
+
+        let mut table1 = Table::new("table1".to_string(), table1_columns);
+        table1.rows = vec![
+            vec![Value::Integer(1), Value::Text("Y".to_string())],
+            vec![Value::Integer(2), Value::Text("N".to_string())],
+            vec![Value::Integer(3), Value::Text("Y".to_string())],
+        ];
+
+        let table2_columns = vec![
+            Column {
+                name: "id".to_string(),
+                sql_type: SqlType::Integer,
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: true,
+                references: None,
+            },
+            Column {
+                name: "status".to_string(),
+                sql_type: SqlType::Varchar(10),
+                nullable: false,
+                default: None,
+                unique: false,
+                primary_key: false,
+                references: None,
+            },
+        ];
+
+        let mut table2 = Table::new("table2".to_string(), table2_columns);
+        table2.rows = vec![
+            vec![Value::Integer(4), Value::Text("OK".to_string())],
+            vec![Value::Integer(5), Value::Text("FAIL".to_string())],
+            vec![Value::Integer(6), Value::Text("OK".to_string())],
+        ];
+
+        db.add_table(table1).unwrap();
+        db.add_table(table2).unwrap();
+
+        let storage = Storage::new(db);
+        let storage_arc = Arc::new(storage);
+        let executor = QueryExecutor::new(storage_arc).await.unwrap();
+
+        // Test UNION ALL with CTE results in main query
+        let union_all_main_query = parse_sql(r#"
+            WITH Set1 AS (
+                SELECT id FROM table1 WHERE active = 'Y'
+            ),
+            Set2 AS (
+                SELECT id FROM table2 WHERE status = 'OK'
+            )
+            SELECT * FROM Set1 
+            UNION ALL 
+            SELECT * FROM Set2
+            ORDER BY id
+        "#).unwrap();
+
+        let result = executor.execute(&union_all_main_query[0]).await;
+        match result {
+            Ok(res) => {
+                println!("✅ CTE UNION ALL in main query works! Got {} rows", res.rows.len());
+                assert_eq!(res.rows.len(), 4); // 2 from Set1 + 2 from Set2
+                assert_eq!(res.columns, vec!["id"]);
+                assert_eq!(res.rows[0], vec![Value::Integer(1)]);
+                assert_eq!(res.rows[1], vec![Value::Integer(3)]);
+                assert_eq!(res.rows[2], vec![Value::Integer(4)]);
+                assert_eq!(res.rows[3], vec![Value::Integer(6)]);
+            }
+            Err(e) => {
+                panic!("CTE UNION ALL in main query should work: {}", e);
+            }
+        }
+    }
 }

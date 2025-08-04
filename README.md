@@ -184,10 +184,16 @@ When auth is specified in the YAML file, it overrides command-line arguments. Th
 - Wildcard selection (`SELECT *`)
 - Basic table joins (comma-separated tables in FROM)
 - `LEFT JOIN` with proper NULL handling
+- `CROSS JOIN` for Cartesian products
 - Window functions:
   - `ROW_NUMBER()` - Sequential row numbering
   - `RANK()` - Ranking with ties
   - `PARTITION BY` clause for grouping
+- Common Table Expressions (CTEs):
+  - Basic CTEs with `WITH` clause
+  - CTE cross-references (CTEs referencing other CTEs)
+  - CTEs in `CROSS JOIN` operations
+  - `UNION ALL` with CTE results
 
 ### Examples
 
@@ -213,6 +219,40 @@ SELECT name,
        ROW_NUMBER() OVER (ORDER BY created_at) as row_num,
        RANK() OVER (PARTITION BY department ORDER BY salary DESC) as dept_rank
 FROM users;
+
+-- Common Table Expressions (CTEs)
+WITH active_users AS (
+    SELECT * FROM users WHERE is_active = true
+),
+user_orders AS (
+    SELECT u.*, o.total_amount
+    FROM active_users u
+    INNER JOIN orders o ON u.id = o.user_id
+)
+SELECT * FROM user_orders WHERE total_amount > 100;
+
+-- CTE with CROSS JOIN for date range filtering
+WITH DateRange AS (
+    SELECT '2025-01-01' AS start_date, '2025-01-31' AS end_date
+),
+FilteredOrders AS (
+    SELECT o.*
+    FROM orders o
+    CROSS JOIN DateRange d
+    WHERE o.order_date BETWEEN d.start_date AND d.end_date
+)
+SELECT COUNT(*) FROM FilteredOrders;
+
+-- Multiple CTEs with UNION ALL
+WITH NewCustomers AS (
+    SELECT customer_id, 'new' as type FROM customers WHERE created_at >= '2025-01-01'
+),
+VipCustomers AS (
+    SELECT customer_id, 'vip' as type FROM customers WHERE total_purchases > 10000
+)
+SELECT * FROM NewCustomers
+UNION ALL
+SELECT * FROM VipCustomers;
 ```
 
 ### Not Yet Supported
