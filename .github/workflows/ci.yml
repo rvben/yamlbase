@@ -27,6 +27,39 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
 
+      - name: Install PostgreSQL client (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Install MySQL client (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y mysql-client
+
+      - name: Install PostgreSQL client (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          brew install postgresql
+
+      - name: Install MySQL client (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          brew install mysql-client
+          echo "/opt/homebrew/opt/mysql-client/bin" >> $GITHUB_PATH
+
+      - name: Install PostgreSQL client (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install postgresql --no-progress
+          echo "C:\Program Files\PostgreSQL\15\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install MySQL client (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install mysql --no-progress
+
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
