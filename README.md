@@ -183,6 +183,11 @@ When auth is specified in the YAML file, it overrides command-line arguments. Th
 - `LIMIT` for result pagination
 - Wildcard selection (`SELECT *`)
 - Basic table joins (comma-separated tables in FROM)
+- `LEFT JOIN` with proper NULL handling
+- Window functions:
+  - `ROW_NUMBER()` - Sequential row numbering
+  - `RANK()` - Ranking with ties
+  - `PARTITION BY` clause for grouping
 
 ### Examples
 
@@ -197,16 +202,27 @@ SELECT name, email FROM users ORDER BY created_at DESC LIMIT 10;
 SELECT u.name, o.total_amount
 FROM users u, orders o
 WHERE u.id = o.user_id;
+
+-- LEFT JOIN
+SELECT u.name, o.order_id
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id;
+
+-- Window functions
+SELECT name, 
+       ROW_NUMBER() OVER (ORDER BY created_at) as row_num,
+       RANK() OVER (PARTITION BY department ORDER BY salary DESC) as dept_rank
+FROM users;
 ```
 
 ### Not Yet Supported
 
-- `INSERT`, `UPDATE`, `DELETE` operations
+- `INSERT`, `UPDATE`, `DELETE` operations (by design - read-only)
 - Aggregate functions (`COUNT`, `SUM`, `AVG`, etc.)
 - `GROUP BY` and `HAVING`
 - Subqueries
-- `JOIN` syntax (use comma-separated tables instead)
-- Transactions
+- Advanced window functions (`DENSE_RANK`, `LAG`, `LEAD`, etc.)
+- Transactions (commands accepted but not enforced)
 
 ## Development
 
@@ -323,6 +339,45 @@ import (
 db, err := sql.Open("mysql", "admin:password@tcp(127.0.0.1:3306)/test_db")
 
 rows, err := db.Query("SELECT name, email FROM users")
+```
+
+### Python with SQLAlchemy
+
+Yamlbase fully supports SQLAlchemy for both PostgreSQL and MySQL protocols:
+
+**PostgreSQL:**
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# Create engine
+engine = create_engine('postgresql+psycopg2://admin:password@localhost:5432/test_db')
+
+# For metadata reflection
+from sqlalchemy import MetaData, Table
+metadata = MetaData()
+users_table = Table('users', metadata, autoload_with=engine)
+
+# Direct queries
+with engine.connect() as conn:
+    result = conn.execute("SELECT * FROM users WHERE is_active = true")
+    users = result.fetchall()
+```
+
+**MySQL:**
+```python
+from sqlalchemy import create_engine
+
+# Create engine with PyMySQL driver
+engine = create_engine('mysql+pymysql://admin:password@127.0.0.1:3306/test_db')
+
+# Query execution
+with engine.connect() as conn:
+    result = conn.execute("SELECT * FROM users WHERE is_active = true")
+    users = result.fetchall()
+
+# Note: Yamlbase handles SQLAlchemy's transaction commands (BEGIN, COMMIT, ROLLBACK)
+# transparently, even though actual transaction support is not implemented.
 ```
 
 ## Use Cases
