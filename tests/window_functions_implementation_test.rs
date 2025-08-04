@@ -36,22 +36,13 @@ async fn test_basic_window_functions() {
     );
 
     users_table
-        .insert_row(vec![
-            Value::Integer(1),
-            Value::Text("alice".to_string()),
-        ])
+        .insert_row(vec![Value::Integer(1), Value::Text("alice".to_string())])
         .unwrap();
     users_table
-        .insert_row(vec![
-            Value::Integer(2),
-            Value::Text("bob".to_string()),
-        ])
+        .insert_row(vec![Value::Integer(2), Value::Text("bob".to_string())])
         .unwrap();
     users_table
-        .insert_row(vec![
-            Value::Integer(3),
-            Value::Text("charlie".to_string()),
-        ])
+        .insert_row(vec![Value::Integer(3), Value::Text("charlie".to_string())])
         .unwrap();
 
     db.add_table(users_table).unwrap();
@@ -60,7 +51,8 @@ async fn test_basic_window_functions() {
 
     // Test 1: Basic ROW_NUMBER() window function
     println!("\n1. Testing ROW_NUMBER() window function:");
-    let stmts = parse_sql("SELECT username, ROW_NUMBER() OVER (ORDER BY id) as row_num FROM users").unwrap();
+    let stmts = parse_sql("SELECT username, ROW_NUMBER() OVER (ORDER BY id) as row_num FROM users")
+        .unwrap();
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => {
@@ -72,15 +64,19 @@ async fn test_basic_window_functions() {
             assert_eq!(result.rows.len(), 3, "Should have 3 rows");
         }
         Err(e) => {
-            println!("   ❌ ROW_NUMBER() failed: {}", e);
+            println!("   ❌ ROW_NUMBER() failed: {e}");
             // For now, expect this to fail until implemented
-            assert!(e.to_string().contains("not implemented") || e.to_string().contains("Function 'ROW_NUMBER'"));
+            assert!(
+                e.to_string().contains("not implemented")
+                    || e.to_string().contains("Function 'ROW_NUMBER'")
+            );
         }
     }
 
     // Test 2: Basic RANK() window function
     println!("\n2. Testing RANK() window function:");
-    let stmts = parse_sql("SELECT username, RANK() OVER (ORDER BY id) as rank_num FROM users").unwrap();
+    let stmts =
+        parse_sql("SELECT username, RANK() OVER (ORDER BY id) as rank_num FROM users").unwrap();
     let stmt = &stmts[0];
     match executor.execute(stmt).await {
         Ok(result) => {
@@ -90,9 +86,12 @@ async fn test_basic_window_functions() {
             }
         }
         Err(e) => {
-            println!("   ❌ RANK() failed: {}", e);
+            println!("   ❌ RANK() failed: {e}");
             // For now, expect this to fail until implemented
-            assert!(e.to_string().contains("not implemented") || e.to_string().contains("Function 'RANK'"));
+            assert!(
+                e.to_string().contains("not implemented")
+                    || e.to_string().contains("Function 'RANK'")
+            );
         }
     }
 
