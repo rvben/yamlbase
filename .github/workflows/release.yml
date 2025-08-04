@@ -152,61 +152,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download release binaries
-        uses: robinraju/release-downloader@v1
-        with:
-          repository: ${{ github.repository }}
-          tag: ${{ github.ref_name }}
-          fileName: "yamlbase-linux-*"
-          out-file-path: "binaries"
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prepare Docker contexts
-        run: |
-          # Create contexts for each architecture
-          mkdir -p docker-amd64 docker-arm64
-          cp Dockerfile.binary docker-amd64/Dockerfile
-          cp Dockerfile.binary docker-arm64/Dockerfile
-          cp binaries/yamlbase-linux-amd64 docker-amd64/yamlbase
-          cp binaries/yamlbase-linux-arm64 docker-arm64/yamlbase
-          chmod +x docker-amd64/yamlbase docker-arm64/yamlbase
-
-      - name: Build and push AMD64 image
+      - name: Build and push multi-platform Docker images
         uses: docker/build-push-action@v5
         with:
-          context: docker-amd64
-          platforms: linux/amd64
+          context: .
+          file: Dockerfile.install
+          platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
           tags: |
-            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}-amd64
-            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}-amd64
-
-      - name: Build and push ARM64 image
-        uses: docker/build-push-action@v5
-        with:
-          context: docker-arm64
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}-arm64
-            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}-arm64
-
-      - name: Create and push multi-arch manifest
-        run: |
-          # Create multi-arch manifests for ghcr.io
-          docker buildx imagetools create -t ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }} \
-            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}-amd64 \
-            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}-arm64
-          
-          docker buildx imagetools create -t ghcr.io/rvben/yamlbase:latest \
-            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}-amd64 \
-            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}-arm64
-          
-          # Create multi-arch manifests for docker.io
-          docker buildx imagetools create -t docker.io/rvben/yamlbase:${{ steps.version.outputs.version }} \
-            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}-amd64 \
-            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}-arm64
-          
-          docker buildx imagetools create -t docker.io/rvben/yamlbase:latest \
-            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}-amd64 \
-            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}-arm64
+            ghcr.io/rvben/yamlbase:${{ steps.version.outputs.version }}
+            ghcr.io/rvben/yamlbase:latest
+            docker.io/rvben/yamlbase:${{ steps.version.outputs.version }}
+            docker.io/rvben/yamlbase:latest
