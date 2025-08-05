@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.10] - 2025-08-05
+
+### Added
+- **BETWEEN Expressions with CTE Cross-References**:
+  - Full support for BETWEEN expressions that reference columns from cross-referenced CTEs within CTE WHERE clauses
+  - Support for complex WHERE conditions combining BETWEEN with AND/OR operators in CTE contexts
+  - Added comparison operators (=, !=, <, <=, >, >=) support in CTE expression evaluation
+  - Added support for parenthesized (nested) expressions in CTE WHERE clauses
+  - Enables 100% compatibility with enterprise production SQL queries
+
+### Fixed
+- CTE expression evaluator now properly handles BETWEEN, comparison operators, and nested expressions
+- Fixed "Expression Between {...} not supported in CTE context" error when using BETWEEN with CTE cross-references
+
+### Changed
+- Enhanced CTE expression evaluation to support the complete set of SQL operators needed for enterprise queries
+- Achieved full compatibility with complex analytical query patterns used in production applications
+
 ## [0.4.9] - 2025-08-05
 
 ### Added
@@ -346,6 +364,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.4.10]: https://github.com/rvben/yamlbase/releases/tag/v0.4.10
+[0.4.9]: https://github.com/rvben/yamlbase/releases/tag/v0.4.9
 [0.4.8]: https://github.com/rvben/yamlbase/releases/tag/v0.4.8
 [0.4.7]: https://github.com/rvben/yamlbase/releases/tag/v0.4.7
 [0.4.6]: https://github.com/rvben/yamlbase/releases/tag/v0.4.6

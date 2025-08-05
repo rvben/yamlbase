@@ -11273,6 +11273,10 @@ impl QueryExecutor {
 
                 Ok(if *negated { !result } else { result })
             }
+            Expr::Nested(inner) => {
+                // Handle parenthesized expressions by evaluating the inner expression
+                self.evaluate_where_condition_with_columns(inner, row, columns)
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "WHERE expression {:?} not supported in CTE context",
                 expr
@@ -11390,6 +11394,52 @@ impl QueryExecutor {
                             "Unsupported types for multiplication".to_string(),
                         )),
                     },
+                    BinaryOperator::Eq => Ok(Value::Boolean(left_val == right_val)),
+                    BinaryOperator::NotEq => Ok(Value::Boolean(left_val != right_val)),
+                    BinaryOperator::Lt => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(Value::Boolean(ord.is_lt()))
+                        } else {
+                            Ok(Value::Boolean(false))
+                        }
+                    }
+                    BinaryOperator::LtEq => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(Value::Boolean(ord.is_le()))
+                        } else {
+                            Ok(Value::Boolean(false))
+                        }
+                    }
+                    BinaryOperator::Gt => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(Value::Boolean(ord.is_gt()))
+                        } else {
+                            Ok(Value::Boolean(false))
+                        }
+                    }
+                    BinaryOperator::GtEq => {
+                        if let Some(ord) = left_val.compare(&right_val) {
+                            Ok(Value::Boolean(ord.is_ge()))
+                        } else {
+                            Ok(Value::Boolean(false))
+                        }
+                    }
+                    BinaryOperator::And => {
+                        match (&left_val, &right_val) {
+                            (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(*a && *b)),
+                            _ => Err(YamlBaseError::NotImplemented(
+                                "AND operator requires boolean operands in CTE expressions".to_string(),
+                            )),
+                        }
+                    }
+                    BinaryOperator::Or => {
+                        match (&left_val, &right_val) {
+                            (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(*a || *b)),
+                            _ => Err(YamlBaseError::NotImplemented(
+                                "OR operator requires boolean operands in CTE expressions".to_string(),
+                            )),
+                        }
+                    }
                     BinaryOperator::Divide => match (&left_val, &right_val) {
                         (Value::Integer(a), Value::Integer(b)) => {
                             if *b == 0 {
@@ -11463,6 +11513,30 @@ impl QueryExecutor {
                         op
                     ))),
                 }
+            }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                let low_val = self.evaluate_expr_with_columns(low, row, columns)?;
+                let high_val = self.evaluate_expr_with_columns(high, row, columns)?;
+
+                let result = if let (Some(low_ord), Some(high_ord)) =
+                    (val.compare(&low_val), val.compare(&high_val))
+                {
+                    low_ord.is_ge() && high_ord.is_le()
+                } else {
+                    false
+                };
+
+                Ok(Value::Boolean(if *negated { !result } else { result }))
+            }
+            Expr::Nested(inner) => {
+                // Handle parenthesized expressions by evaluating the inner expression
+                self.evaluate_expr_with_columns(inner, row, columns)
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in CTE context",
