@@ -194,6 +194,10 @@ When auth is specified in the YAML file, it overrides command-line arguments. Th
   - CTE cross-references (CTEs referencing other CTEs)
   - CTEs in `CROSS JOIN` operations
   - `UNION ALL` with CTE results
+- `DISTINCT` and `DISTINCT ON` (PostgreSQL-specific):
+  - Standard `DISTINCT` for unique rows
+  - `DISTINCT ON` for keeping first row per unique column combination
+  - Supports expressions in `DISTINCT ON` including `EXTRACT` and comparisons
 
 ### Examples
 
@@ -253,6 +257,12 @@ VipCustomers AS (
 SELECT * FROM NewCustomers
 UNION ALL
 SELECT * FROM VipCustomers;
+
+-- DISTINCT ON to get one employee per department (highest paid)
+SELECT DISTINCT ON (department) 
+    department, name, salary
+FROM employees
+ORDER BY department, salary DESC;
 ```
 
 ### Not Yet Supported

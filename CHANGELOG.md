@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **DISTINCT ON Support** (PostgreSQL-specific feature):
+  - Support for DISTINCT ON clause to keep only the first row for each unique combination of specified columns
+  - Works with single and multiple columns in DISTINCT ON expression list
+  - Supports expressions in DISTINCT ON including EXTRACT and boolean comparisons
+  - Compatible with WHERE clauses and complex expressions in SELECT projections
+  - Added comparison operators (>, <, =, !=, >=, <=) to get_expr_value for boolean expressions
+
 ## [0.4.11] - 2025-08-05
 
 ### Added

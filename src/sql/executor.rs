@@ -2,7 +2,7 @@ use chrono::{self, Datelike, NaiveDate, Timelike};
 use regex::Regex;
 use rust_decimal::prelude::*;
 use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, DuplicateTreatment, Expr, Function, FunctionArg,
+    BinaryOperator, DataType, DateTimeField, Distinct, DuplicateTreatment, Expr, Function, FunctionArg,
     FunctionArgExpr, FunctionArguments, GroupByExpr, JoinConstraint, JoinOperator, OrderByExpr,
     Query, Select, SelectItem, SetExpr, SetOperator, SetQuantifier, Statement, TableFactor,
     TableWithJoins, UnaryOperator, With,
@@ -233,7 +233,7 @@ impl QueryExecutor {
 
         // Apply DISTINCT if specified
         let distinct_rows = if select.distinct.is_some() {
-            self.apply_distinct(projected_rows)?
+            self.apply_distinct(projected_rows, &select.distinct, &columns)?
         } else {
             projected_rows
         };
@@ -1022,7 +1022,21 @@ impl QueryExecutor {
 
         // Apply DISTINCT if specified
         let distinct_rows = if select.distinct.is_some() {
-            self.apply_distinct(projected_rows)?
+            // Convert JoinedColumn to ProjectionItem for compatibility
+            let projection_items: Vec<ProjectionItem> = columns
+                .iter()
+                .enumerate()
+                .map(|(idx, col)| match col {
+                    JoinedColumn::TableColumn(name, _, _) => {
+                        ProjectionItem::TableColumn(name.clone(), idx)
+                    }
+                    JoinedColumn::Constant(name, value) => {
+                        ProjectionItem::Constant(name.clone(), value.clone())
+                    }
+                })
+                .collect();
+            
+            self.apply_distinct(projected_rows, &select.distinct, &projection_items)?
         } else {
             projected_rows
         };
@@ -2887,6 +2901,13 @@ impl QueryExecutor {
                             message: "String concatenation requires text values".to_string(),
                         }),
                     },
+                    // Comparison operators that return boolean values
+                    BinaryOperator::Eq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? == 0)),
+                    BinaryOperator::NotEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? != 0)),
+                    BinaryOperator::Lt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? < 0)),
+                    BinaryOperator::LtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? <= 0)),
+                    BinaryOperator::Gt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? > 0)),
+                    BinaryOperator::GtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? >= 0)),
                     _ => Err(YamlBaseError::NotImplemented(format!(
                         "Binary operator {:?} not supported in get_expr_value",
                         op
@@ -6757,24 +6778,193 @@ impl QueryExecutor {
         }
     }
 
-    fn apply_distinct(&self, rows: Vec<Vec<Value>>) -> crate::Result<Vec<Vec<Value>>> {
+    fn apply_distinct(&self, rows: Vec<Vec<Value>>, distinct: &Option<Distinct>, columns: &[ProjectionItem]) -> crate::Result<Vec<Vec<Value>>> {
         if rows.is_empty() {
             return Ok(rows);
         }
-
-        let mut seen = std::collections::HashSet::new();
-        let mut distinct_rows = Vec::new();
-
-        for row in rows {
-            // Create a hashable key from the row
-            // Note: This assumes Value implements Hash and Eq properly
-            if seen.insert(row.clone()) {
-                distinct_rows.push(row);
+        
+        match distinct {
+            Some(Distinct::Distinct) => {
+                // Standard DISTINCT - remove duplicate rows
+                let mut seen = std::collections::HashSet::new();
+                let mut distinct_rows = Vec::new();
+                for row in rows {
+                    // Create a hashable key from the row
+                    // Note: This assumes Value implements Hash and Eq properly
+                    if seen.insert(row.clone()) {
+                        distinct_rows.push(row);
+                    }
+                }
+                Ok(distinct_rows)
+            }
+            Some(Distinct::On(exprs)) => {
+                // DISTINCT ON - keep first row for each unique combination of specified expressions
+                let mut seen = std::collections::HashSet::new();
+                let mut distinct_rows = Vec::new();
+                
+                for row in rows {
+                    // Evaluate DISTINCT ON expressions for this row
+                    let mut key_values = Vec::new();
+                    
+                    for expr in exprs {
+                        // Create a temporary column map for expression evaluation
+                        let column_map: std::collections::HashMap<String, usize> = columns
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, item)| {
+                                match item {
+                                    ProjectionItem::TableColumn(name, _) => (name.clone(), idx),
+                                    ProjectionItem::Constant(name, _) => (name.clone(), idx),
+                                    ProjectionItem::Expression(name, _) => (name.clone(), idx),
+                                }
+                            })
+                            .collect();
+                        
+                        let value = self.evaluate_expr_with_row(expr, &row, &column_map)?;
+                        key_values.push(value);
+                    }
+                    
+                    // Check if we've seen this combination of values
+                    if seen.insert(key_values) {
+                        distinct_rows.push(row);
+                    }
+                }
+                Ok(distinct_rows)
+            }
+            None => {
+                // No DISTINCT clause
+                Ok(rows)
             }
         }
-
-        Ok(distinct_rows)
     }
+    
+    // Helper method to evaluate expression with a specific row
+    #[allow(clippy::only_used_in_recursion)]
+    fn evaluate_expr_with_row(&self, expr: &Expr, row: &[Value], column_map: &std::collections::HashMap<String, usize>) -> crate::Result<Value> {
+        match expr {
+            Expr::Identifier(ident) => {
+                let col_name = &ident.value;
+                if let Some(&idx) = column_map.get(col_name) {
+                    Ok(row.get(idx).cloned().unwrap_or(Value::Null))
+                } else {
+                    // Try case-insensitive lookup
+                    let col_name_lower = col_name.to_lowercase();
+                    let found_idx = column_map
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == col_name_lower)
+                        .map(|(_, &idx)| idx);
+                    
+                    if let Some(idx) = found_idx {
+                        Ok(row.get(idx).cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found", col_name),
+                        })
+                    }
+                }
+            }
+            Expr::CompoundIdentifier(parts) => {
+                let col_name = parts.last().unwrap().value.clone();
+                if let Some(&idx) = column_map.get(&col_name) {
+                    Ok(row.get(idx).cloned().unwrap_or(Value::Null))
+                } else {
+                    // Try case-insensitive lookup
+                    let col_name_lower = col_name.to_lowercase();
+                    let found_idx = column_map
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == col_name_lower)
+                        .map(|(_, &idx)| idx);
+                    
+                    if let Some(idx) = found_idx {
+                        Ok(row.get(idx).cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found", col_name),
+                        })
+                    }
+                }
+            }
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_expr_with_row(left, row, column_map)?;
+                let right_val = self.evaluate_expr_with_row(right, row, column_map)?;
+                
+                // Perform the binary operation on the values directly
+                match op {
+                    BinaryOperator::Eq => Ok(Value::Boolean(left_val == right_val)),
+                    BinaryOperator::NotEq => Ok(Value::Boolean(left_val != right_val)),
+                    BinaryOperator::Lt => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l < r)),
+                        (Value::Decimal(l), Value::Decimal(r)) => Ok(Value::Boolean(l < r)),
+                        (Value::Text(l), Value::Text(r)) => Ok(Value::Boolean(l < r)),
+                        (Value::Date(l), Value::Date(r)) => Ok(Value::Boolean(l < r)),
+                        _ => Ok(Value::Boolean(false)),
+                    },
+                    BinaryOperator::Gt => match (&left_val, &right_val) {
+                        (Value::Integer(l), Value::Integer(r)) => Ok(Value::Boolean(l > r)),
+                        (Value::Decimal(l), Value::Decimal(r)) => Ok(Value::Boolean(l > r)),
+                        (Value::Text(l), Value::Text(r)) => Ok(Value::Boolean(l > r)),
+                        (Value::Date(l), Value::Date(r)) => Ok(Value::Boolean(l > r)),
+                        _ => Ok(Value::Boolean(false)),
+                    },
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Binary operator {:?} not supported in DISTINCT ON", op),
+                    }),
+                }
+            }
+            Expr::Extract { field, expr, .. } => {
+                // Handle EXTRACT expression
+                let val = self.evaluate_expr_with_row(expr, row, column_map)?;
+                if let Value::Date(date) = val {
+                    match field {
+                        DateTimeField::Year => Ok(Value::Integer(date.year() as i64)),
+                        DateTimeField::Month => Ok(Value::Integer(date.month() as i64)),
+                        DateTimeField::Day => Ok(Value::Integer(date.day() as i64)),
+                        _ => Err(YamlBaseError::Database {
+                            message: format!("Unsupported EXTRACT field: {:?}", field),
+                        }),
+                    }
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: "EXTRACT requires a date value".to_string(),
+                    })
+                }
+            }
+            Expr::Function(func) => {
+                // Other functions not yet supported in DISTINCT ON
+                Err(YamlBaseError::Database {
+                    message: format!("Function {} not supported in DISTINCT ON", func.name),
+                })
+            }
+            Expr::Value(value) => {
+                // Convert SQL Value to our Value type
+                match value {
+                    sqlparser::ast::Value::Number(n, _) => {
+                        if let Ok(i) = n.parse::<i64>() {
+                            Ok(Value::Integer(i))
+                        } else if let Ok(f) = n.parse::<f64>() {
+                            Ok(Value::Double(f))
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: format!("Invalid numeric value: {}", n),
+                            })
+                        }
+                    }
+                    sqlparser::ast::Value::SingleQuotedString(s) | sqlparser::ast::Value::DoubleQuotedString(s) => {
+                        Ok(Value::Text(s.clone()))
+                    }
+                    sqlparser::ast::Value::Boolean(b) => Ok(Value::Boolean(*b)),
+                    sqlparser::ast::Value::Null => Ok(Value::Null),
+                    _ => Err(YamlBaseError::Database {
+                        message: format!("Value type {:?} not supported in DISTINCT ON", value),
+                    }),
+                }
+            }
+            _ => Err(YamlBaseError::Database {
+                message: format!("Expression type {:?} not supported in DISTINCT ON", expr),
+            }),
+        }
+    }
+    
 
     fn create_virtual_table_from_result(
         &self,
@@ -12950,6 +13140,27 @@ impl QueryExecutor {
                 .collect()
         };
 
+        // Apply DISTINCT if specified
+        let distinct_rows = if select.distinct.is_some() {
+            // Convert CteProjectionItem to ProjectionItem for compatibility
+            let projection_items: Vec<ProjectionItem> = projection_items
+                .into_iter()
+                .enumerate()
+                .map(|(idx, item)| match item {
+                    CteProjectionItem::Column(_) => {
+                        ProjectionItem::TableColumn(selected_columns[idx].clone(), idx)
+                    }
+                    CteProjectionItem::Expression(expr) => {
+                        ProjectionItem::Expression(selected_columns[idx].clone(), expr)
+                    }
+                })
+                .collect();
+            
+            self.apply_distinct(projected_rows, &select.distinct, &projection_items)?
+        } else {
+            projected_rows
+        };
+
         let column_types = selected_columns
             .iter()
             .map(|_| crate::yaml::schema::SqlType::Text)
@@ -12960,7 +13171,7 @@ impl QueryExecutor {
         Ok(QueryResult {
             columns: selected_columns,
             column_types,
-            rows: projected_rows,
+            rows: distinct_rows,
         })
     }
 
@@ -12984,7 +13195,8 @@ impl QueryExecutor {
                 // UNION DISTINCT (default) - remove duplicates
                 // None means no explicit quantifier, which defaults to DISTINCT
                 left_rows.extend(right_rows);
-                self.apply_distinct(left_rows)
+                // For set operations, we just want standard DISTINCT behavior
+                self.apply_distinct(left_rows, &Some(Distinct::Distinct), &[])
             }
         }
     }
@@ -13018,8 +13230,8 @@ impl QueryExecutor {
             | SetQuantifier::AllByName => {
                 // EXCEPT DISTINCT (default) - remove all occurrences
                 // None means no explicit quantifier, which defaults to DISTINCT
-                let mut result = self.apply_distinct(left_rows)?;
-                let right_set = self.apply_distinct(right_rows)?;
+                let mut result = self.apply_distinct(left_rows, &Some(Distinct::Distinct), &[])?;
+                let right_set = self.apply_distinct(right_rows, &Some(Distinct::Distinct), &[])?;
 
                 result.retain(|row| !right_set.contains(row));
                 Ok(result)
@@ -13054,8 +13266,8 @@ impl QueryExecutor {
             | SetQuantifier::AllByName => {
                 // INTERSECT DISTINCT (default) - keep only distinct common rows
                 // None means no explicit quantifier, which defaults to DISTINCT
-                let left_set = self.apply_distinct(left_rows)?;
-                let right_set = self.apply_distinct(right_rows)?;
+                let left_set = self.apply_distinct(left_rows, &Some(Distinct::Distinct), &[])?;
+                let right_set = self.apply_distinct(right_rows, &Some(Distinct::Distinct), &[])?;
 
                 let result = left_set
                     .into_iter()
