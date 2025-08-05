@@ -12,7 +12,7 @@ use std::time::Duration;
 use tracing::debug;
 
 use crate::YamlBaseError;
-use crate::database::{Database, Storage, Table, Value};
+use crate::database::{Column, Database, Storage, Table, Value};
 
 #[derive(Clone)]
 pub struct QueryExecutor {
@@ -200,8 +200,8 @@ impl QueryExecutor {
             return self.execute_select_without_from(select).await;
         }
 
-        // Check if query has joins
-        if self.has_joins(&select.from) {
+        // Check if query has joins or derived tables
+        if self.has_joins(&select.from) || self.has_derived_tables(&select.from) {
             return self.execute_select_with_joins(db, select, query).await;
         }
 
@@ -824,6 +824,22 @@ impl QueryExecutor {
         from.len() > 1 || (!from.is_empty() && !from[0].joins.is_empty())
     }
 
+    fn has_derived_tables(&self, from: &[TableWithJoins]) -> bool {
+        for table_with_joins in from {
+            // Check main table
+            if matches!(&table_with_joins.relation, TableFactor::Derived { .. }) {
+                return true;
+            }
+            // Check joined tables
+            for join in &table_with_joins.joins {
+                if matches!(&join.relation, TableFactor::Derived { .. }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     async fn execute_select_with_joins(
         &self,
         db: &Database,
@@ -832,43 +848,142 @@ impl QueryExecutor {
     ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT with JOINs");
 
-        // Extract all tables involved in the query
-        let mut all_tables = Vec::new();
+        // First pass: Execute all derived tables and check for real tables
+        let mut derived_tables = std::collections::HashMap::<String, Table>::new();
+        let mut table_refs = Vec::new(); // (identifier, is_derived_table)
         let mut table_aliases = std::collections::HashMap::new();
 
         for table_with_joins in &select.from {
-            // Add the main table
-            let (table_name, alias) = self.extract_table_info(&table_with_joins.relation)?;
-            let table = db
-                .get_table(&table_name)
-                .ok_or_else(|| YamlBaseError::Database {
-                    message: format!("Table '{}' not found", table_name),
-                })?;
-
-            if let Some(alias_name) = alias {
-                table_aliases.insert(alias_name.clone(), table_name.clone());
-                // Use alias as the identifier in all_tables for proper resolution
-                all_tables.push((alias_name.clone(), table));
-            } else {
-                all_tables.push((table_name.clone(), table));
-            }
-
-            // Add joined tables
-            for join in &table_with_joins.joins {
-                let (join_table_name, join_alias) = self.extract_table_info(&join.relation)?;
-                let join_table =
-                    db.get_table(&join_table_name)
+            // Handle the main table/subquery
+            match &table_with_joins.relation {
+                TableFactor::Table { name, alias, .. } => {
+                    let table_name = name
+                        .0
+                        .first()
                         .ok_or_else(|| YamlBaseError::Database {
-                            message: format!("Table '{}' not found", join_table_name),
+                            message: "Invalid table name".to_string(),
+                        })?
+                        .value
+                        .clone();
+
+                    // Check that table exists
+                    db.get_table(&table_name)
+                        .ok_or_else(|| YamlBaseError::Database {
+                            message: format!("Table '{}' not found", table_name),
                         })?;
 
-                if let Some(alias_name) = join_alias {
-                    table_aliases.insert(alias_name.clone(), join_table_name.clone());
-                    // Use alias as the identifier in all_tables for proper resolution
-                    all_tables.push((alias_name.clone(), join_table));
-                } else {
-                    all_tables.push((join_table_name.clone(), join_table));
+                    let identifier =
+                        if let Some(alias_name) = alias.as_ref().map(|a| a.name.value.clone()) {
+                            table_aliases.insert(alias_name.clone(), table_name.clone());
+                            alias_name
+                        } else {
+                            table_name.clone()
+                        };
+
+                    table_refs.push((identifier, false)); // false = not derived
                 }
+                TableFactor::Derived {
+                    subquery, alias, ..
+                } => {
+                    // Execute the subquery
+                    let subquery_result = Box::pin(self.execute_query(subquery)).await?;
+
+                    // Get the alias (required for derived tables)
+                    let alias_name =
+                        alias
+                            .as_ref()
+                            .map(|a| a.name.value.clone())
+                            .ok_or_else(|| YamlBaseError::Database {
+                                message: "Derived table (subquery) must have an alias".to_string(),
+                            })?;
+
+                    // Convert subquery result to a virtual table
+                    let virtual_table =
+                        self.create_virtual_table_from_result(&alias_name, subquery_result)?;
+
+                    derived_tables.insert(alias_name.clone(), virtual_table);
+                    table_refs.push((alias_name.clone(), true)); // true = derived
+                }
+                _ => {
+                    return Err(YamlBaseError::NotImplemented(
+                        "This type of table reference is not yet supported".to_string(),
+                    ));
+                }
+            }
+
+            // Handle joined tables
+            for join in &table_with_joins.joins {
+                match &join.relation {
+                    TableFactor::Table { name, alias, .. } => {
+                        let table_name = name
+                            .0
+                            .first()
+                            .ok_or_else(|| YamlBaseError::Database {
+                                message: "Invalid table name".to_string(),
+                            })?
+                            .value
+                            .clone();
+
+                        // Check that table exists
+                        db.get_table(&table_name)
+                            .ok_or_else(|| YamlBaseError::Database {
+                                message: format!("Table '{}' not found", table_name),
+                            })?;
+
+                        let identifier = if let Some(alias_name) =
+                            alias.as_ref().map(|a| a.name.value.clone())
+                        {
+                            table_aliases.insert(alias_name.clone(), table_name.clone());
+                            alias_name
+                        } else {
+                            table_name.clone()
+                        };
+
+                        table_refs.push((identifier, false)); // false = not derived
+                    }
+                    TableFactor::Derived {
+                        subquery, alias, ..
+                    } => {
+                        // Execute the subquery
+                        let subquery_result = Box::pin(self.execute_query(subquery)).await?;
+
+                        // Get the alias (required for derived tables)
+                        let alias_name =
+                            alias
+                                .as_ref()
+                                .map(|a| a.name.value.clone())
+                                .ok_or_else(|| YamlBaseError::Database {
+                                    message: "Derived table (subquery) must have an alias"
+                                        .to_string(),
+                                })?;
+
+                        // Convert subquery result to a virtual table
+                        let virtual_table =
+                            self.create_virtual_table_from_result(&alias_name, subquery_result)?;
+
+                        derived_tables.insert(alias_name.clone(), virtual_table);
+                        table_refs.push((alias_name.clone(), true)); // true = derived
+                    }
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            "This type of table reference is not yet supported in JOINs"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Second pass: Build all_tables with references
+        let mut all_tables = Vec::new();
+        for (identifier, is_derived) in table_refs {
+            if is_derived {
+                all_tables.push((identifier.clone(), derived_tables.get(&identifier).unwrap()));
+            } else {
+                // Look up the actual table name (might be aliased)
+                let actual_table_name = table_aliases.get(&identifier).unwrap_or(&identifier);
+                let table = db.get_table(actual_table_name).unwrap();
+                all_tables.push((identifier, table));
             }
         }
 
@@ -935,31 +1050,6 @@ impl QueryExecutor {
             column_types,
             rows: final_rows,
         })
-    }
-
-    fn extract_table_info(
-        &self,
-        table_factor: &TableFactor,
-    ) -> crate::Result<(String, Option<String>)> {
-        match table_factor {
-            TableFactor::Table { name, alias, .. } => {
-                let table_name = name
-                    .0
-                    .first()
-                    .ok_or_else(|| YamlBaseError::Database {
-                        message: "Invalid table name".to_string(),
-                    })?
-                    .value
-                    .clone();
-
-                let alias_name = alias.as_ref().map(|a| a.name.value.clone());
-
-                Ok((table_name, alias_name))
-            }
-            _ => Err(YamlBaseError::NotImplemented(
-                "Only simple table references are supported in joins".to_string(),
-            )),
-        }
     }
 
     fn extract_columns(
@@ -1250,7 +1340,8 @@ impl QueryExecutor {
                         "Found InList expression: expr={:?}, negated={}",
                         expr, negated
                     );
-                    self.evaluate_in_list_async(expr, list, *negated, row, table).await
+                    self.evaluate_in_list_async(expr, list, *negated, row, table)
+                        .await
                 }
                 Expr::Like {
                     expr,
@@ -6528,6 +6619,36 @@ impl QueryExecutor {
         Ok(distinct_rows)
     }
 
+    fn create_virtual_table_from_result(
+        &self,
+        alias: &str,
+        result: QueryResult,
+    ) -> crate::Result<Table> {
+        // Create columns from the query result
+        let mut columns = Vec::new();
+        for (col_name, col_type) in result.columns.iter().zip(result.column_types.iter()) {
+            columns.push(Column {
+                name: col_name.clone(),
+                sql_type: col_type.clone(),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            });
+        }
+
+        // Create the virtual table
+        let mut table = Table::new(alias.to_string(), columns);
+
+        // Insert all rows from the query result
+        for row in result.rows {
+            table.insert_row(row)?;
+        }
+
+        Ok(table)
+    }
+
     fn apply_limit(&self, rows: Vec<Vec<Value>>, limit: &Expr) -> crate::Result<Vec<Vec<Value>>> {
         if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = limit {
             let limit_val: usize = n.parse().map_err(|_| YamlBaseError::Database {
@@ -7914,43 +8035,45 @@ impl QueryExecutor {
                     }
                     _ => {
                         // For comparison operators, evaluate as values
-                        let left_val = self.get_join_expr_value(left, row, tables, table_aliases)?;
-                        let right_val = self.get_join_expr_value(right, row, tables, table_aliases)?;
+                        let left_val =
+                            self.get_join_expr_value(left, row, tables, table_aliases)?;
+                        let right_val =
+                            self.get_join_expr_value(right, row, tables, table_aliases)?;
 
                         match op {
-                    BinaryOperator::Eq => Ok(left_val == right_val),
-                    BinaryOperator::NotEq => Ok(left_val != right_val),
-                    BinaryOperator::Lt => {
-                        if let Some(ord) = left_val.compare(&right_val) {
-                            Ok(ord.is_lt())
-                        } else {
-                            Ok(false)
-                        }
-                    }
-                    BinaryOperator::LtEq => {
-                        if let Some(ord) = left_val.compare(&right_val) {
-                            Ok(ord.is_le())
-                        } else {
-                            Ok(false)
-                        }
-                    }
-                    BinaryOperator::Gt => {
-                        if let Some(ord) = left_val.compare(&right_val) {
-                            Ok(ord.is_gt())
-                        } else {
-                            Ok(false)
-                        }
-                    }
-                    BinaryOperator::GtEq => {
-                        if let Some(ord) = left_val.compare(&right_val) {
-                            Ok(ord.is_ge())
-                        } else {
-                            Ok(false)
-                        }
-                    }
-                    _ => Err(YamlBaseError::NotImplemented(
-                        "This operator is not supported in JOIN conditions".to_string(),
-                    )),
+                            BinaryOperator::Eq => Ok(left_val == right_val),
+                            BinaryOperator::NotEq => Ok(left_val != right_val),
+                            BinaryOperator::Lt => {
+                                if let Some(ord) = left_val.compare(&right_val) {
+                                    Ok(ord.is_lt())
+                                } else {
+                                    Ok(false)
+                                }
+                            }
+                            BinaryOperator::LtEq => {
+                                if let Some(ord) = left_val.compare(&right_val) {
+                                    Ok(ord.is_le())
+                                } else {
+                                    Ok(false)
+                                }
+                            }
+                            BinaryOperator::Gt => {
+                                if let Some(ord) = left_val.compare(&right_val) {
+                                    Ok(ord.is_gt())
+                                } else {
+                                    Ok(false)
+                                }
+                            }
+                            BinaryOperator::GtEq => {
+                                if let Some(ord) = left_val.compare(&right_val) {
+                                    Ok(ord.is_ge())
+                                } else {
+                                    Ok(false)
+                                }
+                            }
+                            _ => Err(YamlBaseError::NotImplemented(
+                                "This operator is not supported in JOIN conditions".to_string(),
+                            )),
                         }
                     }
                 }
@@ -8087,7 +8210,7 @@ impl QueryExecutor {
                 negated,
             } => {
                 let value = self.get_join_expr_value(expr, row, tables, table_aliases)?;
-                
+
                 for item in list {
                     let item_value = self.get_join_expr_value(item, row, tables, table_aliases)?;
                     if self.compare_values_equal(&value, &item_value) {
@@ -10551,15 +10674,8 @@ impl QueryExecutor {
                 right,
             } => {
                 // Handle UNION, UNION ALL, INTERSECT, EXCEPT operations in main query
-                self.execute_cte_set_operation(
-                    db,
-                    op,
-                    set_quantifier,
-                    left,
-                    right,
-                    &cte_results,
-                )
-                .await
+                self.execute_cte_set_operation(db, op, set_quantifier, left, right, &cte_results)
+                    .await
             }
             _ => Err(YamlBaseError::NotImplemented(
                 "This type of query is not yet supported with CTEs".to_string(),
@@ -10593,7 +10709,7 @@ impl QueryExecutor {
                     break;
                 }
             }
-            
+
             // Check joined tables
             for join in &table_with_joins.joins {
                 if let TableFactor::Table { name, .. } = &join.relation {
@@ -10609,7 +10725,7 @@ impl QueryExecutor {
                     }
                 }
             }
-            
+
             if has_cte_references {
                 break;
             }
@@ -11146,15 +11262,15 @@ impl QueryExecutor {
                 let val = self.evaluate_expr_with_columns(expr, row, columns)?;
                 let low_val = self.evaluate_expr_with_columns(low, row, columns)?;
                 let high_val = self.evaluate_expr_with_columns(high, row, columns)?;
-                
-                let result = if let (Some(low_ord), Some(high_ord)) = 
-                    (val.compare(&low_val), val.compare(&high_val)) 
+
+                let result = if let (Some(low_ord), Some(high_ord)) =
+                    (val.compare(&low_val), val.compare(&high_val))
                 {
                     low_ord.is_ge() && high_ord.is_le()
                 } else {
                     false
                 };
-                
+
                 Ok(if *negated { !result } else { result })
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
@@ -11236,7 +11352,7 @@ impl QueryExecutor {
             Expr::BinaryOp { left, right, op } => {
                 let left_val = self.evaluate_expr_with_columns(left, row, columns)?;
                 let right_val = self.evaluate_expr_with_columns(right, row, columns)?;
-                
+
                 match op {
                     BinaryOperator::Plus => match (&left_val, &right_val) {
                         (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
@@ -11493,15 +11609,18 @@ impl QueryExecutor {
                 }
                 SelectItem::QualifiedWildcard(object_name, _) => {
                     // Handle table.* syntax
-                    let table_alias = object_name.0.first()
+                    let table_alias = object_name
+                        .0
+                        .first()
                         .map(|ident| ident.value.as_str())
                         .unwrap_or("");
-                    
+
                     // Include all columns that match the table alias
                     for (idx, col) in available_columns.iter().enumerate() {
                         if let Some(table_part) = col.split('.').next() {
                             if table_part == table_alias || table_alias.is_empty() {
-                                let column_name = col.split('.').next_back().unwrap_or(col).to_string();
+                                let column_name =
+                                    col.split('.').next_back().unwrap_or(col).to_string();
                                 selected_columns.push(column_name);
                                 projection_items.push(CteProjectionItem::Column(idx));
                             }
@@ -16269,6 +16388,60 @@ mod tests {
         let stmt = parse_statement("SELECT DISTINCT customer, product, quantity FROM orders");
         let result = executor.execute(&stmt).await.unwrap();
         assert_eq!(result.rows.len(), 4); // One duplicate row (Alice, Widget, 5)
+    }
+
+    #[tokio::test]
+    async fn test_derived_tables() {
+        let db = create_test_database().await;
+        let executor = create_test_executor_from_arc(db).await;
+
+        // Basic derived table
+        let stmt = parse_statement(
+            "SELECT * FROM (SELECT id, name FROM users WHERE id <= 2) AS filtered_records",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns, vec!["id", "name"]);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Integer(2));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
+
+        // Derived table with aggregation
+        let stmt = parse_statement("SELECT * FROM (SELECT COUNT(*) as total FROM users) AS stats");
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns, vec!["total"]);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Integer(3));
+
+        // JOIN with derived table
+        let stmt = parse_statement(
+            "SELECT u.name, s.name_count 
+             FROM users u
+             JOIN (SELECT name, COUNT(*) as name_count FROM users GROUP BY name) AS s
+             ON u.name = s.name
+             WHERE u.id = 1",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns, vec!["u.name", "s.name_count"]);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[0][1], Value::Integer(1)); // Only one Alice
+
+        // Multiple derived tables
+        let stmt = parse_statement(
+            "SELECT a.id, b.name 
+             FROM (SELECT id FROM users WHERE id <= 2) AS a
+             JOIN (SELECT id, name FROM users) AS b
+             ON a.id = b.id",
+        );
+        let result = executor.execute(&stmt).await.unwrap();
+        assert_eq!(result.columns, vec!["a.id", "b.name"]);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Integer(1));
+        assert_eq!(result.rows[0][1], Value::Text("Alice".to_string()));
+        assert_eq!(result.rows[1][0], Value::Integer(2));
+        assert_eq!(result.rows[1][1], Value::Text("Bob".to_string()));
     }
 
     #[tokio::test]
