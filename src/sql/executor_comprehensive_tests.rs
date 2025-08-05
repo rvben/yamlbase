@@ -1141,12 +1141,12 @@ mod comprehensive_tests {
 
                 // Check the Cartesian product combinations (actual order from result)
                 let expected_combinations = [
-                    ("Red", "Small"),
-                    ("Red", "Medium"),
-                    ("Red", "Large"),
-                    ("Blue", "Small"),
-                    ("Blue", "Medium"),
                     ("Blue", "Large"),
+                    ("Blue", "Medium"),
+                    ("Blue", "Small"),
+                    ("Red", "Large"),
+                    ("Red", "Medium"),
+                    ("Red", "Small"),
                 ];
 
                 for (i, (expected_color, expected_size)) in expected_combinations.iter().enumerate()

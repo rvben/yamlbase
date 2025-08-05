@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.12] - 2025-08-05
+
 ### Added
 - **DISTINCT ON Support** (PostgreSQL-specific feature):
   - Support for DISTINCT ON clause to keep only the first row for each unique combination of specified columns
@@ -408,6 +410,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No indexes beyond primary keys
 - SQL Server protocol not yet implemented
 
+[0.4.12]: https://github.com/rvben/yamlbase/releases/tag/v0.4.12
+[0.4.11]: https://github.com/rvben/yamlbase/releases/tag/v0.4.11
 [0.4.10]: https://github.com/rvben/yamlbase/releases/tag/v0.4.10
 [0.4.9]: https://github.com/rvben/yamlbase/releases/tag/v0.4.9
 [0.4.8]: https://github.com/rvben/yamlbase/releases/tag/v0.4.8
