@@ -6,10 +6,10 @@ use yamlbase::yaml::schema::SqlType;
 #[tokio::test]
 async fn test_complex_join_conditions() {
     println!("=== COMPLEX JOIN CONDITIONS TEST ===");
-    
+
     // Create a test database with projects table
     let mut db = Database::new("test_db".to_string());
-    
+
     // Create projects table with all required columns
     let mut projects_table = Table::new(
         "projects".to_string(),
@@ -79,94 +79,111 @@ async fn test_complex_join_conditions() {
             },
         ],
     );
-    
+
     // Add test data
     // Parent projects
-    projects_table.insert_row(vec![
-        Value::Text("PROJ001".to_string()),
-        Value::Null,
-        Value::Text("Published".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("Y".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Main Project".to_string()),
-    ]).unwrap();
-    
-    projects_table.insert_row(vec![
-        Value::Text("PROJ002".to_string()),
-        Value::Null,
-        Value::Text("Published".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("Y".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Main Project".to_string()),
-    ]).unwrap();
-    
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ001".to_string()),
+            Value::Null,
+            Value::Text("Published".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("Y".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Main Project".to_string()),
+        ])
+        .unwrap();
+
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ002".to_string()),
+            Value::Null,
+            Value::Text("Published".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("Y".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Main Project".to_string()),
+        ])
+        .unwrap();
+
     // Child projects that should match
-    projects_table.insert_row(vec![
-        Value::Text("PROJ001-SUB1".to_string()),
-        Value::Text("PROJ001".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("Y".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Sub Project".to_string()),
-    ]).unwrap();
-    
-    projects_table.insert_row(vec![
-        Value::Text("PROJ002-SUB1".to_string()),
-        Value::Text("PROJ002".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("Y".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Sub Project".to_string()),
-    ]).unwrap();
-    
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ001-SUB1".to_string()),
+            Value::Text("PROJ001".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("Y".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Sub Project".to_string()),
+        ])
+        .unwrap();
+
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ002-SUB1".to_string()),
+            Value::Text("PROJ002".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("Y".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Sub Project".to_string()),
+        ])
+        .unwrap();
+
     // Child projects that should NOT match (various disqualifying conditions)
-    projects_table.insert_row(vec![
-        Value::Text("PROJ001-SUB2".to_string()),
-        Value::Text("PROJ001".to_string()),
-        Value::Text("Draft".to_string()), // Not Published
-        Value::Text("Active".to_string()),
-        Value::Text("Y".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Sub Project".to_string()),
-    ]).unwrap();
-    
-    projects_table.insert_row(vec![
-        Value::Text("PROJ001-SUB3".to_string()),
-        Value::Text("PROJ001".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Cancelled".to_string()), // Cancelled
-        Value::Text("Y".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Sub Project".to_string()),
-    ]).unwrap();
-    
-    projects_table.insert_row(vec![
-        Value::Text("PROJ002-SUB2".to_string()),
-        Value::Text("PROJ002".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("N".to_string()), // Not active
-        Value::Text("N".to_string()),
-        Value::Text("Sub Project".to_string()),
-    ]).unwrap();
-    
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ001-SUB2".to_string()),
+            Value::Text("PROJ001".to_string()),
+            Value::Text("Draft".to_string()), // Not Published
+            Value::Text("Active".to_string()),
+            Value::Text("Y".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Sub Project".to_string()),
+        ])
+        .unwrap();
+
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ001-SUB3".to_string()),
+            Value::Text("PROJ001".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Cancelled".to_string()), // Cancelled
+            Value::Text("Y".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Sub Project".to_string()),
+        ])
+        .unwrap();
+
+    projects_table
+        .insert_row(vec![
+            Value::Text("PROJ002-SUB2".to_string()),
+            Value::Text("PROJ002".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("N".to_string()), // Not active
+            Value::Text("N".to_string()),
+            Value::Text("Sub Project".to_string()),
+        ])
+        .unwrap();
+
     db.add_table(projects_table).unwrap();
     let storage = Storage::new(db);
     let executor = QueryExecutor::new(Arc::new(storage)).await.unwrap();
-    
+
     // Test 1: Single AND condition (currently works)
     println!("\n1. Testing single AND condition in JOIN:");
-    let stmt = parse_sql(r#"
+    let stmt = parse_sql(
+        r#"
         SELECT COUNT(*)
         FROM projects parent
         INNER JOIN projects child
             ON parent.project_id = child.parent_id
             AND child.version = 'Published'
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match executor.execute(&stmt[0]).await {
         Ok(result) => {
             println!("   ✅ Single AND condition works!");
@@ -174,20 +191,23 @@ async fn test_complex_join_conditions() {
             assert_eq!(result.rows[0][0], Value::Integer(4)); // Should match 4 children with Published version
         }
         Err(e) => {
-            println!("   ❌ Failed with: {}", e);
+            println!("   ❌ Failed with: {e}");
         }
     }
-    
+
     // Test 2: Two AND conditions
     println!("\n2. Testing two AND conditions in JOIN:");
-    let stmt = parse_sql(r#"
+    let stmt = parse_sql(
+        r#"
         SELECT COUNT(*)
         FROM projects parent
         INNER JOIN projects child
             ON parent.project_id = child.parent_id
             AND child.version = 'Published'
             AND child.is_active = 'Y'
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match executor.execute(&stmt[0]).await {
         Ok(result) => {
             println!("   ✅ Two AND conditions work!");
@@ -195,22 +215,24 @@ async fn test_complex_join_conditions() {
             assert_eq!(result.rows[0][0], Value::Integer(3)); // Should match 3 active published children
         }
         Err(e) => {
-            println!("   ❌ Failed with: {}", e);
+            println!("   ❌ Failed with: {e}");
             println!("   This is expected to fail in 0.4.6");
         }
     }
-    
-    
+
     // Test 3: Mixed condition types (equality + NOT IN)
     println!("\n3. Testing mixed condition types (equality + NOT IN):");
-    let stmt = parse_sql(r#"
+    let stmt = parse_sql(
+        r#"
         SELECT COUNT(*)
         FROM projects parent
         INNER JOIN projects child
             ON parent.project_id = child.parent_id
             AND child.version = 'Published'
             AND child.status NOT IN ('Cancelled', 'Closed')
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match executor.execute(&stmt[0]).await {
         Ok(result) => {
             println!("   ✅ Mixed conditions work!");
@@ -218,14 +240,15 @@ async fn test_complex_join_conditions() {
             assert_eq!(result.rows[0][0], Value::Integer(3)); // Should exclude the cancelled one
         }
         Err(e) => {
-            println!("   ❌ Failed with: {}", e);
+            println!("   ❌ Failed with: {e}");
             println!("   This is expected to fail in 0.4.6");
         }
     }
-    
+
     // Test 4: Full production query pattern
     println!("\n4. Testing full production query pattern:");
-    let stmt = parse_sql(r#"
+    let stmt = parse_sql(
+        r#"
         WITH ProjectHierarchy AS (
             SELECT
                 parent.project_id AS main_project_id,
@@ -242,7 +265,9 @@ async fn test_complex_join_conditions() {
                 AND parent.status NOT IN ('Cancelled', 'Closed')
         )
         SELECT COUNT(*) FROM ProjectHierarchy
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match executor.execute(&stmt[0]).await {
         Ok(result) => {
             println!("   ✅ Full production query works!");
@@ -250,10 +275,10 @@ async fn test_complex_join_conditions() {
             assert_eq!(result.rows[0][0], Value::Integer(2)); // Should match only PROJ001-SUB1 and PROJ002-SUB1
         }
         Err(e) => {
-            println!("   ❌ Failed with: {}", e);
+            println!("   ❌ Failed with: {e}");
             println!("   This is the target query for 0.4.7");
         }
     }
-    
+
     println!("\n=== COMPLEX JOIN CONDITIONS TEST COMPLETE ===");
 }

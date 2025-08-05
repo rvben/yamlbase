@@ -1462,9 +1462,9 @@ mod comprehensive_tests {
         let storage_arc = Arc::new(storage);
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
-
         // Test 1: Simple CTE cross-reference
-        let simple_cross_ref_query = parse_sql(r#"
+        let simple_cross_ref_query = parse_sql(
+            r#"
             WITH Numbers AS (
                 SELECT id FROM test_table WHERE id <= 2
             ),
@@ -1472,7 +1472,9 @@ mod comprehensive_tests {
                 SELECT id FROM Numbers
             )
             SELECT * FROM Doubled ORDER BY id
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&simple_cross_ref_query[0]).await;
         match result {
@@ -1488,7 +1490,8 @@ mod comprehensive_tests {
         }
 
         // Test 2: CTE with CROSS JOIN referencing another CTE
-        let cross_join_ref_query = parse_sql(r#"
+        let cross_join_ref_query = parse_sql(
+            r#"
             WITH DateRange AS (
                 SELECT 
                     '2025-01-01' AS START_DATE,
@@ -1501,7 +1504,9 @@ mod comprehensive_tests {
                 WHERE a.date_col BETWEEN dr.START_DATE AND dr.END_DATE
             )
             SELECT COUNT(*) as cnt FROM FilteredData
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&cross_join_ref_query[0]).await;
         match result {
@@ -1517,7 +1522,8 @@ mod comprehensive_tests {
         }
 
         // Test 3: Deep CTE chain to verify cross-references work at multiple levels
-        let deep_cte_chain_query = parse_sql(r#"
+        let deep_cte_chain_query = parse_sql(
+            r#"
             WITH Base AS (
                 SELECT id, col FROM test_table WHERE id <= 2
             ),
@@ -1528,7 +1534,9 @@ mod comprehensive_tests {
                 SELECT * FROM Level1
             )
             SELECT * FROM Level2 ORDER BY id
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&deep_cte_chain_query[0]).await;
         match result {
@@ -1614,7 +1622,8 @@ mod comprehensive_tests {
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
         // Test UNION ALL with CTE results in main query
-        let union_all_main_query = parse_sql(r#"
+        let union_all_main_query = parse_sql(
+            r#"
             WITH Set1 AS (
                 SELECT id FROM table1 WHERE active = 'Y'
             ),
@@ -1625,12 +1634,17 @@ mod comprehensive_tests {
             UNION ALL 
             SELECT * FROM Set2
             ORDER BY id
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let result = executor.execute(&union_all_main_query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ CTE UNION ALL in main query works! Got {} rows", res.rows.len());
+                println!(
+                    "✅ CTE UNION ALL in main query works! Got {} rows",
+                    res.rows.len()
+                );
                 assert_eq!(res.rows.len(), 4); // 2 from Set1 + 2 from Set2
                 assert_eq!(res.columns, vec!["id"]);
                 assert_eq!(res.rows[0], vec![Value::Integer(1)]);
