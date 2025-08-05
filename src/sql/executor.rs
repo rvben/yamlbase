@@ -205,8 +205,8 @@ impl QueryExecutor {
             return self.execute_select_with_joins(db, select, query).await;
         }
 
-        // Get the table
-        let table_name = self.extract_table_name(&select.from)?;
+        // Get the table and alias information
+        let (table_name, table_alias) = self.extract_table_name_and_alias(&select.from)?;
         let table = db
             .get_table(&table_name)
             .ok_or_else(|| YamlBaseError::Database {
@@ -221,7 +221,7 @@ impl QueryExecutor {
         }
 
         // Get column names for projection
-        let columns = self.extract_columns(select, table)?;
+        let columns = self.extract_columns(select, table, table_alias.as_deref())?;
 
         // Filter rows based on WHERE clause
         let filtered_rows = self
@@ -792,7 +792,7 @@ impl QueryExecutor {
         }
     }
 
-    fn extract_table_name(&self, from: &[TableWithJoins]) -> crate::Result<String> {
+    fn extract_table_name_and_alias(&self, from: &[TableWithJoins]) -> crate::Result<(String, Option<String>)> {
         if from.is_empty() {
             return Err(YamlBaseError::Database {
                 message: "No FROM clause specified".to_string(),
@@ -806,14 +806,18 @@ impl QueryExecutor {
         }
 
         match &from[0].relation {
-            TableFactor::Table { name, .. } => Ok(name
-                .0
-                .first()
-                .ok_or_else(|| YamlBaseError::Database {
-                    message: "Invalid table name".to_string(),
-                })?
-                .value
-                .clone()),
+            TableFactor::Table { name, alias, .. } => {
+                let table_name = name
+                    .0
+                    .first()
+                    .ok_or_else(|| YamlBaseError::Database {
+                        message: "Invalid table name".to_string(),
+                    })?
+                    .value
+                    .clone();
+                let table_alias = alias.as_ref().map(|a| a.name.value.clone());
+                Ok((table_name, table_alias))
+            }
             _ => Err(YamlBaseError::NotImplemented(
                 "Only simple table references are supported".to_string(),
             )),
@@ -1056,6 +1060,7 @@ impl QueryExecutor {
         &self,
         select: &Select,
         table: &Table,
+        table_alias: Option<&str>,
     ) -> crate::Result<Vec<ProjectionItem>> {
         let mut columns = Vec::new();
         let mut column_counter = 1;
@@ -1073,6 +1078,45 @@ impl QueryExecutor {
                                 }
                             })?;
                             columns.push(ProjectionItem::TableColumn(col_name.clone(), col_idx));
+                        }
+                        Expr::CompoundIdentifier(parts) => {
+                            // Handle table.column syntax (e.g., a.SAP_PROJECT_ID)
+                            if parts.len() == 2 {
+                                let table_ref = &parts[0].value;
+                                let col_name = &parts[1].value;
+                                
+                                // Check if table reference matches the table alias or name
+                                let matches = if let Some(alias) = table_alias {
+                                    table_ref == alias
+                                } else {
+                                    table_ref == &table.name
+                                };
+                                
+                                if matches {
+                                    let col_idx = table.get_column_index(col_name).ok_or_else(|| {
+                                        YamlBaseError::Database {
+                                            message: format!("Column '{}' not found", col_name),
+                                        }
+                                    })?;
+                                    columns.push(ProjectionItem::TableColumn(col_name.clone(), col_idx));
+                                } else {
+                                    // If table ref doesn't match, treat as expression
+                                    let col_name = format!("column_{}", column_counter);
+                                    column_counter += 1;
+                                    columns.push(ProjectionItem::Expression(
+                                        col_name,
+                                        Box::new(expr.clone()),
+                                    ));
+                                }
+                            } else {
+                                // Multi-part identifier, treat as expression
+                                let col_name = format!("column_{}", column_counter);
+                                column_counter += 1;
+                                columns.push(ProjectionItem::Expression(
+                                    col_name,
+                                    Box::new(expr.clone()),
+                                ));
+                            }
                         }
                         _ => {
                             // Check if this is a function that needs row context
@@ -1117,6 +1161,41 @@ impl QueryExecutor {
                                 })?;
                             columns.push(ProjectionItem::TableColumn(alias.value.clone(), col_idx));
                         }
+                        Expr::CompoundIdentifier(parts) => {
+                            // Handle table.column syntax with alias
+                            if parts.len() == 2 {
+                                let table_ref = &parts[0].value;
+                                let col_name = &parts[1].value;
+                                
+                                // Check if table reference matches the table alias or name
+                                let matches = if let Some(alias_str) = table_alias {
+                                    table_ref == alias_str
+                                } else {
+                                    table_ref == &table.name
+                                };
+                                
+                                if matches {
+                                    let col_idx = table.get_column_index(col_name).ok_or_else(|| {
+                                        YamlBaseError::Database {
+                                            message: format!("Column '{}' not found", col_name),
+                                        }
+                                    })?;
+                                    columns.push(ProjectionItem::TableColumn(alias.value.clone(), col_idx));
+                                } else {
+                                    // If table ref doesn't match, treat as expression
+                                    columns.push(ProjectionItem::Expression(
+                                        alias.value.clone(),
+                                        Box::new(expr.clone()),
+                                    ));
+                                }
+                            } else {
+                                // Multi-part identifier, treat as expression
+                                columns.push(ProjectionItem::Expression(
+                                    alias.value.clone(),
+                                    Box::new(expr.clone()),
+                                ));
+                            }
+                        }
                         _ => {
                             // Check if this is a function that needs row context
                             if let Expr::Function(_) = expr {
@@ -1150,10 +1229,26 @@ impl QueryExecutor {
                         columns.push(ProjectionItem::TableColumn(col.name.clone(), idx));
                     }
                 }
-                _ => {
-                    return Err(YamlBaseError::NotImplemented(
-                        "Complex projections are not yet supported".to_string(),
-                    ));
+                SelectItem::QualifiedWildcard(object_name, _) => {
+                    // Handle table.* syntax - only include columns from the specified table
+                    let wildcard_alias = object_name
+                        .0
+                        .first()
+                        .map(|ident| ident.value.as_str())
+                        .unwrap_or("");
+                    
+                    // Check if the wildcard alias matches the table alias or table name
+                    let matches = if let Some(alias) = table_alias {
+                        wildcard_alias == alias
+                    } else {
+                        wildcard_alias == table.name.as_str()
+                    };
+                    
+                    if matches {
+                        for (idx, col) in table.columns.iter().enumerate() {
+                            columns.push(ProjectionItem::TableColumn(col.name.clone(), idx));
+                        }
+                    }
                 }
             }
         }
@@ -2348,6 +2443,37 @@ impl QueryExecutor {
                         }),
                     }
                 }
+                Expr::InList {
+                    expr,
+                    list,
+                    negated,
+                } => {
+                    // Get the value to check
+                    let value = self.get_expr_value_async(expr, row, table).await?;
+                    
+                    // Check if the value is in the list
+                    let mut found = false;
+                    for list_expr in list {
+                        match list_expr {
+                            Expr::Value(v) => {
+                                let list_value = self.sql_value_to_db_value(v)?;
+                                if value == list_value {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                let list_value = self.get_expr_value_async(list_expr, row, table).await?;
+                                if value == list_value {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    Ok(Value::Boolean(if *negated { !found } else { found }))
+                }
                 _ => Err(YamlBaseError::NotImplemented(format!(
                     "Expression type not supported in get_expr_value_async: {:?}",
                     expr
@@ -2766,6 +2892,37 @@ impl QueryExecutor {
                         op
                     ))),
                 }
+            }
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                // Get the value to check
+                let value = self.get_expr_value(expr, row, table)?;
+                
+                // Check if the value is in the list
+                let mut found = false;
+                for list_expr in list {
+                    match list_expr {
+                        Expr::Value(v) => {
+                            let list_value = self.sql_value_to_db_value(v)?;
+                            if value == list_value {
+                                found = true;
+                                break;
+                            }
+                        }
+                        _ => {
+                            let list_value = self.get_expr_value(list_expr, row, table)?;
+                            if value == list_value {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                Ok(Value::Boolean(if *negated { !found } else { found }))
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in get_expr_value: {:?}",
@@ -9223,10 +9380,40 @@ impl QueryExecutor {
                         }
                     }
                 }
-                _ => {
-                    return Err(YamlBaseError::NotImplemented(
-                        "Complex projections are not yet supported".to_string(),
-                    ));
+                SelectItem::QualifiedWildcard(object_name, _) => {
+                    // Handle table.* syntax for joined tables
+                    let table_ref = object_name
+                        .0
+                        .first()
+                        .map(|ident| ident.value.as_str())
+                        .unwrap_or("");
+                    
+                    // Resolve table alias if needed
+                    let table_ref_string = table_ref.to_string();
+                    let actual_table_name = table_aliases.get(table_ref).unwrap_or(&table_ref_string);
+                    
+                    // Find the table and include all its columns
+                    let mut found = false;
+                    for (table_idx, (table_name, table)) in tables.iter().enumerate() {
+                        if table_name == actual_table_name || table_ref == table_name {
+                            found = true;
+                            for (col_idx, col) in table.columns.iter().enumerate() {
+                                let display_name = col.name.clone();
+                                columns.push(JoinedColumn::TableColumn(
+                                    display_name,
+                                    table_idx,
+                                    col_idx,
+                                ));
+                            }
+                            break;
+                        }
+                    }
+                    
+                    if !found {
+                        return Err(YamlBaseError::Database {
+                            message: format!("Table '{}' not found in FROM clause", table_ref),
+                        });
+                    }
                 }
             }
         }
@@ -10526,9 +10713,20 @@ impl QueryExecutor {
                     if let Some(&col_idx) = column_map.get(&col_name) {
                         row.get(col_idx).cloned().unwrap_or(Value::Null)
                     } else {
-                        return Err(YamlBaseError::Database {
-                            message: format!("Column '{}' not found in CTE result", col_name),
-                        });
+                        // Try case-insensitive lookup
+                        let col_name_lower = col_name.to_lowercase();
+                        let found_idx = column_map
+                            .iter()
+                            .find(|(k, _)| k.to_lowercase() == col_name_lower)
+                            .map(|(_, &idx)| idx);
+                        
+                        if let Some(col_idx) = found_idx {
+                            row.get(col_idx).cloned().unwrap_or(Value::Null)
+                        } else {
+                            return Err(YamlBaseError::Database {
+                                message: format!("Column '{}' not found in CTE result", col_name),
+                            });
+                        }
                     }
                 }
                 Expr::CompoundIdentifier(parts) => {
@@ -10615,6 +10813,7 @@ impl QueryExecutor {
         // Execute each CTE in order - CTEs can reference previously defined CTEs
         for cte_table in &with.cte_tables {
             let cte_name = cte_table.alias.name.value.clone();
+            eprintln!("DEBUG: Starting to execute CTE '{}'", cte_name);
             debug!(
                 "Executing CTE: {} (with {} existing CTEs available)",
                 cte_name,
@@ -10622,11 +10821,14 @@ impl QueryExecutor {
             );
 
             // Execute the CTE query with access to previously defined CTEs
-            let cte_result = match &cte_table.query.body.as_ref() {
+            let mut cte_result = match &cte_table.query.body.as_ref() {
                 SetExpr::Select(select) => {
                     // Pass the current CTE results so this CTE can reference previous ones
-                    self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results)
-                        .await?
+                    let result = self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results)
+                        .await?;
+                    eprintln!("DEBUG: CTE '{}' query returned {} columns: {:?}", 
+                             cte_name, result.columns.len(), result.columns);
+                    result
                 }
                 SetExpr::SetOperation {
                     op,
@@ -10652,7 +10854,29 @@ impl QueryExecutor {
                 }
             };
 
+            // Strip table prefixes from column names in CTE results
+            // This ensures CTEs expose unqualified column names for outer queries
+            cte_result.columns = cte_result.columns
+                .into_iter()
+                .map(|col| {
+                    if col.contains('.') {
+                        // Extract just the column name part after the dot
+                        col.split('.').next_back().unwrap_or(&col).to_string()
+                    } else {
+                        col
+                    }
+                })
+                .collect();
+
             // Store the CTE result for later reference by subsequent CTEs and main query
+            eprintln!(
+                "DEBUG: Storing CTE '{}' with columns: {:?}", 
+                cte_name, cte_result.columns
+            );
+            debug!(
+                "Storing CTE '{}' with columns: {:?}", 
+                cte_name, cte_result.columns
+            );
             cte_results.insert(cte_name.clone(), cte_result);
             debug!(
                 "CTE {} executed successfully, now {} CTEs available",
@@ -10733,7 +10957,12 @@ impl QueryExecutor {
 
         // If no CTE references anywhere, execute normally
         if !has_cte_references {
-            return self.execute_select(db, select, query).await;
+            let result = self.execute_select(db, select, query).await;
+            if let Ok(ref res) = result {
+                eprintln!("DEBUG: Regular SELECT (no CTE refs) returned {} columns: {:?}", 
+                         res.columns.len(), res.columns);
+            }
+            return result;
         }
 
         // Handle CTE references - support both single table and JOIN queries with CTE references
@@ -10744,6 +10973,7 @@ impl QueryExecutor {
             .any(|table_with_joins| !table_with_joins.joins.is_empty());
 
         if has_joins || select.from.len() > 1 {
+            eprintln!("DEBUG: Using execute_complex_cte_query path");
             // Handle complex queries with JOINs involving CTEs
             return self
                 .execute_complex_cte_query(db, select, query, cte_results)
@@ -10759,6 +10989,8 @@ impl QueryExecutor {
                 .unwrap_or_else(String::new);
 
             if let Some(cte_result) = cte_results.get(&table_name) {
+                eprintln!("DEBUG: Found CTE '{}' with {} columns: {:?}", 
+                         table_name, cte_result.columns.len(), cte_result.columns);
                 // Use the CTE result as the data source
                 let mut result_rows = cte_result.rows.clone();
                 let result_columns = cte_result.columns.clone();
@@ -10856,9 +11088,10 @@ impl QueryExecutor {
                                     CteProjectionItem::Column(idx) => {
                                         row.get(*idx).cloned().unwrap_or(Value::Null)
                                     }
-                                    CteProjectionItem::Expression(_expr) => {
-                                        // Non-aggregate expressions not yet fully supported
-                                        Value::Null
+                                    CteProjectionItem::Expression(expr) => {
+                                        // Evaluate the expression with the row data
+                                        self.evaluate_expr_with_columns(expr, &row, &result_columns)
+                                            .unwrap_or(Value::Null)
                                     }
                                 })
                                 .collect()
@@ -11031,6 +11264,7 @@ impl QueryExecutor {
             let table_data = self
                 .get_table_data_from_context(context, &select.from[0].relation)
                 .await?;
+            eprintln!("DEBUG execute_cte_complex_select: table_data.columns = {:?}", table_data.columns);
             return self
                 .apply_cte_query_clauses(table_data.rows, table_data.columns, select, query)
                 .await;
@@ -11276,6 +11510,26 @@ impl QueryExecutor {
             Expr::Nested(inner) => {
                 // Handle parenthesized expressions by evaluating the inner expression
                 self.evaluate_where_condition_with_columns(inner, row, columns)
+            }
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                // Evaluate the expression to get the value to check
+                let value = self.evaluate_expr_with_columns(expr, row, columns)?;
+                
+                // Check if the value is in the list
+                let mut found = false;
+                for list_expr in list {
+                    let list_value = self.evaluate_expr_with_columns(list_expr, row, columns)?;
+                    if value == list_value {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                Ok(if *negated { !found } else { found })
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "WHERE expression {:?} not supported in CTE context",
@@ -11538,6 +11792,26 @@ impl QueryExecutor {
                 // Handle parenthesized expressions by evaluating the inner expression
                 self.evaluate_expr_with_columns(inner, row, columns)
             }
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                // Evaluate the expression to get the value to check
+                let value = self.evaluate_expr_with_columns(expr, row, columns)?;
+                
+                // Check if the value is in the list
+                let mut found = false;
+                for list_expr in list {
+                    let list_value = self.evaluate_expr_with_columns(list_expr, row, columns)?;
+                    if value == list_value {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                Ok(Value::Boolean(if *negated { !found } else { found }))
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in CTE context",
                 expr
@@ -11580,20 +11854,32 @@ impl QueryExecutor {
                             selected_columns.push(column_name);
                             projection_items.push(CteProjectionItem::Column(idx));
                         } else {
-                            // Try to find column by unqualified name (ignoring table prefix)
+                            // Try case-insensitive match
+                            let column_name_lower = column_name.to_lowercase();
+                            eprintln!("DEBUG: Looking for column '{}' (lowercase: '{}') in available columns: {:?}", 
+                                   column_name, column_name_lower, available_columns);
                             if let Some(idx) = available_columns
                                 .iter()
-                                .position(|c| c.split('.').next_back().unwrap_or(c) == column_name)
+                                .position(|c| c.to_lowercase() == column_name_lower)
                             {
                                 selected_columns.push(column_name);
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
-                                return Err(YamlBaseError::Database {
-                                    message: format!(
-                                        "Column '{}' not found in CTE result",
-                                        column_name
-                                    ),
-                                });
+                                // Try to find column by unqualified name (ignoring table prefix)
+                                if let Some(idx) = available_columns
+                                    .iter()
+                                    .position(|c| c.split('.').next_back().unwrap_or(c).to_lowercase() == column_name_lower)
+                                {
+                                    selected_columns.push(column_name);
+                                    projection_items.push(CteProjectionItem::Column(idx));
+                                } else {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Column '{}' not found in CTE result",
+                                            column_name
+                                        ),
+                                    });
+                                }
                             }
                         }
                     } else if let Expr::CompoundIdentifier(parts) = expr {
@@ -12258,12 +12544,20 @@ impl QueryExecutor {
 
             // Check if this is a CTE reference
             if let Some(cte_result) = context.cte_results.get(&table_name) {
+                debug!(
+                    "Found CTE '{}' with columns: {:?}", 
+                    table_name, cte_result.columns
+                );
                 // Create qualified column names using the alias
                 let qualified_columns: Vec<String> = cte_result
                     .columns
                     .iter()
                     .map(|col| format!("{}.{}", table_alias, col))
                     .collect();
+                debug!(
+                    "Returning qualified columns: {:?}", 
+                    qualified_columns
+                );
 
                 return Ok(QueryResult {
                     columns: qualified_columns,
@@ -12373,8 +12667,10 @@ impl QueryExecutor {
         }
 
         // Apply projection (SELECT clause)
+        debug!("Processing CTE projection with available columns: {:?}", columns);
         let (selected_columns, projection_items) =
             self.process_cte_projection(&select.projection, &columns)?;
+        debug!("After projection, selected columns: {:?}", selected_columns);
 
         // Check if we have aggregate functions like COUNT(*) without GROUP BY
         let has_aggregates = projection_items.iter().any(|item| {
@@ -12535,9 +12831,10 @@ impl QueryExecutor {
                             CteProjectionItem::Column(idx) => {
                                 row.get(*idx).cloned().unwrap_or(Value::Null)
                             }
-                            CteProjectionItem::Expression(_expr) => {
-                                // Non-aggregate expressions not yet fully supported
-                                Value::Null
+                            CteProjectionItem::Expression(expr) => {
+                                // Evaluate the expression with the row data
+                                self.evaluate_expr_with_columns(expr, &row, &columns)
+                                    .unwrap_or(Value::Null)
                             }
                         })
                         .collect()
@@ -12550,6 +12847,8 @@ impl QueryExecutor {
             .map(|_| crate::yaml::schema::SqlType::Text)
             .collect();
 
+        debug!("Returning QueryResult with {} columns: {:?}", 
+               selected_columns.len(), selected_columns);
         Ok(QueryResult {
             columns: selected_columns,
             column_types,

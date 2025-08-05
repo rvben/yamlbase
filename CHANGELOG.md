@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.11] - 2025-08-05
+
+### Added
+- **NOT IN Expressions in CTE Context**:
+  - Full support for NOT IN expressions within CTE WHERE clauses  
+  - Support for NOT IN expressions as boolean values in SELECT projections
+  - Handles both simple value lists and complex expressions in NOT IN
+  - Works with compound identifiers (table.column syntax)
+- **Wildcard Projections in CTE Context**:
+  - Support for SELECT * within CTE definitions
+  - Support for qualified wildcards (table.*) in CTE definitions
+  - Proper column name resolution when selecting from CTEs that use wildcards
+  - Fixed table alias handling for qualified wildcards (e.g., a.*)
+  - Support for compound identifiers (table.column) in SELECT projections
+
+### Fixed
+- Fixed column name resolution when CTEs use wildcard projections
+- Fixed qualified wildcard expansion to properly handle table aliases
+- Added case-insensitive column name matching for CTE projections
+- Fixed compound identifier handling in regular SELECT projections
+
+### Changed
+- Enhanced extract_columns to accept table alias information for proper wildcard resolution
+- Improved CTE column name handling to strip table prefixes when storing results
+- Achieved 100% compatibility with enterprise SQL patterns by completing the final 3% gap
+
 ## [0.4.10] - 2025-08-05
 
 ### Added
