@@ -251,6 +251,7 @@ impl Value {
             (self, sql_type),
             (Value::Null, _)
                 | (Value::Integer(_), SqlType::Integer)
+                | (Value::Integer(_), SqlType::BigInt)
                 | (Value::Float(_), SqlType::Float)
                 | (Value::Double(_), SqlType::Double)
                 | (Value::Decimal(_), SqlType::Decimal(_, _))

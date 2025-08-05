@@ -226,12 +226,17 @@ impl PostgresProtocol {
 
             // Verify credentials
             debug!(
-                "Auth check - Expected: {}:{}, Got: {:?}:{}",
-                self.config.username, self.config.password, state.username, password
+                "Auth check - Expected: {}:{}, Got: {:?}:{}, Allow anonymous: {}",
+                self.config.username,
+                self.config.password,
+                state.username,
+                password,
+                self.config.allow_anonymous
             );
 
-            if state.username.as_deref() == Some(&self.config.username)
-                && password == self.config.password
+            if self.config.allow_anonymous
+                || (state.username.as_deref() == Some(&self.config.username)
+                    && password == self.config.password)
             {
                 state.authenticated = true;
                 self.send_auth_ok(stream, state).await?;

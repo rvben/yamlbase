@@ -60,6 +60,12 @@ pub struct Config {
     #[arg(long, help = "Database name")]
     pub database: Option<String>,
 
+    #[arg(
+        long,
+        help = "Allow anonymous connections (no authentication required)"
+    )]
+    pub allow_anonymous: bool,
+
     // Connection management settings (not exposed via CLI - configured via YAML)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[clap(skip)]

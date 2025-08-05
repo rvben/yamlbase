@@ -61,6 +61,7 @@ async fn test_postgres_simple_protocol() {
         hot_reload: false,
         log_level: "info".to_string(),
         database: Some("test_db".to_string()),
+        allow_anonymous: false,
         max_connections: None,
         connection_timeout: None,
         idle_timeout: None,

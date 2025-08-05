@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2025-08-05
+
+### Added
+- **Subqueries in FROM Clause (Derived Tables)**:
+  - Full support for subqueries used as tables in FROM clause with aliases
+  - Nested derived tables support (subqueries within subqueries)
+  - Derived tables in JOIN operations
+  - Mix real database tables with virtual tables from subquery results
+  - Support for aggregations and complex expressions in derived tables
+- **Anonymous Authentication Mode**:
+  - Added `--allow-anonymous` CLI flag for development/testing environments
+  - When enabled, accepts any username/password combination
+  - Useful for quick testing without authentication setup
+
+### Fixed
+- BigInt type compatibility for aggregate functions returning large integer values
+- Proper handling of recursive async function calls in subquery execution
+
+### Changed
+- Enhanced SQL compatibility to support more complex query patterns
+- Improved query executor to handle mixed real and virtual tables seamlessly
+
 ## [0.4.8] - 2025-08-04
 
 ### Added
