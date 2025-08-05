@@ -11016,6 +11016,16 @@ impl QueryExecutor {
                     result_rows.truncate(limit_count);
                 }
 
+                // Check if we have GROUP BY
+                if !matches!(select.group_by, GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty()) {
+                    // Handle GROUP BY with CTEs
+                    eprintln!("DEBUG: Detected GROUP BY in CTE query");
+                    let mut combined_context = CteExecutionContext::new(db, cte_results);
+                    return self
+                        .execute_cte_aggregate_query(&mut combined_context, select, query)
+                        .await;
+                }
+
                 // Handle SELECT items - support SELECT *, specific columns, and expressions
                 let (selected_columns, projection_items) =
                     self.process_cte_projection(&select.projection, &result_columns)?;
@@ -11158,7 +11168,7 @@ impl QueryExecutor {
         &self,
         context: &mut CteExecutionContext<'_>,
         select: &Select,
-        _query: &Query,
+        query: &Query,
     ) -> crate::Result<QueryResult> {
         debug!("Executing CTE aggregate query with GROUP BY");
 
@@ -11173,14 +11183,40 @@ impl QueryExecutor {
             let joined_data = self
                 .execute_cte_join_without_aggregation(context, select)
                 .await?;
-            self.apply_group_by_aggregation(&joined_data, select).await
+            let mut result = self.apply_group_by_aggregation(&joined_data, select).await?;
+            
+            // Apply ORDER BY to GROUP BY results
+            if let Some(order_by) = &query.order_by {
+                result.rows = self.sort_rows_with_columns(&result.rows, &result.columns, &order_by.exprs)?;
+            }
+            
+            // Apply LIMIT
+            if let Some(Expr::Value(sqlparser::ast::Value::Number(n, _))) = &query.limit {
+                let limit_count = n.parse::<usize>().unwrap_or(0);
+                result.rows.truncate(limit_count);
+            }
+            
+            Ok(result)
         } else {
             // Single table with GROUP BY
             if select.from.len() == 1 {
                 let table_data = self
                     .get_table_data_from_context(context, &select.from[0].relation)
                     .await?;
-                self.apply_group_by_aggregation(&table_data, select).await
+                let mut result = self.apply_group_by_aggregation(&table_data, select).await?;
+                
+                // Apply ORDER BY to GROUP BY results
+                if let Some(order_by) = &query.order_by {
+                    result.rows = self.sort_rows_with_columns(&result.rows, &result.columns, &order_by.exprs)?;
+                }
+                
+                // Apply LIMIT
+                if let Some(Expr::Value(sqlparser::ast::Value::Number(n, _))) = &query.limit {
+                    let limit_count = n.parse::<usize>().unwrap_or(0);
+                    result.rows.truncate(limit_count);
+                }
+                
+                Ok(result)
             } else {
                 Err(YamlBaseError::NotImplemented(
                     "Multiple tables without explicit JOINs not supported in CTE aggregates"
@@ -12310,7 +12346,29 @@ impl QueryExecutor {
                 result_row.push(value);
             }
 
-            result_rows.push(result_row);
+            // Apply HAVING clause if present
+            if let Some(having_expr) = &select.having {
+                // Evaluate HAVING expression with aggregate functions
+                let having_result = self.evaluate_aggregate_expression(having_expr, &group_rows, &data.columns)?;
+                match having_result {
+                    Value::Boolean(true) => {
+                        // Include this group in results
+                        result_rows.push(result_row);
+                    }
+                    Value::Boolean(false) => {
+                        // Skip this group
+                        continue;
+                    }
+                    _ => {
+                        return Err(YamlBaseError::Database {
+                            message: "HAVING clause must evaluate to boolean".to_string(),
+                        });
+                    }
+                }
+            } else {
+                // No HAVING clause, include all groups
+                result_rows.push(result_row);
+            }
         }
 
         Ok(QueryResult {
@@ -12382,24 +12440,40 @@ impl QueryExecutor {
                                 if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) =
                                     &arg_list.args[0]
                                 {
-                                    let mut sum = 0i64;
+                                    let mut sum_int = 0i64;
+                                    let mut sum_decimal = rust_decimal::Decimal::ZERO;
+                                    let mut has_decimal = false;
+                                    
                                     for row in group_rows {
                                         let value = self.evaluate_expression_with_columns(
                                             arg_expr, row, columns,
                                         )?;
                                         match value {
-                                            Value::Integer(i) => sum += i,
+                                            Value::Integer(i) => {
+                                                sum_int += i;
+                                                sum_decimal += rust_decimal::Decimal::from(i);
+                                            }
+                                            Value::Decimal(d) => {
+                                                has_decimal = true;
+                                                sum_decimal += d;
+                                            }
                                             Value::Null => {} // Ignore nulls in SUM
                                             _ => {
                                                 return Err(YamlBaseError::Database {
-                                                    message:
-                                                        "SUM can only be applied to numeric values"
-                                                            .to_string(),
+                                                    message: format!(
+                                                        "SUM can only be applied to numeric values, got {:?}",
+                                                        value
+                                                    ),
                                                 });
                                             }
                                         }
                                     }
-                                    Ok(Value::Integer(sum))
+                                    
+                                    if has_decimal {
+                                        Ok(Value::Decimal(sum_decimal))
+                                    } else {
+                                        Ok(Value::Integer(sum_int))
+                                    }
                                 } else {
                                     Err(YamlBaseError::NotImplemented(
                                         "SUM requires a column or expression argument".to_string(),
@@ -12462,6 +12536,40 @@ impl QueryExecutor {
                     })
                 }
             }
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_aggregate_expression(left, group_rows, columns)?;
+                let right_val = self.evaluate_aggregate_expression(right, group_rows, columns)?;
+                
+                match op {
+                    BinaryOperator::Gt => {
+                        match (&left_val, &right_val) {
+                            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Boolean(a > b)),
+                            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Boolean(a > b)),
+                            (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Boolean(rust_decimal::Decimal::from(*a) > *b)),
+                            (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Boolean(*a > rust_decimal::Decimal::from(*b))),
+                            _ => Err(YamlBaseError::NotImplemented(
+                                "Unsupported types for > comparison in HAVING".to_string(),
+                            )),
+                        }
+                    }
+                    BinaryOperator::Lt => {
+                        match (&left_val, &right_val) {
+                            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Boolean(a < b)),
+                            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Boolean(a < b)),
+                            (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Boolean(rust_decimal::Decimal::from(*a) < *b)),
+                            (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Boolean(*a < rust_decimal::Decimal::from(*b))),
+                            _ => Err(YamlBaseError::NotImplemented(
+                                "Unsupported types for < comparison in HAVING".to_string(),
+                            )),
+                        }
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not supported in HAVING aggregate context",
+                        op
+                    ))),
+                }
+            }
+            Expr::Value(val) => self.sql_value_to_db_value(val),
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression type not supported in aggregate context: {:?}",
                 expr
