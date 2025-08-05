@@ -10403,9 +10403,20 @@ impl QueryExecutor {
                 if let Some(&col_idx) = column_mapping.get(col_name) {
                     Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                 } else {
-                    Err(YamlBaseError::Database {
-                        message: format!("Column '{}' not found in joined result", col_name),
-                    })
+                    // Try case-insensitive lookup
+                    let col_name_lower = col_name.to_lowercase();
+                    let found_idx = column_mapping
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == col_name_lower)
+                        .map(|(_, &idx)| idx);
+                    
+                    if let Some(col_idx) = found_idx {
+                        Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in joined result", col_name),
+                        })
+                    }
                 }
             }
             Expr::CompoundIdentifier(parts) => {
@@ -10417,12 +10428,68 @@ impl QueryExecutor {
                 if let Some(&col_idx) = column_mapping.get(&qualified_name) {
                     Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                 } else {
-                    Err(YamlBaseError::Database {
-                        message: format!("Column '{}' not found in joined result", qualified_name),
-                    })
+                    // Try case-insensitive lookup
+                    let qualified_name_lower = qualified_name.to_lowercase();
+                    let found_idx = column_mapping
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == qualified_name_lower)
+                        .map(|(_, &idx)| idx);
+                    
+                    if let Some(col_idx) = found_idx {
+                        Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in joined result", qualified_name),
+                        })
+                    }
                 }
             }
             Expr::Value(v) => Ok(self.sql_value_to_db_value(v)?),
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_joined_expression(left, row, column_mapping)?;
+                let right_val = self.evaluate_joined_expression(right, row, column_mapping)?;
+                
+                match op {
+                    BinaryOperator::Eq => Ok(Value::Boolean(left_val == right_val)),
+                    BinaryOperator::NotEq => Ok(Value::Boolean(left_val != right_val)),
+                    BinaryOperator::Lt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? < 0)),
+                    BinaryOperator::LtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? <= 0)),
+                    BinaryOperator::Gt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? > 0)),
+                    BinaryOperator::GtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? >= 0)),
+                    BinaryOperator::And => {
+                        let left_bool = self.convert_value_to_bool(&left_val);
+                        let right_bool = self.convert_value_to_bool(&right_val);
+                        Ok(Value::Boolean(left_bool && right_bool))
+                    }
+                    BinaryOperator::Or => {
+                        let left_bool = self.convert_value_to_bool(&left_val);
+                        let right_bool = self.convert_value_to_bool(&right_val);
+                        Ok(Value::Boolean(left_bool || right_bool))
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Binary operator {:?} not supported in joined expression evaluation",
+                        op
+                    ))),
+                }
+            }
+            Expr::InList { expr, list, negated } => {
+                let expr_val = self.evaluate_joined_expression(expr, row, column_mapping)?;
+                
+                // Check if the value is in the list
+                let mut found = false;
+                for list_expr in list {
+                    let list_val = self.evaluate_joined_expression(list_expr, row, column_mapping)?;
+                    if expr_val == list_val {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                Ok(Value::Boolean(if *negated { !found } else { found }))
+            }
+            Expr::Nested(inner) => {
+                self.evaluate_joined_expression(inner, row, column_mapping)
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in WHERE clause for joined rows",
                 expr
@@ -10443,9 +10510,20 @@ impl QueryExecutor {
                 if let Some(&col_idx) = column_mapping.get(col_name) {
                     Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                 } else {
-                    Err(YamlBaseError::Database {
-                        message: format!("Column '{}' not found in joined result", col_name),
-                    })
+                    // Try case-insensitive lookup
+                    let col_name_lower = col_name.to_lowercase();
+                    let found_idx = column_mapping
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == col_name_lower)
+                        .map(|(_, &idx)| idx);
+                    
+                    if let Some(col_idx) = found_idx {
+                        Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in joined result", col_name),
+                        })
+                    }
                 }
             }
             Expr::CompoundIdentifier(parts) => {
@@ -10457,9 +10535,20 @@ impl QueryExecutor {
                 if let Some(&col_idx) = column_mapping.get(&qualified_name) {
                     Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                 } else {
-                    Err(YamlBaseError::Database {
-                        message: format!("Column '{}' not found in joined result", qualified_name),
-                    })
+                    // Try case-insensitive lookup
+                    let qualified_name_lower = qualified_name.to_lowercase();
+                    let found_idx = column_mapping
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == qualified_name_lower)
+                        .map(|(_, &idx)| idx);
+                    
+                    if let Some(col_idx) = found_idx {
+                        Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(YamlBaseError::Database {
+                            message: format!("Column '{}' not found in joined result", qualified_name),
+                        })
+                    }
                 }
             }
             _ => Err(YamlBaseError::NotImplemented(
@@ -10981,8 +11070,47 @@ impl QueryExecutor {
             }
             (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b) as i32),
             (Value::Date(a), Value::Date(b)) => Ok(a.cmp(b) as i32),
+            (Value::Boolean(a), Value::Boolean(b)) => Ok(a.cmp(b) as i32),
+            // Cross-type numeric comparisons
+            (Value::Decimal(a), Value::Integer(b)) => {
+                let b_dec = rust_decimal::Decimal::from(*b);
+                Ok(a.cmp(&b_dec) as i32)
+            }
+            (Value::Integer(a), Value::Decimal(b)) => {
+                let a_dec = rust_decimal::Decimal::from(*a);
+                Ok(a_dec.cmp(b) as i32)
+            }
+            (Value::Decimal(a), Value::Float(b)) => {
+                if let Some(b_dec) = rust_decimal::Decimal::from_f32_retain(*b) {
+                    Ok(a.cmp(&b_dec) as i32)
+                } else {
+                    Ok(std::cmp::Ordering::Equal as i32)
+                }
+            }
+            (Value::Float(a), Value::Decimal(b)) => {
+                if let Some(a_dec) = rust_decimal::Decimal::from_f32_retain(*a) {
+                    Ok(a_dec.cmp(b) as i32)
+                } else {
+                    Ok(std::cmp::Ordering::Equal as i32)
+                }
+            }
+            (Value::Decimal(a), Value::Double(b)) => {
+                if let Some(b_dec) = rust_decimal::Decimal::from_f64_retain(*b) {
+                    Ok(a.cmp(&b_dec) as i32)
+                } else {
+                    Ok(std::cmp::Ordering::Equal as i32)
+                }
+            }
+            (Value::Double(a), Value::Decimal(b)) => {
+                if let Some(a_dec) = rust_decimal::Decimal::from_f64_retain(*a) {
+                    Ok(a_dec.cmp(b) as i32)
+                } else {
+                    Ok(std::cmp::Ordering::Equal as i32)
+                }
+            }
+            (Value::Decimal(a), Value::Decimal(b)) => Ok(a.cmp(b) as i32),
             _ => Err(YamlBaseError::Database {
-                message: "Cannot compare incompatible types".to_string(),
+                message: format!("Cannot compare incompatible types: {:?} and {:?}", a, b),
             }),
         }
     }

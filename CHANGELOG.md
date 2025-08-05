@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Compatible with WHERE clauses and complex expressions in SELECT projections
   - Added comparison operators (>, <, =, !=, >=, <=) to get_expr_value for boolean expressions
 
+### Fixed
+- **Regression Fix: Complex WHERE Clauses in JOINed Queries**:
+  - Fixed 0.4.11 regression where complex WHERE clauses with NOT IN failed in JOINed queries
+  - Added case-insensitive column name lookup for compound identifiers (table.column) in JOINs
+  - Added support for BinaryOp and InList expressions in joined query WHERE evaluation
+  - Added cross-type numeric comparisons (Decimal vs Integer) in compare_values
+  - Restored full compatibility with enterprise SQL patterns from 0.4.10
+
 ## [0.4.11] - 2025-08-05
 
 ### Added
