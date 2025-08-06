@@ -426,9 +426,7 @@ mod complex_joins_in_cte_test {
                 assert_eq!(res.rows[0][1], Value::Integer(1));
             }
             Err(e) => {
-                panic!(
-                    "Multi-table JOIN with complex conditions in CTE should work: {e}"
-                );
+                panic!("Multi-table JOIN with complex conditions in CTE should work: {e}");
             }
         }
     }
