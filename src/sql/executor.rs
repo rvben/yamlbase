@@ -1,4 +1,4 @@
-use chrono::{self, Datelike, NaiveDate, Timelike};
+use chrono::{self, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use regex::Regex;
 use rust_decimal::prelude::*;
 use sqlparser::ast::{
@@ -44,6 +44,8 @@ enum JoinedColumn {
     TableColumn(String, usize, usize),
     // A constant expression with its computed value and column alias
     Constant(String, Value),
+    // A complex expression that needs row context to evaluate (display_name, expression)
+    Expression(String, Expr),
 }
 
 #[derive(Debug, Clone)]
@@ -8567,17 +8569,16 @@ impl QueryExecutor {
                 Ok(*negated)
             }
             Expr::Nested(inner) => {
-
                 // Handle parenthesized expressions
-
                 self.evaluate_join_condition(inner, row, tables, table_aliases)
-
             }
-
+            Expr::Not(inner) => {
+                // Handle NOT expressions
+                let inner_result = self.evaluate_join_condition(inner, row, tables, table_aliases)?;
+                Ok(!inner_result)
+            }
             _ => Err(YamlBaseError::NotImplemented(
-
                 format!("JOIN condition expression type not yet supported: {:?}", expr),
-
             )),
         }
     }
@@ -9171,6 +9172,75 @@ impl QueryExecutor {
         }
     }
 
+    fn evaluate_expression_with_join_row(
+        &self,
+        expr: &Expr,
+        row: &[Value],
+        tables: &[(String, &Table)],
+        table_offsets: &[usize],
+    ) -> crate::Result<Value> {
+        match expr {
+            Expr::Function(func) => {
+                // Use the existing join-aware function evaluation
+                let table_aliases = std::collections::HashMap::new(); // Empty for now
+                self.evaluate_function_with_join_row(func, row, tables, &table_aliases)
+            }
+            Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
+                // Handle qualified column references like p2.PROJECT_NAME
+                let table_ref = &parts[0].value;
+                let column_name = &parts[1].value;
+
+                // Find the table index
+                for (table_idx, (table_name, table)) in tables.iter().enumerate() {
+                    if table_name == table_ref {
+                        if let Some(col_idx) = table.get_column_index(column_name) {
+                            let position = table_offsets[table_idx] + col_idx;
+                            return Ok(row.get(position).cloned().unwrap_or(Value::Null));
+                        }
+                    }
+                }
+
+                Err(YamlBaseError::Database {
+                    message: format!("Column '{}.{}' not found", table_ref, column_name),
+                })
+            }
+            Expr::Identifier(ident) => {
+                // Handle unqualified column references
+                let column_name = &ident.value;
+                
+                // Search all tables for this column
+                for (table_idx, (_, table)) in tables.iter().enumerate() {
+                    if let Some(col_idx) = table.get_column_index(column_name) {
+                        let position = table_offsets[table_idx] + col_idx;
+                        return Ok(row.get(position).cloned().unwrap_or(Value::Null));
+                    }
+                }
+
+                Err(YamlBaseError::Database {
+                    message: format!("Column '{}' not found", column_name),
+                })
+            }
+            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => {
+                Ok(Value::Text(s.clone()))
+            }
+            Expr::Value(sqlparser::ast::Value::Number(n, _)) => {
+                if let Ok(int_val) = n.parse::<i64>() {
+                    Ok(Value::Integer(int_val))
+                } else if let Ok(float_val) = n.parse::<f64>() {
+                    Ok(Value::Double(float_val))
+                } else {
+                    Err(YamlBaseError::Database {
+                        message: format!("Invalid number: {}", n),
+                    })
+                }
+            }
+            _ => {
+                // For other expressions, try constant evaluation
+                self.evaluate_constant_expr(expr)
+            }
+        }
+    }
+
     fn get_join_expr_value(
         &self,
         expr: &Expr,
@@ -9413,9 +9483,61 @@ impl QueryExecutor {
                 // This is a placeholder that returns false for now
                 Ok(Value::Boolean(false))
             }
-            _ => Err(YamlBaseError::NotImplemented(
-                "Expression type not supported in JOIN conditions".to_string(),
-            )),
+            // TypedString for DATE, TIME, TIMESTAMP literals
+            Expr::TypedString { data_type, value } => {
+                use sqlparser::ast::DataType;
+                match data_type {
+                    DataType::Date => {
+                        // Parse DATE '2025-01-01' format
+                        match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                            Ok(date) => Ok(Value::Date(date)),
+                            Err(_) => Err(YamlBaseError::Database {
+                                message: format!("Invalid date format: {}", value),
+                            }),
+                        }
+                    }
+                    DataType::Time(_, _) => {
+                        // Parse TIME '12:34:56' format
+                        match NaiveTime::parse_from_str(value, "%H:%M:%S") {
+                            Ok(time) => Ok(Value::Time(time)),
+                            Err(_) => {
+                                // Try without seconds
+                                match NaiveTime::parse_from_str(value, "%H:%M") {
+                                    Ok(time) => Ok(Value::Time(time)),
+                                    Err(_) => Err(YamlBaseError::Database {
+                                        message: format!("Invalid time format: {}", value),
+                                    }),
+                                }
+                            }
+                        }
+                    }
+                    DataType::Timestamp(_, _) => {
+                        // Parse TIMESTAMP '2025-01-01 12:34:56' format
+                        match NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+                            Ok(datetime) => Ok(Value::Timestamp(datetime)),
+                            Err(_) => {
+                                // Try without time part
+                                match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                                    Ok(date) => Ok(Value::Timestamp(date.and_hms_opt(0, 0, 0).unwrap())),
+                                    Err(_) => Err(YamlBaseError::Database {
+                                        message: format!("Invalid timestamp format: {}", value),
+                                    }),
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // For other typed strings, just return as text
+                        Ok(Value::Text(value.clone()))
+                    }
+                }
+            }
+            _ => {
+                eprintln!("DEBUG: Unsupported expression in get_join_expr_value: {:?}", expr);
+                Err(YamlBaseError::NotImplemented(
+                    "Expression type not supported in JOIN conditions".to_string(),
+                ))
+            }
         }
     }
 
@@ -9505,11 +9627,10 @@ impl QueryExecutor {
                             }
                         }
                         _ => {
-                            // Constant expression
-                            let value = self.evaluate_constant_expr(expr)?;
+                            // Complex expression - needs row context
                             let col_name = format!("column_{}", column_counter);
                             column_counter += 1;
-                            columns.push(JoinedColumn::Constant(col_name, value));
+                            columns.push(JoinedColumn::Expression(col_name, expr.clone()));
                         }
                     }
                 }
@@ -9558,9 +9679,8 @@ impl QueryExecutor {
                             }
                         }
                         _ => {
-                            // Constant expression
-                            let value = self.evaluate_constant_expr(expr)?;
-                            columns.push(JoinedColumn::Constant(alias.value.clone(), value));
+                            // Complex expression - needs row context
+                            columns.push(JoinedColumn::Expression(alias.value.clone(), expr.clone()));
                         }
                     }
                 }
@@ -9680,6 +9800,15 @@ impl QueryExecutor {
                     }
                     JoinedColumn::Constant(_, value) => {
                         projected_row.push(value.clone());
+                    }
+                    JoinedColumn::Expression(_, expr) => {
+                        let value = self.evaluate_expression_with_join_row(
+                            expr, 
+                            row, 
+                            tables, 
+                            &table_offsets
+                        )?;
+                        projected_row.push(value);
                     }
                 }
             }
@@ -11132,7 +11261,7 @@ impl QueryExecutor {
         query: &Query,
         with: &With,
     ) -> crate::Result<QueryResult> {
-        debug!("Executing query with CTEs");
+        debug!("Executing query with CTEs (recursive: {})", with.recursive);
 
         // Store CTE results in a temporary map
         let mut cte_results: std::collections::HashMap<String, QueryResult> =
@@ -11141,16 +11270,23 @@ impl QueryExecutor {
         // Execute each CTE in order - CTEs can reference previously defined CTEs
         for cte_table in &with.cte_tables {
             let cte_name = cte_table.alias.name.value.clone();
-            eprintln!("DEBUG: Starting to execute CTE '{}'", cte_name);
+            eprintln!("DEBUG: Starting to execute CTE '{}' (recursive: {})", cte_name, with.recursive);
             debug!(
-                "Executing CTE: {} (with {} existing CTEs available)",
+                "Executing CTE: {} (recursive: {}, with {} existing CTEs available)",
                 cte_name,
+                with.recursive,
                 cte_results.len()
             );
 
-            // Execute the CTE query with access to previously defined CTEs
-            let mut cte_result = match &cte_table.query.body.as_ref() {
+            // Check if this is a RECURSIVE CTE
+            let mut cte_result = if with.recursive {
+                // Handle RECURSIVE CTE
+                self.execute_recursive_cte(db, cte_table, &cte_results).await?
+            } else {
+                // Execute regular CTE
+                match &cte_table.query.body.as_ref() {
                 SetExpr::Select(select) => {
+                    eprintln!("DEBUG: CTE has {} FROM items", select.from.len());
                     // Pass the current CTE results so this CTE can reference previous ones
                     let result = self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results)
                         .await?;
@@ -11179,6 +11315,7 @@ impl QueryExecutor {
                     return Err(YamlBaseError::NotImplemented(
                         "This type of query is not yet supported in CTEs".to_string(),
                     ));
+                }
                 }
             };
 
@@ -11236,7 +11373,7 @@ impl QueryExecutor {
     }
 
     // Execute SELECT with CTE context - handles CTE references in FROM clauses
-    async fn execute_select_with_cte_context(
+    pub(crate) async fn execute_select_with_cte_context(
         &self,
         db: &Database,
         select: &Select,
@@ -11244,6 +11381,8 @@ impl QueryExecutor {
         cte_results: &std::collections::HashMap<String, QueryResult>,
     ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT with CTE context");
+        eprintln!("DEBUG execute_select_with_cte_context: FROM items = {}", select.from.len());
+        eprintln!("DEBUG execute_select_with_cte_context: Available CTEs = {:?}", cte_results.keys().collect::<Vec<_>>());
 
         // Check if any tables in FROM clause or JOINs are CTE references
         let mut has_cte_references = false;
@@ -11285,10 +11424,16 @@ impl QueryExecutor {
 
         // If no CTE references anywhere, execute normally
         if !has_cte_references {
+            eprintln!("DEBUG: No CTE references found, executing regular SELECT");
             let result = self.execute_select(db, select, query).await;
-            if let Ok(ref res) = result {
-                eprintln!("DEBUG: Regular SELECT (no CTE refs) returned {} columns: {:?}", 
-                         res.columns.len(), res.columns);
+            match &result {
+                Ok(res) => {
+                    eprintln!("DEBUG: Regular SELECT (no CTE refs) returned {} columns: {:?}", 
+                             res.columns.len(), res.columns);
+                }
+                Err(e) => {
+                    eprintln!("DEBUG: Regular SELECT failed with error: {}", e);
+                }
             }
             return result;
         }
@@ -12192,6 +12337,127 @@ impl QueryExecutor {
                     _ => Ok(Value::Text(value.clone())),
                 }
             }
+            Expr::Case {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => {
+                // Handle CASE expressions in CTE context
+                if let Some(operand_expr) = operand {
+                    // Simple CASE: CASE expr WHEN val1 THEN result1 ...
+                    let operand_val = self.evaluate_expr_with_columns(operand_expr, row, columns)?;
+                    for (condition, result) in conditions.iter().zip(results.iter()) {
+                        let condition_val = self.evaluate_expr_with_columns(condition, row, columns)?;
+                        if operand_val == condition_val {
+                            return self.evaluate_expr_with_columns(result, row, columns);
+                        }
+                    }
+                } else {
+                    // Searched CASE: CASE WHEN condition1 THEN result1 ...
+                    for (condition, result) in conditions.iter().zip(results.iter()) {
+                        let condition_val = self.evaluate_expr_with_columns(condition, row, columns)?;
+                        if let Value::Boolean(true) = condition_val {
+                            return self.evaluate_expr_with_columns(result, row, columns);
+                        }
+                    }
+                }
+                // If no conditions matched, return ELSE result or NULL
+                if let Some(else_expr) = else_result {
+                    self.evaluate_expr_with_columns(else_expr, row, columns)
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            Expr::Function(func) => {
+                // Handle functions in CTE context
+                let func_name = func.name.to_string().to_uppercase();
+                match func_name.as_str() {
+                    "COALESCE" => {
+                        if let FunctionArguments::List(args) = &func.args {
+                            // COALESCE returns the first non-NULL value
+                            for arg in &args.args {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
+                                    let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                                    if !matches!(val, Value::Null) {
+                                        return Ok(val);
+                                    }
+                                } else {
+                                    return Err(YamlBaseError::Database {
+                                        message: "Invalid argument for COALESCE".to_string(),
+                                    });
+                                }
+                            }
+                            // If all values are NULL, return NULL
+                            Ok(Value::Null)
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "COALESCE requires arguments".to_string(),
+                            })
+                        }
+                    }
+                    "UPPER" => {
+                        if let FunctionArguments::List(args) = &func.args {
+                            if args.args.len() == 1 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
+                                    let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                                    match val {
+                                        Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
+                                        Value::Null => Ok(Value::Null),
+                                        _ => Err(YamlBaseError::Database {
+                                            message: "UPPER requires string argument".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    Err(YamlBaseError::Database {
+                                        message: "Invalid argument for UPPER".to_string(),
+                                    })
+                                }
+                            } else {
+                                Err(YamlBaseError::Database {
+                                    message: "UPPER requires exactly 1 argument".to_string(),
+                                })
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "UPPER requires arguments".to_string(),
+                            })
+                        }
+                    }
+                    "LOWER" => {
+                        if let FunctionArguments::List(args) = &func.args {
+                            if args.args.len() == 1 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
+                                    let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                                    match val {
+                                        Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
+                                        Value::Null => Ok(Value::Null),
+                                        _ => Err(YamlBaseError::Database {
+                                            message: "LOWER requires string argument".to_string(),
+                                        }),
+                                    }
+                                } else {
+                                    Err(YamlBaseError::Database {
+                                        message: "Invalid argument for LOWER".to_string(),
+                                    })
+                                }
+                            } else {
+                                Err(YamlBaseError::Database {
+                                    message: "LOWER requires exactly 1 argument".to_string(),
+                                })
+                            }
+                        } else {
+                            Err(YamlBaseError::Database {
+                                message: "LOWER requires arguments".to_string(),
+                            })
+                        }
+                    }
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Function {} not supported in CTE context",
+                        func_name
+                    ))),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in CTE context",
                 expr
@@ -12274,12 +12540,24 @@ impl QueryExecutor {
                                 selected_columns.push(column_name); // Use unqualified name in result
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
-                                return Err(YamlBaseError::Database {
-                                    message: format!(
-                                        "Column '{}' not found in CTE result",
-                                        qualified_name
-                                    ),
-                                });
+                                // Try to match against unqualified column name for CTE references
+                                // This handles cases like c.SAP_PROJECT_ID where c is a table alias
+                                // but the CTE result only has unqualified column names
+                                if let Some(idx) = available_columns.iter().position(|c| {
+                                    // Extract the column name from qualified names
+                                    let col_name = c.split('.').last().unwrap_or(c);
+                                    col_name == &column_name || col_name.to_lowercase() == column_name.to_lowercase()
+                                }) {
+                                    selected_columns.push(column_name); // Use unqualified name in result
+                                    projection_items.push(CteProjectionItem::Column(idx));
+                                } else {
+                                    return Err(YamlBaseError::Database {
+                                        message: format!(
+                                            "Column '{}' not found in CTE result",
+                                            qualified_name
+                                        ),
+                                    });
+                                }
                             }
                         } else {
                             return Err(YamlBaseError::NotImplemented(
@@ -12831,6 +13109,88 @@ impl QueryExecutor {
                         } else {
                             Err(YamlBaseError::NotImplemented(
                                 "SUM requires function arguments".to_string(),
+                            ))
+                        }
+                    }
+                    "MAX" => {
+                        if let FunctionArguments::List(arg_list) = args {
+                            if arg_list.args.len() == 1 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) =
+                                    &arg_list.args[0]
+                                {
+                                    let mut max_value: Option<Value> = None;
+                                    
+                                    for row in group_rows {
+                                        let value = self.evaluate_expression_with_columns(
+                                            arg_expr, row, columns,
+                                        )?;
+                                        if !matches!(value, Value::Null) {
+                                            match (&max_value, &value) {
+                                                (None, _) => max_value = Some(value),
+                                                (Some(current_max), _) => {
+                                                    if self.compare_values(&value, current_max)? > 0 {
+                                                        max_value = Some(value);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    Ok(max_value.unwrap_or(Value::Null))
+                                } else {
+                                    Err(YamlBaseError::NotImplemented(
+                                        "MAX requires a column or expression argument".to_string(),
+                                    ))
+                                }
+                            } else {
+                                Err(YamlBaseError::NotImplemented(
+                                    "MAX requires exactly one argument".to_string(),
+                                ))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "MAX requires function arguments".to_string(),
+                            ))
+                        }
+                    }
+                    "MIN" => {
+                        if let FunctionArguments::List(arg_list) = args {
+                            if arg_list.args.len() == 1 {
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(arg_expr)) =
+                                    &arg_list.args[0]
+                                {
+                                    let mut min_value: Option<Value> = None;
+                                    
+                                    for row in group_rows {
+                                        let value = self.evaluate_expression_with_columns(
+                                            arg_expr, row, columns,
+                                        )?;
+                                        if !matches!(value, Value::Null) {
+                                            match (&min_value, &value) {
+                                                (None, _) => min_value = Some(value),
+                                                (Some(current_min), _) => {
+                                                    if self.compare_values(&value, current_min)? < 0 {
+                                                        min_value = Some(value);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    Ok(min_value.unwrap_or(Value::Null))
+                                } else {
+                                    Err(YamlBaseError::NotImplemented(
+                                        "MIN requires a column or expression argument".to_string(),
+                                    ))
+                                }
+                            } else {
+                                Err(YamlBaseError::NotImplemented(
+                                    "MIN requires exactly one argument".to_string(),
+                                ))
+                            }
+                        } else {
+                            Err(YamlBaseError::NotImplemented(
+                                "MIN requires function arguments".to_string(),
                             ))
                         }
                     }
@@ -13717,14 +14077,22 @@ impl QueryExecutor {
                 
                 Ok(if *negated { !found } else { found })
             }
-            // Handle simple column references and values
+            // Handle other expressions including CASE
             _ => {
-                // Try to evaluate as a boolean expression
+                // Try to evaluate as a boolean expression or convert to boolean
                 let val = self.evaluate_expr_with_columns(condition, combined_row, combined_columns)?;
                 match val {
                     Value::Boolean(b) => Ok(b),
+                    Value::Text(s) => {
+                        // For text values, check if they're truthy
+                        Ok(!s.is_empty() && s.to_lowercase() != "false" && s != "0")
+                    }
+                    Value::Integer(i) => Ok(i != 0),
+                    Value::Float(f) => Ok(f != 0.0),
+                    Value::Double(d) => Ok(d != 0.0),
+                    Value::Null => Ok(false),
                     _ => Err(YamlBaseError::NotImplemented(
-                        "Complex JOIN conditions not yet fully supported".to_string(),
+                        format!("Cannot convert {:?} to boolean in JOIN condition", val),
                     )),
                 }
             }
