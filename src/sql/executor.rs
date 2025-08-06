@@ -8566,8 +8566,18 @@ impl QueryExecutor {
                 }
                 Ok(*negated)
             }
+            Expr::Nested(inner) => {
+
+                // Handle parenthesized expressions
+
+                self.evaluate_join_condition(inner, row, tables, table_aliases)
+
+            }
+
             _ => Err(YamlBaseError::NotImplemented(
-                "Complex JOIN conditions are not yet supported".to_string(),
+
+                format!("JOIN condition expression type not yet supported: {:?}", expr),
+
             )),
         }
     }
@@ -12166,6 +12176,22 @@ impl QueryExecutor {
                 
                 Ok(Value::Boolean(if *negated { !found } else { found }))
             }
+            Expr::TypedString { data_type, value } => {
+                // Handle DATE '2025-01-01' and similar typed strings
+                match data_type {
+                    DataType::Date => {
+                        // Parse the date string into NaiveDate
+                        match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                            Ok(date) => Ok(Value::Date(date)),
+                            Err(_) => Err(YamlBaseError::TypeConversion(format!(
+                                "Invalid date format: {}",
+                                value
+                            ))),
+                        }
+                    }
+                    _ => Ok(Value::Text(value.clone())),
+                }
+            }
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in CTE context",
                 expr
@@ -13625,43 +13651,83 @@ impl QueryExecutor {
         combined_row: &[Value],
         combined_columns: &[String],
     ) -> crate::Result<bool> {
-        // This is a simplified JOIN condition evaluator
-        // Production code would need comprehensive expression evaluation
         match condition {
             Expr::BinaryOp { left, op, right } => {
-                let left_val =
-                    self.evaluate_expr_with_columns(left, combined_row, combined_columns)?;
-                let right_val =
-                    self.evaluate_expr_with_columns(right, combined_row, combined_columns)?;
-
+                // Handle logical operators (AND, OR)
                 match op {
-                    BinaryOperator::Eq => {
-                        Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Equal))
+                    BinaryOperator::And => {
+                        let left_result = self.evaluate_cte_join_condition(left, combined_row, combined_columns)?;
+                        if !left_result {
+                            return Ok(false); // Short-circuit evaluation
+                        }
+                        self.evaluate_cte_join_condition(right, combined_row, combined_columns)
                     }
-                    BinaryOperator::NotEq => {
-                        Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Equal))
+                    BinaryOperator::Or => {
+                        let left_result = self.evaluate_cte_join_condition(left, combined_row, combined_columns)?;
+                        if left_result {
+                            return Ok(true); // Short-circuit evaluation
+                        }
+                        self.evaluate_cte_join_condition(right, combined_row, combined_columns)
                     }
-                    BinaryOperator::Lt => {
-                        Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Less))
+                    // Handle comparison operators
+                    _ => {
+                        let left_val =
+                            self.evaluate_expr_with_columns(left, combined_row, combined_columns)?;
+                        let right_val =
+                            self.evaluate_expr_with_columns(right, combined_row, combined_columns)?;
+                        match op {
+                            BinaryOperator::Eq => {
+                                Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Equal))
+                            }
+                            BinaryOperator::NotEq => {
+                                Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Equal))
+                            }
+                            BinaryOperator::Lt => {
+                                Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Less))
+                            }
+                            BinaryOperator::LtEq => {
+                                Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Greater))
+                            }
+                            BinaryOperator::Gt => {
+                                Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Greater))
+                            }
+                            BinaryOperator::GtEq => {
+                                Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Less))
+                            }
+                            _ => Err(YamlBaseError::NotImplemented(format!(
+                                "JOIN condition operator {:?} not yet supported",
+                                op
+                            ))),
+                        }
                     }
-                    BinaryOperator::LtEq => {
-                        Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Greater))
-                    }
-                    BinaryOperator::Gt => {
-                        Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Greater))
-                    }
-                    BinaryOperator::GtEq => {
-                        Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Less))
-                    }
-                    _ => Err(YamlBaseError::NotImplemented(format!(
-                        "JOIN condition operator {:?} not yet supported",
-                        op
-                    ))),
                 }
             }
-            _ => Err(YamlBaseError::NotImplemented(
-                "Complex JOIN conditions not yet fully supported".to_string(),
-            )),
+            // Handle NOT IN expressions
+            Expr::InList { expr, list, negated } => {
+                let val = self.evaluate_expr_with_columns(expr, combined_row, combined_columns)?;
+                
+                let mut found = false;
+                for item_expr in list {
+                    let item_val = self.evaluate_expr_with_columns(item_expr, combined_row, combined_columns)?;
+                    if val.compare(&item_val) == Some(std::cmp::Ordering::Equal) {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                Ok(if *negated { !found } else { found })
+            }
+            // Handle simple column references and values
+            _ => {
+                // Try to evaluate as a boolean expression
+                let val = self.evaluate_expr_with_columns(condition, combined_row, combined_columns)?;
+                match val {
+                    Value::Boolean(b) => Ok(b),
+                    _ => Err(YamlBaseError::NotImplemented(
+                        "Complex JOIN conditions not yet fully supported".to_string(),
+                    )),
+                }
+            }
         }
     }
 }
