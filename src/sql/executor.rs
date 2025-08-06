@@ -1079,7 +1079,7 @@ impl QueryExecutor {
                             columns.push(ProjectionItem::TableColumn(col_name.clone(), col_idx));
                         }
                         Expr::CompoundIdentifier(parts) => {
-                            // Handle table.column syntax (e.g., a.SAP_PROJECT_ID)
+                            // Handle table.column syntax (e.g., a.PROJECT_ID)
                             if parts.len() == 2 {
                                 let table_ref = &parts[0].value;
                                 let col_name = &parts[1].value;
@@ -12625,7 +12625,7 @@ impl QueryExecutor {
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 // Try to match against unqualified column name for CTE references
-                                // This handles cases like c.SAP_PROJECT_ID where c is a table alias
+                                // This handles cases like c.PROJECT_ID where c is a table alias
                                 // but the CTE result only has unqualified column names
                                 if let Some(idx) = available_columns.iter().position(|c| {
                                     // Extract the column name from qualified names

@@ -532,7 +532,7 @@ mod comprehensive_tests {
         // Create SF_PROJECT_V2 table
         let projects_columns = vec![
             Column {
-                name: "SAP_PROJECT_ID".to_string(),
+                name: "PROJECT_ID".to_string(),
                 sql_type: SqlType::Varchar(50),
                 nullable: false,
                 default: None,
@@ -588,7 +588,7 @@ mod comprehensive_tests {
         // Test basic CTE (should work)
         let basic_cte_sql = r#"
             WITH TestCTE AS (
-                SELECT SAP_PROJECT_ID, PROJECT_NAME FROM SF_PROJECT_V2 LIMIT 2
+                SELECT PROJECT_ID, PROJECT_NAME FROM SF_PROJECT_V2 LIMIT 2
             )
             SELECT * FROM TestCTE
         "#;
@@ -602,7 +602,7 @@ mod comprehensive_tests {
         // Test multiple CTEs with complex expressions (the Priority 1.1 requirement)
         let multiple_cte_sql = r#"
             WITH Projects AS (
-                SELECT SAP_PROJECT_ID, PROJECT_NAME FROM SF_PROJECT_V2 WHERE STATUS_CODE = 'Active'
+                SELECT PROJECT_ID, PROJECT_NAME FROM SF_PROJECT_V2 WHERE STATUS_CODE = 'Active'
             ),
             ProjectCount AS (
                 SELECT COUNT(*) as cnt FROM Projects

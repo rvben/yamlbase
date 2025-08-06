@@ -41,8 +41,8 @@ RUN mkdir -p /data && chown appuser:appuser /data
 # Switch to non-root user
 USER appuser
 
-# Expose default ports for postgres and mysql protocols
-EXPOSE 5432 3306
+# Expose default ports for postgres, mysql, and teradata protocols
+EXPOSE 5432 3306 1025
 
 # Set working directory
 WORKDIR /data

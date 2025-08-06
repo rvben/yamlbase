@@ -159,12 +159,12 @@ mod complex_joins_in_cte_test {
             r#"
         WITH HierarchicalData AS (
             SELECT 
-                parent.SAP_PROJECT_ID AS parent_id,
-                child.SAP_PROJECT_ID AS child_id,
+                parent.PROJECT_ID AS parent_id,
+                child.PROJECT_ID AS child_id,
                 child.PROJECT_STRUCTURE
             FROM SF_PROJECT_V2 parent
             INNER JOIN SF_PROJECT_V2 child
-                ON parent.SAP_PROJECT_ID = child.HIERARCHY_PARENT_SAP_ID
+                ON parent.PROJECT_ID = child.HIERARCHY_PARENT_SAP_ID
                 AND child.VERSION_CODE = 'Published'
                 AND child.STATUS_CODE NOT IN ('Cancelled', 'Closed', 'Suspended')
                 AND child.ACTIVE_FLAG = 'Y'
@@ -394,24 +394,24 @@ mod complex_joins_in_cte_test {
             r#"
         WITH AllocationHierarchy AS (
             SELECT 
-                p.SAP_PROJECT_ID,
+                p.PROJECT_ID,
                 p.PROJECT_NAME,
                 a.WBI_ID,
                 a.PLANNED_EFFORT_HOURS,
                 a.ACTUAL_EFFORT_HOURS
             FROM SF_PROJECT_V2 p
             INNER JOIN SF_PROJECT_ALLOCATIONS a
-                ON p.SAP_PROJECT_ID = a.SAP_PROJECT_ID
+                ON p.PROJECT_ID = a.PROJECT_ID
                 AND a.VERSION_CODE = 'Published'
                 AND a.ASSIGNMENT_TYPE = 'Hard Allocation'
                 AND a.PROJECT_STATUS_CODE NOT IN ('Cancelled', 'Closed')
                 AND (a.PLANNED_EFFORT_HOURS > 0 OR a.ACTUAL_EFFORT_HOURS > 0)
             WHERE p.VERSION_CODE = 'Published'
         )
-        SELECT SAP_PROJECT_ID, COUNT(DISTINCT WBI_ID) AS unique_members
+        SELECT PROJECT_ID, COUNT(DISTINCT WBI_ID) AS unique_members
         FROM AllocationHierarchy
-        GROUP BY SAP_PROJECT_ID
-        ORDER BY SAP_PROJECT_ID
+        GROUP BY PROJECT_ID
+        ORDER BY PROJECT_ID
         "#,
         )
         .unwrap();
@@ -432,8 +432,8 @@ mod complex_joins_in_cte_test {
     }
 
     #[tokio::test]
-    async fn test_aac_production_query_pattern() {
-        println!("=== AAC PRODUCTION QUERY PATTERN TEST ===");
+    async fn test_enterprise_query_pattern() {
+        println!("=== ENTERPRISE QUERY PATTERN TEST ===");
 
         // Create test database
         let mut db = Database::new("test_db".to_string());
@@ -565,17 +565,17 @@ mod complex_joins_in_cte_test {
         let storage_arc = Arc::new(storage);
         let executor = QueryExecutor::new(storage_arc).await.unwrap();
 
-        // Test AAC production query pattern with all complex conditions
+        // Test enterprise query pattern with all complex conditions
         let query = parse_sql(
             r#"
         WITH ProjectHierarchy AS (
             SELECT
-                parent.SAP_PROJECT_ID AS MAIN_PROJECT_ID,
-                child.SAP_PROJECT_ID AS SUB_PROJECT_ID,
+                parent.PROJECT_ID AS MAIN_PROJECT_ID,
+                child.PROJECT_ID AS SUB_PROJECT_ID,
                 child.PROJECT_NAME AS SUB_PROJECT_NAME
             FROM SF_PROJECT_V2 parent
             INNER JOIN SF_PROJECT_V2 child
-                ON parent.SAP_PROJECT_ID = child.HIERARCHY_PARENT_SAP_ID
+                ON parent.PROJECT_ID = child.HIERARCHY_PARENT_SAP_ID
                 AND child.VERSION_CODE = 'Published'
                 AND child.STATUS_CODE NOT IN ('Cancelled', 'Closed')
                 AND child.ACTIVE_FLAG = 'Y'
@@ -593,7 +593,7 @@ mod complex_joins_in_cte_test {
         let result = executor.execute(&query[0]).await;
         match result {
             Ok(res) => {
-                println!("✅ AAC production query pattern works!");
+                println!("✅ Enterprise query pattern works!");
                 assert_eq!(res.rows.len(), 1);
                 // Should only return WP001 (WP002 is closed for time entry)
                 assert_eq!(res.rows[0][0], Value::Text("MAIN001".to_string()));

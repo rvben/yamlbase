@@ -478,11 +478,11 @@ async fn test_complex_where_with_not_in_regression() {
     println!("\n1. Testing complex WHERE clause with NOT IN in JOINed query:");
     let query = r#"
         SELECT 
-            p.SAP_PROJECT_ID,
+            p.PROJECT_ID,
             p.PROJECT_NAME,
             COUNT(DISTINCT a.WBI_ID) AS MEMBERS
         FROM SF_PROJECT_V2 p
-        INNER JOIN SF_PROJECT_ALLOCATIONS a ON p.SAP_PROJECT_ID = a.SAP_PROJECT_ID
+        INNER JOIN SF_PROJECT_ALLOCATIONS a ON p.PROJECT_ID = a.PROJECT_ID
         WHERE 
             p.VERSION_CODE = 'Published'
             AND p.STATUS_CODE NOT IN ('Cancelled', 'Closed')
@@ -492,7 +492,7 @@ async fn test_complex_where_with_not_in_regression() {
             AND a.ASSIGNMENT_TYPE = 'Hard Allocation'
             AND a.PROJECT_STATUS_CODE NOT IN ('Cancelled', 'Closed')
             AND (a.PLANNED_EFFORT_HOURS > 0 OR a.ACTUAL_EFFORT_HOURS > 0)
-        GROUP BY p.SAP_PROJECT_ID, p.PROJECT_NAME
+        GROUP BY p.PROJECT_ID, p.PROJECT_NAME
         ORDER BY p.PROJECT_NAME
     "#;
 

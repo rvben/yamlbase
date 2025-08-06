@@ -162,7 +162,7 @@ async fn test_wildcard_projection_cte() {
             FROM SF_PROJECT_ALLOCATIONS a
             WHERE a.VERSION_CODE = 'Published' AND a.PLANNED_EFFORT_HOURS > 25
         )
-        SELECT SAP_PROJECT_ID, PLANNED_EFFORT_HOURS FROM FilteredData ORDER BY SAP_PROJECT_ID
+        SELECT PROJECT_ID, PLANNED_EFFORT_HOURS FROM FilteredData ORDER BY PROJECT_ID
     "#;
 
     let parsed = parse_sql(query).unwrap();
@@ -193,7 +193,7 @@ async fn test_wildcard_projection_cte() {
         WITH ProjectsAndAllocations AS (
             SELECT p.*, a.WBI_ID, a.PLANNED_EFFORT_HOURS
             FROM SF_PROJECT_V2 p
-            INNER JOIN SF_PROJECT_ALLOCATIONS a ON p.SAP_PROJECT_ID = a.SAP_PROJECT_ID
+            INNER JOIN SF_PROJECT_ALLOCATIONS a ON p.PROJECT_ID = a.PROJECT_ID
             WHERE a.VERSION_CODE = 'Published'
         )
         SELECT COUNT(*) FROM ProjectsAndAllocations
@@ -219,11 +219,11 @@ async fn test_wildcard_projection_cte() {
     println!("\n4. Testing SELECT * from CTE directly:");
     let query = r#"
         WITH PublishedAllocations AS (
-            SELECT a.SAP_PROJECT_ID, a.WBI_ID, a.PLANNED_EFFORT_HOURS
+            SELECT a.PROJECT_ID, a.WBI_ID, a.PLANNED_EFFORT_HOURS
             FROM SF_PROJECT_ALLOCATIONS a
             WHERE a.VERSION_CODE = 'Published'
         )
-        SELECT * FROM PublishedAllocations ORDER BY SAP_PROJECT_ID
+        SELECT * FROM PublishedAllocations ORDER BY PROJECT_ID
     "#;
 
     let parsed = parse_sql(query).unwrap();
@@ -233,7 +233,7 @@ async fn test_wildcard_projection_cte() {
             assert_eq!(result.rows.len(), 2);
             assert_eq!(result.columns.len(), 3);
             // Column names come from the SQL query, which uses uppercase
-            assert_eq!(result.columns[0], "SAP_PROJECT_ID");
+            assert_eq!(result.columns[0], "PROJECT_ID");
             assert_eq!(result.columns[1], "WBI_ID");
             assert_eq!(result.columns[2], "PLANNED_EFFORT_HOURS");
             println!("   Retrieved all columns from CTE");

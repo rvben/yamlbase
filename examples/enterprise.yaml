@@ -1,0 +1,131 @@
+database:
+  name: "EnterpriseDB"
+
+auth:
+  username: "admin"
+  password: "password"
+
+tables:
+  employees:
+    columns:
+      employee_id: "INTEGER PRIMARY KEY"
+      first_name: "VARCHAR(50) NOT NULL"
+      last_name: "VARCHAR(50) NOT NULL"
+      email: "VARCHAR(100) UNIQUE"
+      department: "VARCHAR(50)"
+      hire_date: "DATE"
+      salary: "DECIMAL(10,2)"
+      manager_id: "INTEGER"
+      status: "VARCHAR(20)"
+    data:
+      - employee_id: 1
+        first_name: "John"
+        last_name: "Smith"
+        email: "john.smith@example.com"
+        department: "Engineering"
+        hire_date: "2020-01-15"
+        salary: 85000.00
+        manager_id: null
+        status: "active"
+      - employee_id: 2
+        first_name: "Sarah"
+        last_name: "Johnson"
+        email: "sarah.johnson@example.com"
+        department: "Engineering"
+        hire_date: "2021-03-22"
+        salary: 92000.00
+        manager_id: 1
+        status: "active"
+      - employee_id: 3
+        first_name: "Michael"
+        last_name: "Williams"
+        email: "michael.williams@example.com"
+        department: "Sales"
+        hire_date: "2019-07-08"
+        salary: 78000.00
+        manager_id: 1
+        status: "active"
+      - employee_id: 4
+        first_name: "Emily"
+        last_name: "Davis"
+        email: "emily.davis@example.com"
+        department: "Marketing"
+        hire_date: "2022-02-14"
+        salary: 72000.00
+        manager_id: 1
+        status: "active"
+
+  projects:
+    columns:
+      project_id: "VARCHAR(10) PRIMARY KEY"
+      project_name: "VARCHAR(255) NOT NULL"
+      description: "TEXT"
+      start_date: "DATE"
+      end_date: "DATE"
+      budget: "DECIMAL(12,2)"
+      status: "VARCHAR(20)"
+      project_manager_id: "INTEGER"
+    data:
+      - project_id: "PRJ-001"
+        project_name: "Data Migration Initiative"
+        description: "Enterprise-wide data migration to cloud infrastructure"
+        start_date: "2024-01-01"
+        end_date: "2024-12-31"
+        budget: 2500000.00
+        status: "active"
+        project_manager_id: 1
+      - project_id: "PRJ-002"
+        project_name: "Customer Portal Redesign"
+        description: "Complete redesign of customer-facing portal"
+        start_date: "2024-03-15"
+        end_date: "2024-09-30"
+        budget: 850000.00
+        status: "active"
+        project_manager_id: 2
+      - project_id: "PRJ-003"
+        project_name: "Security Enhancement"
+        description: "Implementation of enhanced security protocols"
+        start_date: "2023-06-01"
+        end_date: "2024-05-31"
+        budget: 1200000.00
+        status: "completed"
+        project_manager_id: 1
+
+  project_assignments:
+    columns:
+      assignment_id: "INTEGER PRIMARY KEY"
+      project_id: "VARCHAR(10) NOT NULL"
+      employee_id: "INTEGER NOT NULL"
+      role: "VARCHAR(50)"
+      start_date: "DATE"
+      end_date: "DATE"
+      allocation_percent: "INTEGER"
+    data:
+      - assignment_id: 1
+        project_id: "PRJ-001"
+        employee_id: 1
+        role: "Project Manager"
+        start_date: "2024-01-01"
+        end_date: null
+        allocation_percent: 50
+      - assignment_id: 2
+        project_id: "PRJ-001"
+        employee_id: 2
+        role: "Technical Lead"
+        start_date: "2024-01-15"
+        end_date: null
+        allocation_percent: 100
+      - assignment_id: 3
+        project_id: "PRJ-002"
+        employee_id: 2
+        role: "Project Manager"
+        start_date: "2024-03-15"
+        end_date: null
+        allocation_percent: 75
+      - assignment_id: 4
+        project_id: "PRJ-002"
+        employee_id: 4
+        role: "Marketing Lead"
+        start_date: "2024-03-20"
+        end_date: null
+        allocation_percent: 100

@@ -81,7 +81,7 @@ mod date_literals_in_cte_test {
         let query = parse_sql(
             r#"
         WITH RecentProjects AS (
-            SELECT p.SAP_PROJECT_ID, p.PROJECT_NAME, p.START_DATE
+            SELECT p.PROJECT_ID, p.PROJECT_NAME, p.START_DATE
             FROM SF_PROJECT_V2 p
             WHERE p.START_DATE >= DATE '2004-01-01'
         )
@@ -172,7 +172,7 @@ mod date_literals_in_cte_test {
         r#"
         WITH DateAnalysis AS (
             SELECT 
-                p.SAP_PROJECT_ID,
+                p.PROJECT_ID,
                 p.START_DATE,
                 CASE 
                     WHEN p.START_DATE >= DATE '2025-01-01' THEN 'Recent'
@@ -289,7 +289,7 @@ mod date_literals_in_cte_test {
             FROM SF_PROJECT_V2 p
             WHERE p.START_DATE BETWEEN DATE '2024-01-01' AND DATE '2025-12-31'
         )
-        SELECT SAP_PROJECT_ID, PROJECT_NAME FROM FilteredByDateRange ORDER BY START_DATE
+        SELECT PROJECT_ID, PROJECT_NAME FROM FilteredByDateRange ORDER BY START_DATE
         "#,
         )
         .unwrap();
@@ -397,7 +397,7 @@ mod date_literals_in_cte_test {
         let query = parse_sql(
             r#"
         WITH AllProjects AS (
-            SELECT SAP_PROJECT_ID AS MAIN_PROJECT_ID, PROJECT_NAME, START_DATE
+            SELECT PROJECT_ID AS MAIN_PROJECT_ID, PROJECT_NAME, START_DATE
             FROM SF_PROJECT_V2
             WHERE START_DATE >= DATE '2004-10-05'
               AND PROJECT_STRUCTURE = 'Project'

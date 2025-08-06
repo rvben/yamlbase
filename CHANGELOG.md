@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-08-06
+
+### Added
+- **Teradata Protocol Support** - Native Teradata wire protocol implementation
+  - Parcel-based messaging system for Teradata client compatibility
+  - TD2 authentication mechanism with username/password support
+  - Comprehensive Teradata SQL dialect translation layer
+  - Support for Teradata-specific SQL syntax:
+    - `SEL` as alias for `SELECT`
+    - Date/time literals: `DATE '2024-01-01'`, `TIMESTAMP '2024-01-01 12:00:00'`
+    - `SAMPLE` clause for result limiting
+    - `MOD` operator and `**` for exponentiation
+  - Teradata SQL functions:
+    - `ADD_MONTHS()` - Add months to a date
+    - `LAST_DAY()` - Get last day of month
+    - `EXTRACT()` - Extract date components
+    - `TRUNC()` - Truncate dates
+    - `ZEROIFNULL()` and `NULLIFZERO()` - Null handling functions
+  - System table emulation:
+    - `DBC.Tables` and `DBC.Columns` queries
+    - `HELP TABLE` and `SHOW TABLE` commands
+- Comprehensive test suite for Teradata protocol (`examples/teradata_example.py`)
+- Full documentation for Teradata protocol usage (`docs/TERADATA_PROTOCOL.md`)
+- Enterprise example database schema (`examples/enterprise.yaml`)
+
+### Changed
+- Updated protocol selection to include `teradata` option
+- Enhanced connection handling for protocol-specific implementations
+- Improved SQL translation architecture to support multiple dialects
+
+### Technical Details
+- Teradata default port: 1025
+- Compatible with teradatasql Python driver and BTEQ
+- Protocol translation layer leverages existing PostgreSQL SQL engine
+- Authentication using TD2 mechanism (cleartext password)
+
 ## [0.4.14] - 2025-08-06
 
 ### Added
@@ -44,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Codebase Sanitization**:
-  - Removed all proprietary references (sf_project_v2, SAP_PROJECT_ID)
+  - Removed all proprietary references from codebase
   - Converted to generic naming conventions
   - Enhanced test coverage for real-world scenarios
 - **Test Pass Rate**: All tests now pass consistently

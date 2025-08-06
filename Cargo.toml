@@ -1,6 +1,6 @@
 [package]
 name = "yamlbase"
-version = "0.4.14"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Ruben J. Jongejan <ruben.jongejan@gmail.com>"]

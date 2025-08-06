@@ -20,6 +20,7 @@ Yamlbase is a lightweight SQL server designed for local development and testing.
 - 🚀 **Quick Setup** - Define your database schema and data in simple YAML files
 - 🐘 **PostgreSQL Protocol** - Compatible with standard PostgreSQL clients and drivers
 - 🐬 **MySQL Protocol** - Full MySQL wire protocol support for MySQL clients
+- 🔷 **Teradata Protocol** - Native Teradata wire protocol with SQL dialect support (v0.5.0+)
 - 📊 **SQL Support** - SELECT queries with WHERE, ORDER BY, LIMIT, and basic JOINs
 - 🔄 **Hot Reload** - Automatically reload data when YAML files change
 - 🛠️ **Development Friendly** - Perfect for testing database integrations locally
@@ -79,6 +80,9 @@ yamlbase -f database.yaml
 
 # MySQL protocol
 yamlbase -f database.yaml --protocol mysql
+
+# Teradata protocol
+yamlbase -f database.yaml --protocol teradata --port 1025
 ```
 
 3. Connect with your preferred SQL client:
@@ -96,6 +100,16 @@ psql -h localhost -p 5432 -U admin -d test_db
 mysql -h 127.0.0.1 -P 3306 -u admin -ppassword test_db
 ```
 
+**Teradata:**
+```bash
+# Using BTEQ
+.logon localhost:1025/admin,password
+
+# Using Python teradatasql
+import teradatasql
+conn = teradatasql.connect(host='localhost', port=1025, user='admin', password='password')
+```
+
 4. Run SQL queries:
 ```sql
 SELECT * FROM users WHERE is_active = true;
@@ -111,7 +125,7 @@ Options:
   -f, --file <FILE>          Path to YAML database file
   -p, --port <PORT>          Port to listen on (default: 5432 for postgres, 3306 for mysql)
       --bind-address <ADDR>  Address to bind to [default: 0.0.0.0]
-      --protocol <PROTOCOL>  SQL protocol: postgres, mysql, sqlserver [default: postgres]
+      --protocol <PROTOCOL>  SQL protocol: postgres, mysql, teradata [default: postgres]
   -u, --username <USER>      Authentication username [default: admin]
   -P, --password <PASS>      Authentication password [default: password]
       --hot-reload           Enable hot-reloading of YAML file changes
@@ -264,6 +278,34 @@ SELECT DISTINCT ON (department)
 FROM employees
 ORDER BY department, salary DESC;
 ```
+
+## Protocol Support
+
+### Teradata Protocol (v0.5.0+)
+
+YamlBase now supports the native Teradata wire protocol, allowing Teradata applications and tools to connect without modification.
+
+#### Teradata SQL Features
+- **SEL syntax**: `SEL * FROM table` (alias for SELECT)
+- **Date functions**: `ADD_MONTHS()`, `LAST_DAY()`, `EXTRACT()`
+- **Date literals**: `DATE '2024-01-01'`, `TIMESTAMP '2024-01-01 12:00:00'`
+- **Operators**: `MOD` operator, `**` for exponentiation
+- **SAMPLE clause**: `SELECT * FROM table SAMPLE 10`
+- **Null handling**: `ZEROIFNULL()`, `NULLIFZERO()`
+- **System tables**: `DBC.Tables`, `DBC.Columns`, `HELP TABLE`, `SHOW TABLE`
+
+#### Teradata Example
+```sql
+-- Teradata-specific syntax
+SEL employee_id, 
+    ADD_MONTHS(hire_date, 12) AS anniversary,
+    salary MOD 1000 AS remainder
+FROM employees
+WHERE hire_date > DATE '2023-01-01'
+SAMPLE 100;
+```
+
+For more details, see [Teradata Protocol Documentation](docs/TERADATA_PROTOCOL.md).
 
 ### Not Yet Supported
 

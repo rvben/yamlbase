@@ -95,7 +95,7 @@ async fn test_not_in_cte_simple() {
     println!("\n1. Testing NOT IN with CTE:");
     let query = r#"
         WITH FilteredAllocations AS (
-            SELECT a.SAP_PROJECT_ID, a.PROJECT_STATUS_CODE
+            SELECT a.PROJECT_ID, a.PROJECT_STATUS_CODE
             FROM SF_PROJECT_ALLOCATIONS a
             WHERE a.PROJECT_STATUS_CODE NOT IN ('Cancelled', 'Closed')
         )
@@ -122,7 +122,7 @@ async fn test_not_in_cte_simple() {
     println!("\n2. Testing NOT IN with AND conditions:");
     let query = r#"
         WITH FilteredAllocations AS (
-            SELECT a.SAP_PROJECT_ID, a.PLANNED_EFFORT_HOURS
+            SELECT a.PROJECT_ID, a.PLANNED_EFFORT_HOURS
             FROM SF_PROJECT_ALLOCATIONS a
             WHERE a.PROJECT_STATUS_CODE NOT IN ('Cancelled', 'Closed')
                 AND a.PLANNED_EFFORT_HOURS > 30
@@ -150,7 +150,7 @@ async fn test_not_in_cte_simple() {
     println!("\n3. Testing NOT IN with multiple values:");
     let query = r#"
         WITH FilteredAllocations AS (
-            SELECT a.SAP_PROJECT_ID
+            SELECT a.PROJECT_ID
             FROM SF_PROJECT_ALLOCATIONS a
             WHERE a.PROJECT_STATUS_CODE NOT IN ('Active', 'Cancelled', 'Closed')
         )
@@ -178,11 +178,11 @@ async fn test_not_in_cte_simple() {
     let query = r#"
         WITH FilteredAllocations AS (
             SELECT 
-                a.SAP_PROJECT_ID,
+                a.PROJECT_ID,
                 a.PROJECT_STATUS_CODE NOT IN ('Cancelled', 'Closed') AS is_active
             FROM SF_PROJECT_ALLOCATIONS a
         )
-        SELECT SAP_PROJECT_ID, is_active FROM FilteredAllocations ORDER BY SAP_PROJECT_ID
+        SELECT PROJECT_ID, is_active FROM FilteredAllocations ORDER BY PROJECT_ID
     "#;
 
     let parsed = parse_sql(query).unwrap();
