@@ -54,24 +54,30 @@ async fn test_wildcard_projection_cte() {
     );
 
     // Add data
-    allocations_table.insert_row(vec![
-        Value::Text("123001".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("emp001".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(400, 1)), // 40.0
-    ]).unwrap();
-    allocations_table.insert_row(vec![
-        Value::Text("123002".to_string()),
-        Value::Text("Draft".to_string()),
-        Value::Text("emp002".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(200, 1)), // 20.0
-    ]).unwrap();
-    allocations_table.insert_row(vec![
-        Value::Text("123003".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("emp003".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(300, 1)), // 30.0
-    ]).unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123001".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("emp001".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(400, 1)), // 40.0
+        ])
+        .unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123002".to_string()),
+            Value::Text("Draft".to_string()),
+            Value::Text("emp002".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(200, 1)), // 20.0
+        ])
+        .unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123003".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("emp003".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(300, 1)), // 30.0
+        ])
+        .unwrap();
 
     db.add_table(allocations_table).unwrap();
 
@@ -100,18 +106,24 @@ async fn test_wildcard_projection_cte() {
         ],
     );
 
-    projects_table.insert_row(vec![
-        Value::Text("123001".to_string()),
-        Value::Text("Project Alpha".to_string()),
-    ]).unwrap();
-    projects_table.insert_row(vec![
-        Value::Text("123002".to_string()),
-        Value::Text("Project Beta".to_string()),
-    ]).unwrap();
-    projects_table.insert_row(vec![
-        Value::Text("123003".to_string()),
-        Value::Text("Project Gamma".to_string()),
-    ]).unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Text("123001".to_string()),
+            Value::Text("Project Alpha".to_string()),
+        ])
+        .unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Text("123002".to_string()),
+            Value::Text("Project Beta".to_string()),
+        ])
+        .unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Text("123003".to_string()),
+            Value::Text("Project Gamma".to_string()),
+        ])
+        .unwrap();
 
     db.add_table(projects_table).unwrap();
 
@@ -159,9 +171,15 @@ async fn test_wildcard_projection_cte() {
             println!("   ✅ SELECT * with specific column retrieval works!");
             assert_eq!(result.rows.len(), 2);
             assert_eq!(result.rows[0][0], Value::Text("123001".to_string()));
-            assert_eq!(result.rows[0][1], Value::Decimal(rust_decimal::Decimal::new(400, 1)));
+            assert_eq!(
+                result.rows[0][1],
+                Value::Decimal(rust_decimal::Decimal::new(400, 1))
+            );
             assert_eq!(result.rows[1][0], Value::Text("123003".to_string()));
-            assert_eq!(result.rows[1][1], Value::Decimal(rust_decimal::Decimal::new(300, 1)));
+            assert_eq!(
+                result.rows[1][1],
+                Value::Decimal(rust_decimal::Decimal::new(300, 1))
+            );
             println!("   Retrieved specific columns from wildcard CTE");
         }
         Err(e) => {
@@ -187,7 +205,10 @@ async fn test_wildcard_projection_cte() {
             println!("   ✅ Qualified wildcard (table.*) in CTE works!");
             assert_eq!(result.rows.len(), 1);
             assert_eq!(result.rows[0][0], Value::Integer(2)); // Two published allocations joined with projects
-            println!("   Count of joined project-allocation records: {:?}", result.rows[0][0]);
+            println!(
+                "   Count of joined project-allocation records: {:?}",
+                result.rows[0][0]
+            );
         }
         Err(e) => {
             panic!("   ❌ Failed with: {e}");
