@@ -397,7 +397,10 @@ mod production_readiness_tests {
         if let Err(ref e) = result {
             println!("ERROR in enterprise production query: {:?}", e);
         }
-        assert!(result.is_ok(), "Complete enterprise production query should work");
+        assert!(
+            result.is_ok(),
+            "Complete enterprise production query should work"
+        );
 
         let res = result.unwrap();
         println!("Enterprise query returned {} rows", res.rows.len());

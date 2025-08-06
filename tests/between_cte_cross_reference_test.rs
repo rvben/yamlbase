@@ -78,7 +78,7 @@ async fn setup_test_db() -> Arc<QueryExecutor> {
             Value::Integer(90),
         ])
         .unwrap();
-    
+
     allocations_table
         .insert_row(vec![
             Value::Text("PROJ002".to_string()),
@@ -89,7 +89,7 @@ async fn setup_test_db() -> Arc<QueryExecutor> {
             Value::Integer(140),
         ])
         .unwrap();
-    
+
     allocations_table
         .insert_row(vec![
             Value::Text("PROJ003".to_string()),
@@ -100,7 +100,7 @@ async fn setup_test_db() -> Arc<QueryExecutor> {
             Value::Integer(0),
         ])
         .unwrap();
-    
+
     allocations_table
         .insert_row(vec![
             Value::Text("PROJ004".to_string()),
@@ -137,7 +137,7 @@ async fn test_between_with_cte_cross_reference_simple() {
 
     let statements = parse_sql(sql).unwrap();
     let result = executor.execute(&statements[0]).await.unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0][0], Value::Integer(2)); // Should return 2 rows
 }
@@ -165,7 +165,7 @@ async fn test_between_with_cte_and_additional_conditions() {
 
     let statements = parse_sql(sql).unwrap();
     let result = executor.execute(&statements[0]).await.unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0][0], Value::Integer(2)); // Both matching rows have Hard Allocation
 }
@@ -197,14 +197,14 @@ async fn test_between_with_nested_conditions() {
 
     let statements = parse_sql(sql).unwrap();
     let result = executor.execute(&statements[0]).await.unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.columns.len(), 1);
     assert_eq!(result.columns[0], "total_count");
     assert_eq!(result.rows[0][0], Value::Integer(4)); // All 4 projects match the criteria
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_multiple_between_conditions() {
     let executor = setup_test_db().await;
 
@@ -230,7 +230,7 @@ async fn test_multiple_between_conditions() {
 
     let statements = parse_sql(sql).unwrap();
     let result = executor.execute(&statements[0]).await.unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0][0], Value::Integer(2)); // PROJ001 and PROJ002
 }

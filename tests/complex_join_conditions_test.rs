@@ -286,7 +286,7 @@ async fn test_complex_join_conditions() {
 #[tokio::test]
 async fn test_complex_where_with_not_in_regression() {
     println!("=== COMPLEX WHERE WITH NOT IN REGRESSION TEST ===");
-    
+
     // Create test database
     let mut db = Database::new("test_db".to_string());
 
@@ -352,22 +352,26 @@ async fn test_complex_where_with_not_in_regression() {
     );
 
     // Add test data
-    projects_table.insert_row(vec![
-        Value::Text("123001".to_string()),
-        Value::Text("Test Project Alpha".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("Y".to_string()),
-        Value::Text("Project".to_string()),
-    ]).unwrap();
-    projects_table.insert_row(vec![
-        Value::Text("123002".to_string()),
-        Value::Text("Test Project Beta".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Cancelled".to_string()),
-        Value::Text("N".to_string()),
-        Value::Text("Project".to_string()),
-    ]).unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Text("123001".to_string()),
+            Value::Text("Test Project Alpha".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("Y".to_string()),
+            Value::Text("Project".to_string()),
+        ])
+        .unwrap();
+    projects_table
+        .insert_row(vec![
+            Value::Text("123002".to_string()),
+            Value::Text("Test Project Beta".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Cancelled".to_string()),
+            Value::Text("N".to_string()),
+            Value::Text("Project".to_string()),
+        ])
+        .unwrap();
 
     db.add_table(projects_table).unwrap();
 
@@ -442,24 +446,28 @@ async fn test_complex_where_with_not_in_regression() {
     );
 
     // Add test data
-    allocations_table.insert_row(vec![
-        Value::Text("123001".to_string()),
-        Value::Text("emp001".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Hard Allocation".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(400, 1)), // 40.0
-        Value::Decimal(rust_decimal::Decimal::new(385, 1)), // 38.5
-    ]).unwrap();
-    allocations_table.insert_row(vec![
-        Value::Text("123001".to_string()),
-        Value::Text("emp002".to_string()),
-        Value::Text("Published".to_string()),
-        Value::Text("Hard Allocation".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(200, 1)), // 20.0
-        Value::Decimal(rust_decimal::Decimal::new(0, 1)), // 0.0
-    ]).unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123001".to_string()),
+            Value::Text("emp001".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Hard Allocation".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(400, 1)), // 40.0
+            Value::Decimal(rust_decimal::Decimal::new(385, 1)), // 38.5
+        ])
+        .unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123001".to_string()),
+            Value::Text("emp002".to_string()),
+            Value::Text("Published".to_string()),
+            Value::Text("Hard Allocation".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(200, 1)), // 20.0
+            Value::Decimal(rust_decimal::Decimal::new(0, 1)),   // 0.0
+        ])
+        .unwrap();
 
     db.add_table(allocations_table).unwrap();
 
@@ -498,7 +506,9 @@ async fn test_complex_where_with_not_in_regression() {
             assert_eq!(result.rows[0][2], Value::Integer(2)); // Two distinct employees
         }
         Err(e) => {
-            panic!("   ❌ Failed with: {e}\n   This was a regression in 0.4.11 that should now be fixed");
+            panic!(
+                "   ❌ Failed with: {e}\n   This was a regression in 0.4.11 that should now be fixed"
+            );
         }
     }
 

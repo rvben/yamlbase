@@ -63,34 +63,42 @@ async fn test_group_by_with_cte_columns() {
     );
 
     // Add test data
-    orders_table.insert_row(vec![
-        Value::Integer(1),
-        Value::Integer(101),
-        Value::Text("Widget".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(1000, 1)), // 100.0
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 15).unwrap()),
-    ]).unwrap();
-    orders_table.insert_row(vec![
-        Value::Integer(2),
-        Value::Integer(102),
-        Value::Text("Widget".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(1500, 1)), // 150.0
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 16).unwrap()),
-    ]).unwrap();
-    orders_table.insert_row(vec![
-        Value::Integer(3),
-        Value::Integer(101),
-        Value::Text("Gadget".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(2000, 1)), // 200.0
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 17).unwrap()),
-    ]).unwrap();
-    orders_table.insert_row(vec![
-        Value::Integer(4),
-        Value::Integer(103),
-        Value::Text("Widget".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(1200, 1)), // 120.0
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 18).unwrap()),
-    ]).unwrap();
+    orders_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Integer(101),
+            Value::Text("Widget".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(1000, 1)), // 100.0
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 15).unwrap()),
+        ])
+        .unwrap();
+    orders_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Integer(102),
+            Value::Text("Widget".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(1500, 1)), // 150.0
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 16).unwrap()),
+        ])
+        .unwrap();
+    orders_table
+        .insert_row(vec![
+            Value::Integer(3),
+            Value::Integer(101),
+            Value::Text("Gadget".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(2000, 1)), // 200.0
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 17).unwrap()),
+        ])
+        .unwrap();
+    orders_table
+        .insert_row(vec![
+            Value::Integer(4),
+            Value::Integer(103),
+            Value::Text("Widget".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(1200, 1)), // 120.0
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2025, 1, 18).unwrap()),
+        ])
+        .unwrap();
 
     db.add_table(orders_table).unwrap();
     let storage = Storage::new(db);
@@ -116,26 +124,26 @@ async fn test_group_by_with_cte_columns() {
             println!("   Number of rows returned: {}", result.rows.len());
             println!("   Columns: {:?}", result.columns);
             for (i, row) in result.rows.iter().enumerate() {
-                println!("   Row {}: {:?}", i, row);
+                println!("   Row {i}: {row:?}");
             }
             assert_eq!(result.rows.len(), 2); // Widget and Gadget
-            
+
             // Check Gadget total (200) - comes first alphabetically
             assert_eq!(result.rows[0][0], Value::Text("Gadget".to_string()));
             match &result.rows[0][1] {
                 Value::Decimal(d) => assert_eq!(*d, rust_decimal::Decimal::new(2000, 1)),
                 Value::Integer(i) => assert_eq!(*i, 200),
-                other => panic!("Expected Decimal or Integer, got {:?}", other),
+                other => panic!("Expected Decimal or Integer, got {other:?}"),
             }
-            
+
             // Check Widget total (100 + 150 + 120 = 370)
             assert_eq!(result.rows[1][0], Value::Text("Widget".to_string()));
             match &result.rows[1][1] {
                 Value::Decimal(d) => assert_eq!(*d, rust_decimal::Decimal::new(3700, 1)),
                 Value::Integer(i) => assert_eq!(*i, 370),
-                other => panic!("Expected Decimal or Integer, got {:?}", other),
+                other => panic!("Expected Decimal or Integer, got {other:?}"),
             }
-            
+
             println!("   Results:");
             for row in &result.rows {
                 println!("     Product: {}, Total: {:?}", row[0], row[1]);
@@ -166,14 +174,16 @@ async fn test_group_by_with_cte_columns() {
             println!("   Number of rows returned: {}", result.rows.len());
             println!("   Columns: {:?}", result.columns);
             for (i, row) in result.rows.iter().enumerate() {
-                println!("   Row {}: {:?}", i, row);
+                println!("   Row {i}: {row:?}");
             }
             assert_eq!(result.rows.len(), 4); // Actually 4 unique customer-product combinations
-            
+
             println!("   Results:");
             for row in &result.rows {
-                println!("     Customer: {}, Product: {}, Count: {:?}, Total: {:?}", 
-                    row[0], row[1], row[2], row[3]);
+                println!(
+                    "     Customer: {}, Product: {}, Count: {:?}, Total: {:?}",
+                    row[0], row[1], row[2], row[3]
+                );
             }
         }
         Err(e) => {
@@ -201,7 +211,7 @@ async fn test_group_by_with_cte_columns() {
         Ok(result) => {
             println!("   ✅ GROUP BY with expressions on CTE columns works!");
             assert_eq!(result.rows.len(), 1); // All orders are in January
-            
+
             println!("   Results:");
             for row in &result.rows {
                 println!("     Month: {:?}, Total: {:?}", row[0], row[1]);
@@ -232,7 +242,7 @@ async fn test_group_by_with_cte_columns() {
             println!("   ✅ GROUP BY with HAVING on CTE works!");
             assert_eq!(result.rows.len(), 1); // Only Widget has total > 250
             assert_eq!(result.rows[0][0], Value::Text("Widget".to_string()));
-            
+
             println!("   Results:");
             for row in &result.rows {
                 println!("     Product: {}, Total: {:?}", row[0], row[1]);

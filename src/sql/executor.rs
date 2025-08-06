@@ -2,10 +2,10 @@ use chrono::{self, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use regex::Regex;
 use rust_decimal::prelude::*;
 use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, Distinct, DuplicateTreatment, Expr, Function, FunctionArg,
-    FunctionArgExpr, FunctionArguments, GroupByExpr, JoinConstraint, JoinOperator, OrderByExpr,
-    Query, Select, SelectItem, SetExpr, SetOperator, SetQuantifier, Statement, TableFactor,
-    TableWithJoins, UnaryOperator, With,
+    BinaryOperator, DataType, DateTimeField, Distinct, DuplicateTreatment, Expr, Function,
+    FunctionArg, FunctionArgExpr, FunctionArguments, GroupByExpr, JoinConstraint, JoinOperator,
+    OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, SetQuantifier, Statement,
+    TableFactor, TableWithJoins, UnaryOperator, With,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -774,7 +774,10 @@ impl QueryExecutor {
         }
     }
 
-    fn extract_table_name_and_alias(&self, from: &[TableWithJoins]) -> crate::Result<(String, Option<String>)> {
+    fn extract_table_name_and_alias(
+        &self,
+        from: &[TableWithJoins],
+    ) -> crate::Result<(String, Option<String>)> {
         if from.is_empty() {
             return Err(YamlBaseError::Database {
                 message: "No FROM clause specified".to_string(),
@@ -1017,7 +1020,7 @@ impl QueryExecutor {
                     }
                 })
                 .collect();
-            
+
             self.apply_distinct(projected_rows, &select.distinct, &projection_items)?
         } else {
             projected_rows
@@ -1080,21 +1083,25 @@ impl QueryExecutor {
                             if parts.len() == 2 {
                                 let table_ref = &parts[0].value;
                                 let col_name = &parts[1].value;
-                                
+
                                 // Check if table reference matches the table alias or name
                                 let matches = if let Some(alias) = table_alias {
                                     table_ref == alias
                                 } else {
                                     table_ref == &table.name
                                 };
-                                
+
                                 if matches {
-                                    let col_idx = table.get_column_index(col_name).ok_or_else(|| {
-                                        YamlBaseError::Database {
-                                            message: format!("Column '{}' not found", col_name),
-                                        }
-                                    })?;
-                                    columns.push(ProjectionItem::TableColumn(col_name.clone(), col_idx));
+                                    let col_idx =
+                                        table.get_column_index(col_name).ok_or_else(|| {
+                                            YamlBaseError::Database {
+                                                message: format!("Column '{}' not found", col_name),
+                                            }
+                                        })?;
+                                    columns.push(ProjectionItem::TableColumn(
+                                        col_name.clone(),
+                                        col_idx,
+                                    ));
                                 } else {
                                     // If table ref doesn't match, treat as expression
                                     let col_name = format!("column_{}", column_counter);
@@ -1162,21 +1169,25 @@ impl QueryExecutor {
                             if parts.len() == 2 {
                                 let table_ref = &parts[0].value;
                                 let col_name = &parts[1].value;
-                                
+
                                 // Check if table reference matches the table alias or name
                                 let matches = if let Some(alias_str) = table_alias {
                                     table_ref == alias_str
                                 } else {
                                     table_ref == &table.name
                                 };
-                                
+
                                 if matches {
-                                    let col_idx = table.get_column_index(col_name).ok_or_else(|| {
-                                        YamlBaseError::Database {
-                                            message: format!("Column '{}' not found", col_name),
-                                        }
-                                    })?;
-                                    columns.push(ProjectionItem::TableColumn(alias.value.clone(), col_idx));
+                                    let col_idx =
+                                        table.get_column_index(col_name).ok_or_else(|| {
+                                            YamlBaseError::Database {
+                                                message: format!("Column '{}' not found", col_name),
+                                            }
+                                        })?;
+                                    columns.push(ProjectionItem::TableColumn(
+                                        alias.value.clone(),
+                                        col_idx,
+                                    ));
                                 } else {
                                     // If table ref doesn't match, treat as expression
                                     columns.push(ProjectionItem::Expression(
@@ -1232,14 +1243,14 @@ impl QueryExecutor {
                         .first()
                         .map(|ident| ident.value.as_str())
                         .unwrap_or("");
-                    
+
                     // Check if the wildcard alias matches the table alias or table name
                     let matches = if let Some(alias) = table_alias {
                         wildcard_alias == alias
                     } else {
                         wildcard_alias == table.name.as_str()
                     };
-                    
+
                     if matches {
                         for (idx, col) in table.columns.iter().enumerate() {
                             columns.push(ProjectionItem::TableColumn(col.name.clone(), idx));
@@ -2446,7 +2457,7 @@ impl QueryExecutor {
                 } => {
                     // Get the value to check
                     let value = self.get_expr_value_async(expr, row, table).await?;
-                    
+
                     // Check if the value is in the list
                     let mut found = false;
                     for list_expr in list {
@@ -2459,7 +2470,8 @@ impl QueryExecutor {
                                 }
                             }
                             _ => {
-                                let list_value = self.get_expr_value_async(list_expr, row, table).await?;
+                                let list_value =
+                                    self.get_expr_value_async(list_expr, row, table).await?;
                                 if value == list_value {
                                     found = true;
                                     break;
@@ -2467,7 +2479,7 @@ impl QueryExecutor {
                             }
                         }
                     }
-                    
+
                     Ok(Value::Boolean(if *negated { !found } else { found }))
                 }
                 _ => Err(YamlBaseError::NotImplemented(format!(
@@ -2884,12 +2896,24 @@ impl QueryExecutor {
                         }),
                     },
                     // Comparison operators that return boolean values
-                    BinaryOperator::Eq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? == 0)),
-                    BinaryOperator::NotEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? != 0)),
-                    BinaryOperator::Lt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? < 0)),
-                    BinaryOperator::LtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? <= 0)),
-                    BinaryOperator::Gt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? > 0)),
-                    BinaryOperator::GtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? >= 0)),
+                    BinaryOperator::Eq => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? == 0,
+                    )),
+                    BinaryOperator::NotEq => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? != 0,
+                    )),
+                    BinaryOperator::Lt => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? < 0,
+                    )),
+                    BinaryOperator::LtEq => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? <= 0,
+                    )),
+                    BinaryOperator::Gt => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? > 0,
+                    )),
+                    BinaryOperator::GtEq => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? >= 0,
+                    )),
                     _ => Err(YamlBaseError::NotImplemented(format!(
                         "Binary operator {:?} not supported in get_expr_value",
                         op
@@ -2903,7 +2927,7 @@ impl QueryExecutor {
             } => {
                 // Get the value to check
                 let value = self.get_expr_value(expr, row, table)?;
-                
+
                 // Check if the value is in the list
                 let mut found = false;
                 for list_expr in list {
@@ -2924,7 +2948,7 @@ impl QueryExecutor {
                         }
                     }
                 }
-                
+
                 Ok(Value::Boolean(if *negated { !found } else { found }))
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
@@ -6760,11 +6784,16 @@ impl QueryExecutor {
         }
     }
 
-    fn apply_distinct(&self, rows: Vec<Vec<Value>>, distinct: &Option<Distinct>, columns: &[ProjectionItem]) -> crate::Result<Vec<Vec<Value>>> {
+    fn apply_distinct(
+        &self,
+        rows: Vec<Vec<Value>>,
+        distinct: &Option<Distinct>,
+        columns: &[ProjectionItem],
+    ) -> crate::Result<Vec<Vec<Value>>> {
         if rows.is_empty() {
             return Ok(rows);
         }
-        
+
         match distinct {
             Some(Distinct::Distinct) => {
                 // Standard DISTINCT - remove duplicate rows
@@ -6783,29 +6812,27 @@ impl QueryExecutor {
                 // DISTINCT ON - keep first row for each unique combination of specified expressions
                 let mut seen = std::collections::HashSet::new();
                 let mut distinct_rows = Vec::new();
-                
+
                 for row in rows {
                     // Evaluate DISTINCT ON expressions for this row
                     let mut key_values = Vec::new();
-                    
+
                     for expr in exprs {
                         // Create a temporary column map for expression evaluation
                         let column_map: std::collections::HashMap<String, usize> = columns
                             .iter()
                             .enumerate()
-                            .map(|(idx, item)| {
-                                match item {
-                                    ProjectionItem::TableColumn(name, _) => (name.clone(), idx),
-                                    ProjectionItem::Constant(name, _) => (name.clone(), idx),
-                                    ProjectionItem::Expression(name, _) => (name.clone(), idx),
-                                }
+                            .map(|(idx, item)| match item {
+                                ProjectionItem::TableColumn(name, _) => (name.clone(), idx),
+                                ProjectionItem::Constant(name, _) => (name.clone(), idx),
+                                ProjectionItem::Expression(name, _) => (name.clone(), idx),
                             })
                             .collect();
-                        
+
                         let value = self.evaluate_expr_with_row(expr, &row, &column_map)?;
                         key_values.push(value);
                     }
-                    
+
                     // Check if we've seen this combination of values
                     if seen.insert(key_values) {
                         distinct_rows.push(row);
@@ -6819,10 +6846,15 @@ impl QueryExecutor {
             }
         }
     }
-    
+
     // Helper method to evaluate expression with a specific row
     #[allow(clippy::only_used_in_recursion)]
-    fn evaluate_expr_with_row(&self, expr: &Expr, row: &[Value], column_map: &std::collections::HashMap<String, usize>) -> crate::Result<Value> {
+    fn evaluate_expr_with_row(
+        &self,
+        expr: &Expr,
+        row: &[Value],
+        column_map: &std::collections::HashMap<String, usize>,
+    ) -> crate::Result<Value> {
         match expr {
             Expr::Identifier(ident) => {
                 let col_name = &ident.value;
@@ -6835,7 +6867,7 @@ impl QueryExecutor {
                         .iter()
                         .find(|(k, _)| k.to_lowercase() == col_name_lower)
                         .map(|(_, &idx)| idx);
-                    
+
                     if let Some(idx) = found_idx {
                         Ok(row.get(idx).cloned().unwrap_or(Value::Null))
                     } else {
@@ -6856,7 +6888,7 @@ impl QueryExecutor {
                         .iter()
                         .find(|(k, _)| k.to_lowercase() == col_name_lower)
                         .map(|(_, &idx)| idx);
-                    
+
                     if let Some(idx) = found_idx {
                         Ok(row.get(idx).cloned().unwrap_or(Value::Null))
                     } else {
@@ -6869,7 +6901,7 @@ impl QueryExecutor {
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_expr_with_row(left, row, column_map)?;
                 let right_val = self.evaluate_expr_with_row(right, row, column_map)?;
-                
+
                 // Perform the binary operation on the values directly
                 match op {
                     BinaryOperator::Eq => Ok(Value::Boolean(left_val == right_val)),
@@ -6931,9 +6963,8 @@ impl QueryExecutor {
                             })
                         }
                     }
-                    sqlparser::ast::Value::SingleQuotedString(s) | sqlparser::ast::Value::DoubleQuotedString(s) => {
-                        Ok(Value::Text(s.clone()))
-                    }
+                    sqlparser::ast::Value::SingleQuotedString(s)
+                    | sqlparser::ast::Value::DoubleQuotedString(s) => Ok(Value::Text(s.clone())),
                     sqlparser::ast::Value::Boolean(b) => Ok(Value::Boolean(*b)),
                     sqlparser::ast::Value::Null => Ok(Value::Null),
                     _ => Err(YamlBaseError::Database {
@@ -6946,7 +6977,6 @@ impl QueryExecutor {
             }),
         }
     }
-    
 
     fn create_virtual_table_from_result(
         &self,
@@ -8552,14 +8582,19 @@ impl QueryExecutor {
                 // Handle parenthesized expressions
                 self.evaluate_join_condition(inner, row, tables, table_aliases)
             }
-            Expr::UnaryOp { op: UnaryOperator::Not, expr: inner } => {
+            Expr::UnaryOp {
+                op: UnaryOperator::Not,
+                expr: inner,
+            } => {
                 // Handle NOT expressions
-                let inner_result = self.evaluate_join_condition(inner, row, tables, table_aliases)?;
+                let inner_result =
+                    self.evaluate_join_condition(inner, row, tables, table_aliases)?;
                 Ok(!inner_result)
             }
-            _ => Err(YamlBaseError::NotImplemented(
-                format!("JOIN condition expression type not yet supported: {:?}", expr),
-            )),
+            _ => Err(YamlBaseError::NotImplemented(format!(
+                "JOIN condition expression type not yet supported: {:?}",
+                expr
+            ))),
         }
     }
 
@@ -9187,7 +9222,7 @@ impl QueryExecutor {
             Expr::Identifier(ident) => {
                 // Handle unqualified column references
                 let column_name = &ident.value;
-                
+
                 // Search all tables for this column
                 for (table_idx, (_, table)) in tables.iter().enumerate() {
                     if let Some(col_idx) = table.get_column_index(column_name) {
@@ -9200,9 +9235,7 @@ impl QueryExecutor {
                     message: format!("Column '{}' not found", column_name),
                 })
             }
-            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => {
-                Ok(Value::Text(s.clone()))
-            }
+            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s)) => Ok(Value::Text(s.clone())),
             Expr::Value(sqlparser::ast::Value::Number(n, _)) => {
                 if let Ok(int_val) = n.parse::<i64>() {
                     Ok(Value::Integer(int_val))
@@ -9498,7 +9531,9 @@ impl QueryExecutor {
                             Err(_) => {
                                 // Try without time part
                                 match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-                                    Ok(date) => Ok(Value::Timestamp(date.and_hms_opt(0, 0, 0).unwrap())),
+                                    Ok(date) => {
+                                        Ok(Value::Timestamp(date.and_hms_opt(0, 0, 0).unwrap()))
+                                    }
                                     Err(_) => Err(YamlBaseError::Database {
                                         message: format!("Invalid timestamp format: {}", value),
                                     }),
@@ -9513,7 +9548,10 @@ impl QueryExecutor {
                 }
             }
             _ => {
-                eprintln!("DEBUG: Unsupported expression in get_join_expr_value: {:?}", expr);
+                eprintln!(
+                    "DEBUG: Unsupported expression in get_join_expr_value: {:?}",
+                    expr
+                );
                 Err(YamlBaseError::NotImplemented(
                     "Expression type not supported in JOIN conditions".to_string(),
                 ))
@@ -9610,7 +9648,8 @@ impl QueryExecutor {
                             // Complex expression - needs row context
                             let col_name = format!("column_{}", column_counter);
                             column_counter += 1;
-                            columns.push(JoinedColumn::Expression(col_name, Box::new(expr.clone())));
+                            columns
+                                .push(JoinedColumn::Expression(col_name, Box::new(expr.clone())));
                         }
                     }
                 }
@@ -9660,7 +9699,10 @@ impl QueryExecutor {
                         }
                         _ => {
                             // Complex expression - needs row context
-                            columns.push(JoinedColumn::Expression(alias.value.clone(), Box::new(expr.clone())));
+                            columns.push(JoinedColumn::Expression(
+                                alias.value.clone(),
+                                Box::new(expr.clone()),
+                            ));
                         }
                     }
                 }
@@ -9687,11 +9729,12 @@ impl QueryExecutor {
                         .first()
                         .map(|ident| ident.value.as_str())
                         .unwrap_or("");
-                    
+
                     // Resolve table alias if needed
                     let table_ref_string = table_ref.to_string();
-                    let actual_table_name = table_aliases.get(table_ref).unwrap_or(&table_ref_string);
-                    
+                    let actual_table_name =
+                        table_aliases.get(table_ref).unwrap_or(&table_ref_string);
+
                     // Find the table and include all its columns
                     let mut found = false;
                     for (table_idx, (table_name, table)) in tables.iter().enumerate() {
@@ -9708,7 +9751,7 @@ impl QueryExecutor {
                             break;
                         }
                     }
-                    
+
                     if !found {
                         return Err(YamlBaseError::Database {
                             message: format!("Table '{}' not found in FROM clause", table_ref),
@@ -9780,10 +9823,10 @@ impl QueryExecutor {
                     }
                     JoinedColumn::Expression(_, expr) => {
                         let value = self.evaluate_expression_with_join_row(
-                            expr.as_ref(), 
-                            row, 
-                            tables, 
-                            &table_offsets
+                            expr.as_ref(),
+                            row,
+                            tables,
+                            &table_offsets,
                         )?;
                         projected_row.push(value);
                     }
@@ -10525,7 +10568,7 @@ impl QueryExecutor {
                         .iter()
                         .find(|(k, _)| k.to_lowercase() == col_name_lower)
                         .map(|(_, &idx)| idx);
-                    
+
                     if let Some(col_idx) = found_idx {
                         Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                     } else {
@@ -10550,12 +10593,15 @@ impl QueryExecutor {
                         .iter()
                         .find(|(k, _)| k.to_lowercase() == qualified_name_lower)
                         .map(|(_, &idx)| idx);
-                    
+
                     if let Some(col_idx) = found_idx {
                         Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                     } else {
                         Err(YamlBaseError::Database {
-                            message: format!("Column '{}' not found in joined result", qualified_name),
+                            message: format!(
+                                "Column '{}' not found in joined result",
+                                qualified_name
+                            ),
                         })
                     }
                 }
@@ -10564,14 +10610,22 @@ impl QueryExecutor {
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_joined_expression(left, row, column_mapping)?;
                 let right_val = self.evaluate_joined_expression(right, row, column_mapping)?;
-                
+
                 match op {
                     BinaryOperator::Eq => Ok(Value::Boolean(left_val == right_val)),
                     BinaryOperator::NotEq => Ok(Value::Boolean(left_val != right_val)),
-                    BinaryOperator::Lt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? < 0)),
-                    BinaryOperator::LtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? <= 0)),
-                    BinaryOperator::Gt => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? > 0)),
-                    BinaryOperator::GtEq => Ok(Value::Boolean(self.compare_values(&left_val, &right_val)? >= 0)),
+                    BinaryOperator::Lt => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? < 0,
+                    )),
+                    BinaryOperator::LtEq => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? <= 0,
+                    )),
+                    BinaryOperator::Gt => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? > 0,
+                    )),
+                    BinaryOperator::GtEq => Ok(Value::Boolean(
+                        self.compare_values(&left_val, &right_val)? >= 0,
+                    )),
                     BinaryOperator::And => {
                         let left_bool = self.convert_value_to_bool(&left_val);
                         let right_bool = self.convert_value_to_bool(&right_val);
@@ -10588,24 +10642,27 @@ impl QueryExecutor {
                     ))),
                 }
             }
-            Expr::InList { expr, list, negated } => {
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
                 let expr_val = self.evaluate_joined_expression(expr, row, column_mapping)?;
-                
+
                 // Check if the value is in the list
                 let mut found = false;
                 for list_expr in list {
-                    let list_val = self.evaluate_joined_expression(list_expr, row, column_mapping)?;
+                    let list_val =
+                        self.evaluate_joined_expression(list_expr, row, column_mapping)?;
                     if expr_val == list_val {
                         found = true;
                         break;
                     }
                 }
-                
+
                 Ok(Value::Boolean(if *negated { !found } else { found }))
             }
-            Expr::Nested(inner) => {
-                self.evaluate_joined_expression(inner, row, column_mapping)
-            }
+            Expr::Nested(inner) => self.evaluate_joined_expression(inner, row, column_mapping),
             _ => Err(YamlBaseError::NotImplemented(format!(
                 "Expression {:?} not supported in WHERE clause for joined rows",
                 expr
@@ -10632,7 +10689,7 @@ impl QueryExecutor {
                         .iter()
                         .find(|(k, _)| k.to_lowercase() == col_name_lower)
                         .map(|(_, &idx)| idx);
-                    
+
                     if let Some(col_idx) = found_idx {
                         Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                     } else {
@@ -10657,12 +10714,15 @@ impl QueryExecutor {
                         .iter()
                         .find(|(k, _)| k.to_lowercase() == qualified_name_lower)
                         .map(|(_, &idx)| idx);
-                    
+
                     if let Some(col_idx) = found_idx {
                         Ok(row.get(col_idx).cloned().unwrap_or(Value::Null))
                     } else {
                         Err(YamlBaseError::Database {
-                            message: format!("Column '{}' not found in joined result", qualified_name),
+                            message: format!(
+                                "Column '{}' not found in joined result",
+                                qualified_name
+                            ),
                         })
                     }
                 }
@@ -11114,7 +11174,7 @@ impl QueryExecutor {
                             .iter()
                             .find(|(k, _)| k.to_lowercase() == col_name_lower)
                             .map(|(_, &idx)| idx);
-                        
+
                         if let Some(col_idx) = found_idx {
                             row.get(col_idx).cloned().unwrap_or(Value::Null)
                         } else {
@@ -11247,7 +11307,10 @@ impl QueryExecutor {
         // Execute each CTE in order - CTEs can reference previously defined CTEs
         for cte_table in &with.cte_tables {
             let cte_name = cte_table.alias.name.value.clone();
-            eprintln!("DEBUG: Starting to execute CTE '{}' (recursive: {})", cte_name, with.recursive);
+            eprintln!(
+                "DEBUG: Starting to execute CTE '{}' (recursive: {})",
+                cte_name, with.recursive
+            );
             debug!(
                 "Executing CTE: {} (recursive: {}, with {} existing CTEs available)",
                 cte_name,
@@ -11258,47 +11321,59 @@ impl QueryExecutor {
             // Check if this is a RECURSIVE CTE
             let mut cte_result = if with.recursive {
                 // Handle RECURSIVE CTE
-                self.execute_recursive_cte(db, cte_table, &cte_results).await?
+                self.execute_recursive_cte(db, cte_table, &cte_results)
+                    .await?
             } else {
                 // Execute regular CTE
                 match &cte_table.query.body.as_ref() {
-                SetExpr::Select(select) => {
-                    eprintln!("DEBUG: CTE has {} FROM items", select.from.len());
-                    // Pass the current CTE results so this CTE can reference previous ones
-                    let result = self.execute_select_with_cte_context(db, select, &cte_table.query, &cte_results)
-                        .await?;
-                    eprintln!("DEBUG: CTE '{}' query returned {} columns: {:?}", 
-                             cte_name, result.columns.len(), result.columns);
-                    result
-                }
-                SetExpr::SetOperation {
-                    op,
-                    set_quantifier,
-                    left,
-                    right,
-                } => {
-                    // Handle UNION, UNION ALL, INTERSECT, EXCEPT operations within CTEs
-                    self.execute_cte_set_operation(
-                        db,
+                    SetExpr::Select(select) => {
+                        eprintln!("DEBUG: CTE has {} FROM items", select.from.len());
+                        // Pass the current CTE results so this CTE can reference previous ones
+                        let result = self
+                            .execute_select_with_cte_context(
+                                db,
+                                select,
+                                &cte_table.query,
+                                &cte_results,
+                            )
+                            .await?;
+                        eprintln!(
+                            "DEBUG: CTE '{}' query returned {} columns: {:?}",
+                            cte_name,
+                            result.columns.len(),
+                            result.columns
+                        );
+                        result
+                    }
+                    SetExpr::SetOperation {
                         op,
                         set_quantifier,
                         left,
                         right,
-                        &cte_results,
-                    )
-                    .await?
-                }
-                _ => {
-                    return Err(YamlBaseError::NotImplemented(
-                        "This type of query is not yet supported in CTEs".to_string(),
-                    ));
-                }
+                    } => {
+                        // Handle UNION, UNION ALL, INTERSECT, EXCEPT operations within CTEs
+                        self.execute_cte_set_operation(
+                            db,
+                            op,
+                            set_quantifier,
+                            left,
+                            right,
+                            &cte_results,
+                        )
+                        .await?
+                    }
+                    _ => {
+                        return Err(YamlBaseError::NotImplemented(
+                            "This type of query is not yet supported in CTEs".to_string(),
+                        ));
+                    }
                 }
             };
 
             // Strip table prefixes from column names in CTE results
             // This ensures CTEs expose unqualified column names for outer queries
-            cte_result.columns = cte_result.columns
+            cte_result.columns = cte_result
+                .columns
                 .into_iter()
                 .map(|col| {
                     if col.contains('.') {
@@ -11312,11 +11387,11 @@ impl QueryExecutor {
 
             // Store the CTE result for later reference by subsequent CTEs and main query
             eprintln!(
-                "DEBUG: Storing CTE '{}' with columns: {:?}", 
+                "DEBUG: Storing CTE '{}' with columns: {:?}",
                 cte_name, cte_result.columns
             );
             debug!(
-                "Storing CTE '{}' with columns: {:?}", 
+                "Storing CTE '{}' with columns: {:?}",
                 cte_name, cte_result.columns
             );
             cte_results.insert(cte_name.clone(), cte_result);
@@ -11358,8 +11433,14 @@ impl QueryExecutor {
         cte_results: &std::collections::HashMap<String, QueryResult>,
     ) -> crate::Result<QueryResult> {
         debug!("Executing SELECT with CTE context");
-        eprintln!("DEBUG execute_select_with_cte_context: FROM items = {}", select.from.len());
-        eprintln!("DEBUG execute_select_with_cte_context: Available CTEs = {:?}", cte_results.keys().collect::<Vec<_>>());
+        eprintln!(
+            "DEBUG execute_select_with_cte_context: FROM items = {}",
+            select.from.len()
+        );
+        eprintln!(
+            "DEBUG execute_select_with_cte_context: Available CTEs = {:?}",
+            cte_results.keys().collect::<Vec<_>>()
+        );
 
         // Check if any tables in FROM clause or JOINs are CTE references
         let mut has_cte_references = false;
@@ -11405,8 +11486,11 @@ impl QueryExecutor {
             let result = self.execute_select(db, select, query).await;
             match &result {
                 Ok(res) => {
-                    eprintln!("DEBUG: Regular SELECT (no CTE refs) returned {} columns: {:?}", 
-                             res.columns.len(), res.columns);
+                    eprintln!(
+                        "DEBUG: Regular SELECT (no CTE refs) returned {} columns: {:?}",
+                        res.columns.len(),
+                        res.columns
+                    );
                 }
                 Err(e) => {
                     eprintln!("DEBUG: Regular SELECT failed with error: {}", e);
@@ -11439,8 +11523,12 @@ impl QueryExecutor {
                 .unwrap_or_else(String::new);
 
             if let Some(cte_result) = cte_results.get(&table_name) {
-                eprintln!("DEBUG: Found CTE '{}' with {} columns: {:?}", 
-                         table_name, cte_result.columns.len(), cte_result.columns);
+                eprintln!(
+                    "DEBUG: Found CTE '{}' with {} columns: {:?}",
+                    table_name,
+                    cte_result.columns.len(),
+                    cte_result.columns
+                );
                 // Use the CTE result as the data source
                 let mut result_rows = cte_result.rows.clone();
                 let result_columns = cte_result.columns.clone();
@@ -11467,7 +11555,8 @@ impl QueryExecutor {
                 }
 
                 // Check if we have GROUP BY
-                if !matches!(select.group_by, GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty()) {
+                if !matches!(select.group_by, GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty())
+                {
                     // Handle GROUP BY with CTEs
                     eprintln!("DEBUG: Detected GROUP BY in CTE query");
                     let mut combined_context = CteExecutionContext::new(db, cte_results);
@@ -11633,19 +11722,22 @@ impl QueryExecutor {
             let joined_data = self
                 .execute_cte_join_without_aggregation(context, select)
                 .await?;
-            let mut result = self.apply_group_by_aggregation(&joined_data, select).await?;
-            
+            let mut result = self
+                .apply_group_by_aggregation(&joined_data, select)
+                .await?;
+
             // Apply ORDER BY to GROUP BY results
             if let Some(order_by) = &query.order_by {
-                result.rows = self.sort_rows_with_columns(&result.rows, &result.columns, &order_by.exprs)?;
+                result.rows =
+                    self.sort_rows_with_columns(&result.rows, &result.columns, &order_by.exprs)?;
             }
-            
+
             // Apply LIMIT
             if let Some(Expr::Value(sqlparser::ast::Value::Number(n, _))) = &query.limit {
                 let limit_count = n.parse::<usize>().unwrap_or(0);
                 result.rows.truncate(limit_count);
             }
-            
+
             Ok(result)
         } else {
             // Single table with GROUP BY
@@ -11654,18 +11746,22 @@ impl QueryExecutor {
                     .get_table_data_from_context(context, &select.from[0].relation)
                     .await?;
                 let mut result = self.apply_group_by_aggregation(&table_data, select).await?;
-                
+
                 // Apply ORDER BY to GROUP BY results
                 if let Some(order_by) = &query.order_by {
-                    result.rows = self.sort_rows_with_columns(&result.rows, &result.columns, &order_by.exprs)?;
+                    result.rows = self.sort_rows_with_columns(
+                        &result.rows,
+                        &result.columns,
+                        &order_by.exprs,
+                    )?;
                 }
-                
+
                 // Apply LIMIT
                 if let Some(Expr::Value(sqlparser::ast::Value::Number(n, _))) = &query.limit {
                     let limit_count = n.parse::<usize>().unwrap_or(0);
                     result.rows.truncate(limit_count);
                 }
-                
+
                 Ok(result)
             } else {
                 Err(YamlBaseError::NotImplemented(
@@ -11750,7 +11846,10 @@ impl QueryExecutor {
             let table_data = self
                 .get_table_data_from_context(context, &select.from[0].relation)
                 .await?;
-            eprintln!("DEBUG execute_cte_complex_select: table_data.columns = {:?}", table_data.columns);
+            eprintln!(
+                "DEBUG execute_cte_complex_select: table_data.columns = {:?}",
+                table_data.columns
+            );
             return self
                 .apply_cte_query_clauses(table_data.rows, table_data.columns, select, query)
                 .await;
@@ -12004,7 +12103,7 @@ impl QueryExecutor {
             } => {
                 // Evaluate the expression to get the value to check
                 let value = self.evaluate_expr_with_columns(expr, row, columns)?;
-                
+
                 // Check if the value is in the list
                 let mut found = false;
                 for list_expr in list {
@@ -12014,7 +12113,7 @@ impl QueryExecutor {
                         break;
                     }
                 }
-                
+
                 Ok(if *negated { !found } else { found })
             }
             _ => Err(YamlBaseError::NotImplemented(format!(
@@ -12164,22 +12263,18 @@ impl QueryExecutor {
                             Ok(Value::Boolean(false))
                         }
                     }
-                    BinaryOperator::And => {
-                        match (&left_val, &right_val) {
-                            (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(*a && *b)),
-                            _ => Err(YamlBaseError::NotImplemented(
-                                "AND operator requires boolean operands in CTE expressions".to_string(),
-                            )),
-                        }
-                    }
-                    BinaryOperator::Or => {
-                        match (&left_val, &right_val) {
-                            (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(*a || *b)),
-                            _ => Err(YamlBaseError::NotImplemented(
-                                "OR operator requires boolean operands in CTE expressions".to_string(),
-                            )),
-                        }
-                    }
+                    BinaryOperator::And => match (&left_val, &right_val) {
+                        (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(*a && *b)),
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "AND operator requires boolean operands in CTE expressions".to_string(),
+                        )),
+                    },
+                    BinaryOperator::Or => match (&left_val, &right_val) {
+                        (Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(*a || *b)),
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "OR operator requires boolean operands in CTE expressions".to_string(),
+                        )),
+                    },
                     BinaryOperator::Divide => match (&left_val, &right_val) {
                         (Value::Integer(a), Value::Integer(b)) => {
                             if *b == 0 {
@@ -12285,7 +12380,7 @@ impl QueryExecutor {
             } => {
                 // Evaluate the expression to get the value to check
                 let value = self.evaluate_expr_with_columns(expr, row, columns)?;
-                
+
                 // Check if the value is in the list
                 let mut found = false;
                 for list_expr in list {
@@ -12295,7 +12390,7 @@ impl QueryExecutor {
                         break;
                     }
                 }
-                
+
                 Ok(Value::Boolean(if *negated { !found } else { found }))
             }
             Expr::TypedString { data_type, value } => {
@@ -12323,9 +12418,11 @@ impl QueryExecutor {
                 // Handle CASE expressions in CTE context
                 if let Some(operand_expr) = operand {
                     // Simple CASE: CASE expr WHEN val1 THEN result1 ...
-                    let operand_val = self.evaluate_expr_with_columns(operand_expr, row, columns)?;
+                    let operand_val =
+                        self.evaluate_expr_with_columns(operand_expr, row, columns)?;
                     for (condition, result) in conditions.iter().zip(results.iter()) {
-                        let condition_val = self.evaluate_expr_with_columns(condition, row, columns)?;
+                        let condition_val =
+                            self.evaluate_expr_with_columns(condition, row, columns)?;
                         if operand_val == condition_val {
                             return self.evaluate_expr_with_columns(result, row, columns);
                         }
@@ -12333,7 +12430,8 @@ impl QueryExecutor {
                 } else {
                     // Searched CASE: CASE WHEN condition1 THEN result1 ...
                     for (condition, result) in conditions.iter().zip(results.iter()) {
-                        let condition_val = self.evaluate_expr_with_columns(condition, row, columns)?;
+                        let condition_val =
+                            self.evaluate_expr_with_columns(condition, row, columns)?;
                         if let Value::Boolean(true) = condition_val {
                             return self.evaluate_expr_with_columns(result, row, columns);
                         }
@@ -12355,7 +12453,8 @@ impl QueryExecutor {
                             // COALESCE returns the first non-NULL value
                             for arg in &args.args {
                                 if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg {
-                                    let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                                    let val =
+                                        self.evaluate_expr_with_columns(expr, row, columns)?;
                                     if !matches!(val, Value::Null) {
                                         return Ok(val);
                                     }
@@ -12376,8 +12475,11 @@ impl QueryExecutor {
                     "UPPER" => {
                         if let FunctionArguments::List(args) = &func.args {
                             if args.args.len() == 1 {
-                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
-                                    let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) =
+                                    &args.args[0]
+                                {
+                                    let val =
+                                        self.evaluate_expr_with_columns(expr, row, columns)?;
                                     match val {
                                         Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
                                         Value::Null => Ok(Value::Null),
@@ -12404,8 +12506,11 @@ impl QueryExecutor {
                     "LOWER" => {
                         if let FunctionArguments::List(args) = &func.args {
                             if args.args.len() == 1 {
-                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args.args[0] {
-                                    let val = self.evaluate_expr_with_columns(expr, row, columns)?;
+                                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) =
+                                    &args.args[0]
+                                {
+                                    let val =
+                                        self.evaluate_expr_with_columns(expr, row, columns)?;
                                     match val {
                                         Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
                                         Value::Null => Ok(Value::Null),
@@ -12479,8 +12584,10 @@ impl QueryExecutor {
                         } else {
                             // Try case-insensitive match
                             let column_name_lower = column_name.to_lowercase();
-                            eprintln!("DEBUG: Looking for column '{}' (lowercase: '{}') in available columns: {:?}", 
-                                   column_name, column_name_lower, available_columns);
+                            eprintln!(
+                                "DEBUG: Looking for column '{}' (lowercase: '{}') in available columns: {:?}",
+                                column_name, column_name_lower, available_columns
+                            );
                             if let Some(idx) = available_columns
                                 .iter()
                                 .position(|c| c.to_lowercase() == column_name_lower)
@@ -12489,10 +12596,10 @@ impl QueryExecutor {
                                 projection_items.push(CteProjectionItem::Column(idx));
                             } else {
                                 // Try to find column by unqualified name (ignoring table prefix)
-                                if let Some(idx) = available_columns
-                                    .iter()
-                                    .position(|c| c.split('.').next_back().unwrap_or(c).to_lowercase() == column_name_lower)
-                                {
+                                if let Some(idx) = available_columns.iter().position(|c| {
+                                    c.split('.').next_back().unwrap_or(c).to_lowercase()
+                                        == column_name_lower
+                                }) {
                                     selected_columns.push(column_name);
                                     projection_items.push(CteProjectionItem::Column(idx));
                                 } else {
@@ -12523,7 +12630,8 @@ impl QueryExecutor {
                                 if let Some(idx) = available_columns.iter().position(|c| {
                                     // Extract the column name from qualified names
                                     let col_name = c.split('.').next_back().unwrap_or(c);
-                                    col_name == column_name || col_name.to_lowercase() == column_name.to_lowercase()
+                                    col_name == column_name
+                                        || col_name.to_lowercase() == column_name.to_lowercase()
                                 }) {
                                     selected_columns.push(column_name); // Use unqualified name in result
                                     projection_items.push(CteProjectionItem::Column(idx));
@@ -12947,7 +13055,8 @@ impl QueryExecutor {
             // Apply HAVING clause if present
             if let Some(having_expr) = &select.having {
                 // Evaluate HAVING expression with aggregate functions
-                let having_result = self.evaluate_aggregate_expression(having_expr, &group_rows, &data.columns)?;
+                let having_result =
+                    self.evaluate_aggregate_expression(having_expr, &group_rows, &data.columns)?;
                 match having_result {
                     Value::Boolean(true) => {
                         // Include this group in results
@@ -13041,7 +13150,7 @@ impl QueryExecutor {
                                     let mut sum_int = 0i64;
                                     let mut sum_decimal = rust_decimal::Decimal::ZERO;
                                     let mut has_decimal = false;
-                                    
+
                                     for row in group_rows {
                                         let value = self.evaluate_expression_with_columns(
                                             arg_expr, row, columns,
@@ -13066,7 +13175,7 @@ impl QueryExecutor {
                                             }
                                         }
                                     }
-                                    
+
                                     if has_decimal {
                                         Ok(Value::Decimal(sum_decimal))
                                     } else {
@@ -13095,7 +13204,7 @@ impl QueryExecutor {
                                     &arg_list.args[0]
                                 {
                                     let mut max_value: Option<Value> = None;
-                                    
+
                                     for row in group_rows {
                                         let value = self.evaluate_expression_with_columns(
                                             arg_expr, row, columns,
@@ -13104,14 +13213,15 @@ impl QueryExecutor {
                                             match (&max_value, &value) {
                                                 (None, _) => max_value = Some(value),
                                                 (Some(current_max), _) => {
-                                                    if self.compare_values(&value, current_max)? > 0 {
+                                                    if self.compare_values(&value, current_max)? > 0
+                                                    {
                                                         max_value = Some(value);
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                    
+
                                     Ok(max_value.unwrap_or(Value::Null))
                                 } else {
                                     Err(YamlBaseError::NotImplemented(
@@ -13136,7 +13246,7 @@ impl QueryExecutor {
                                     &arg_list.args[0]
                                 {
                                     let mut min_value: Option<Value> = None;
-                                    
+
                                     for row in group_rows {
                                         let value = self.evaluate_expression_with_columns(
                                             arg_expr, row, columns,
@@ -13145,14 +13255,15 @@ impl QueryExecutor {
                                             match (&min_value, &value) {
                                                 (None, _) => min_value = Some(value),
                                                 (Some(current_min), _) => {
-                                                    if self.compare_values(&value, current_min)? < 0 {
+                                                    if self.compare_values(&value, current_min)? < 0
+                                                    {
                                                         min_value = Some(value);
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                    
+
                                     Ok(min_value.unwrap_or(Value::Null))
                                 } else {
                                     Err(YamlBaseError::NotImplemented(
@@ -13219,30 +13330,34 @@ impl QueryExecutor {
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_aggregate_expression(left, group_rows, columns)?;
                 let right_val = self.evaluate_aggregate_expression(right, group_rows, columns)?;
-                
+
                 match op {
-                    BinaryOperator::Gt => {
-                        match (&left_val, &right_val) {
-                            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Boolean(a > b)),
-                            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Boolean(a > b)),
-                            (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Boolean(rust_decimal::Decimal::from(*a) > *b)),
-                            (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Boolean(*a > rust_decimal::Decimal::from(*b))),
-                            _ => Err(YamlBaseError::NotImplemented(
-                                "Unsupported types for > comparison in HAVING".to_string(),
-                            )),
+                    BinaryOperator::Gt => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Boolean(a > b)),
+                        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Boolean(a > b)),
+                        (Value::Integer(a), Value::Decimal(b)) => {
+                            Ok(Value::Boolean(rust_decimal::Decimal::from(*a) > *b))
                         }
-                    }
-                    BinaryOperator::Lt => {
-                        match (&left_val, &right_val) {
-                            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Boolean(a < b)),
-                            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Boolean(a < b)),
-                            (Value::Integer(a), Value::Decimal(b)) => Ok(Value::Boolean(rust_decimal::Decimal::from(*a) < *b)),
-                            (Value::Decimal(a), Value::Integer(b)) => Ok(Value::Boolean(*a < rust_decimal::Decimal::from(*b))),
-                            _ => Err(YamlBaseError::NotImplemented(
-                                "Unsupported types for < comparison in HAVING".to_string(),
-                            )),
+                        (Value::Decimal(a), Value::Integer(b)) => {
+                            Ok(Value::Boolean(*a > rust_decimal::Decimal::from(*b)))
                         }
-                    }
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "Unsupported types for > comparison in HAVING".to_string(),
+                        )),
+                    },
+                    BinaryOperator::Lt => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Boolean(a < b)),
+                        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Boolean(a < b)),
+                        (Value::Integer(a), Value::Decimal(b)) => {
+                            Ok(Value::Boolean(rust_decimal::Decimal::from(*a) < *b))
+                        }
+                        (Value::Decimal(a), Value::Integer(b)) => {
+                            Ok(Value::Boolean(*a < rust_decimal::Decimal::from(*b)))
+                        }
+                        _ => Err(YamlBaseError::NotImplemented(
+                            "Unsupported types for < comparison in HAVING".to_string(),
+                        )),
+                    },
                     _ => Err(YamlBaseError::NotImplemented(format!(
                         "Binary operator {:?} not supported in HAVING aggregate context",
                         op
@@ -13333,7 +13448,7 @@ impl QueryExecutor {
             // Check if this is a CTE reference
             if let Some(cte_result) = context.cte_results.get(&table_name) {
                 debug!(
-                    "Found CTE '{}' with columns: {:?}", 
+                    "Found CTE '{}' with columns: {:?}",
                     table_name, cte_result.columns
                 );
                 // Create qualified column names using the alias
@@ -13342,10 +13457,7 @@ impl QueryExecutor {
                     .iter()
                     .map(|col| format!("{}.{}", table_alias, col))
                     .collect();
-                debug!(
-                    "Returning qualified columns: {:?}", 
-                    qualified_columns
-                );
+                debug!("Returning qualified columns: {:?}", qualified_columns);
 
                 return Ok(QueryResult {
                     columns: qualified_columns,
@@ -13455,7 +13567,10 @@ impl QueryExecutor {
         }
 
         // Apply projection (SELECT clause)
-        debug!("Processing CTE projection with available columns: {:?}", columns);
+        debug!(
+            "Processing CTE projection with available columns: {:?}",
+            columns
+        );
         let (selected_columns, projection_items) =
             self.process_cte_projection(&select.projection, &columns)?;
         debug!("After projection, selected columns: {:?}", selected_columns);
@@ -13645,7 +13760,7 @@ impl QueryExecutor {
                     }
                 })
                 .collect();
-            
+
             self.apply_distinct(projected_rows, &select.distinct, &projection_items)?
         } else {
             projected_rows
@@ -13656,8 +13771,11 @@ impl QueryExecutor {
             .map(|_| crate::yaml::schema::SqlType::Text)
             .collect();
 
-        debug!("Returning QueryResult with {} columns: {:?}", 
-               selected_columns.len(), selected_columns);
+        debug!(
+            "Returning QueryResult with {} columns: {:?}",
+            selected_columns.len(),
+            selected_columns
+        );
         Ok(QueryResult {
             columns: selected_columns,
             column_types,
@@ -13992,14 +14110,16 @@ impl QueryExecutor {
                 // Handle logical operators (AND, OR)
                 match op {
                     BinaryOperator::And => {
-                        let left_result = self.evaluate_cte_join_condition(left, combined_row, combined_columns)?;
+                        let left_result =
+                            self.evaluate_cte_join_condition(left, combined_row, combined_columns)?;
                         if !left_result {
                             return Ok(false); // Short-circuit evaluation
                         }
                         self.evaluate_cte_join_condition(right, combined_row, combined_columns)
                     }
                     BinaryOperator::Or => {
-                        let left_result = self.evaluate_cte_join_condition(left, combined_row, combined_columns)?;
+                        let left_result =
+                            self.evaluate_cte_join_condition(left, combined_row, combined_columns)?;
                         if left_result {
                             return Ok(true); // Short-circuit evaluation
                         }
@@ -14022,10 +14142,12 @@ impl QueryExecutor {
                                 Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Less))
                             }
                             BinaryOperator::LtEq => {
-                                Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Greater))
+                                Ok(left_val.compare(&right_val)
+                                    != Some(std::cmp::Ordering::Greater))
                             }
                             BinaryOperator::Gt => {
-                                Ok(left_val.compare(&right_val) == Some(std::cmp::Ordering::Greater))
+                                Ok(left_val.compare(&right_val)
+                                    == Some(std::cmp::Ordering::Greater))
                             }
                             BinaryOperator::GtEq => {
                                 Ok(left_val.compare(&right_val) != Some(std::cmp::Ordering::Less))
@@ -14039,24 +14161,30 @@ impl QueryExecutor {
                 }
             }
             // Handle NOT IN expressions
-            Expr::InList { expr, list, negated } => {
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
                 let val = self.evaluate_expr_with_columns(expr, combined_row, combined_columns)?;
-                
+
                 let mut found = false;
                 for item_expr in list {
-                    let item_val = self.evaluate_expr_with_columns(item_expr, combined_row, combined_columns)?;
+                    let item_val =
+                        self.evaluate_expr_with_columns(item_expr, combined_row, combined_columns)?;
                     if val.compare(&item_val) == Some(std::cmp::Ordering::Equal) {
                         found = true;
                         break;
                     }
                 }
-                
+
                 Ok(if *negated { !found } else { found })
             }
             // Handle other expressions including CASE
             _ => {
                 // Try to evaluate as a boolean expression or convert to boolean
-                let val = self.evaluate_expr_with_columns(condition, combined_row, combined_columns)?;
+                let val =
+                    self.evaluate_expr_with_columns(condition, combined_row, combined_columns)?;
                 match val {
                     Value::Boolean(b) => Ok(b),
                     Value::Text(s) => {
@@ -14067,9 +14195,10 @@ impl QueryExecutor {
                     Value::Float(f) => Ok(f != 0.0),
                     Value::Double(d) => Ok(d != 0.0),
                     Value::Null => Ok(false),
-                    _ => Err(YamlBaseError::NotImplemented(
-                        format!("Cannot convert {:?} to boolean in JOIN condition", val),
-                    )),
+                    _ => Err(YamlBaseError::NotImplemented(format!(
+                        "Cannot convert {:?} to boolean in JOIN condition",
+                        val
+                    ))),
                 }
             }
         }

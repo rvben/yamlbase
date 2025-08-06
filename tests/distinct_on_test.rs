@@ -63,41 +63,51 @@ async fn test_distinct_on() {
     );
 
     // Add test data - multiple employees per department
-    employees_table.insert_row(vec![
-        Value::Integer(1),
-        Value::Text("Alice".to_string()),
-        Value::Text("Engineering".to_string()),
-        Value::Integer(90000),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2020, 1, 15).unwrap()),
-    ]).unwrap();
-    employees_table.insert_row(vec![
-        Value::Integer(2),
-        Value::Text("Bob".to_string()),
-        Value::Text("Engineering".to_string()),
-        Value::Integer(85000),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2021, 3, 20).unwrap()),
-    ]).unwrap();
-    employees_table.insert_row(vec![
-        Value::Integer(3),
-        Value::Text("Charlie".to_string()),
-        Value::Text("Sales".to_string()),
-        Value::Integer(75000),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2019, 6, 10).unwrap()),
-    ]).unwrap();
-    employees_table.insert_row(vec![
-        Value::Integer(4),
-        Value::Text("Diana".to_string()),
-        Value::Text("Sales".to_string()),
-        Value::Integer(80000),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2022, 2, 1).unwrap()),
-    ]).unwrap();
-    employees_table.insert_row(vec![
-        Value::Integer(5),
-        Value::Text("Eve".to_string()),
-        Value::Text("Engineering".to_string()),
-        Value::Integer(95000),
-        Value::Date(chrono::NaiveDate::from_ymd_opt(2018, 11, 30).unwrap()),
-    ]).unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(1),
+            Value::Text("Alice".to_string()),
+            Value::Text("Engineering".to_string()),
+            Value::Integer(90000),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2020, 1, 15).unwrap()),
+        ])
+        .unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(2),
+            Value::Text("Bob".to_string()),
+            Value::Text("Engineering".to_string()),
+            Value::Integer(85000),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2021, 3, 20).unwrap()),
+        ])
+        .unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(3),
+            Value::Text("Charlie".to_string()),
+            Value::Text("Sales".to_string()),
+            Value::Integer(75000),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2019, 6, 10).unwrap()),
+        ])
+        .unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(4),
+            Value::Text("Diana".to_string()),
+            Value::Text("Sales".to_string()),
+            Value::Integer(80000),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2022, 2, 1).unwrap()),
+        ])
+        .unwrap();
+    employees_table
+        .insert_row(vec![
+            Value::Integer(5),
+            Value::Text("Eve".to_string()),
+            Value::Text("Engineering".to_string()),
+            Value::Integer(95000),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2018, 11, 30).unwrap()),
+        ])
+        .unwrap();
 
     db.add_table(employees_table).unwrap();
     let storage = Storage::new(db);
@@ -118,15 +128,17 @@ async fn test_distinct_on() {
             println!("   ✅ DISTINCT ON works!");
             println!("   Number of rows returned: {}", result.rows.len());
             assert_eq!(result.rows.len(), 2); // One per department
-            
+
             // Should get highest paid employee per department
             // Engineering: Eve (95000)
             // Sales: Diana (80000)
-            
+
             println!("   Results:");
             for row in &result.rows {
-                println!("     Department: {}, Employee: {}, Salary: {:?}", 
-                    row[0], row[1], row[2]);
+                println!(
+                    "     Department: {}, Employee: {}, Salary: {:?}",
+                    row[0], row[1], row[2]
+                );
             }
         }
         Err(e) => {
@@ -148,11 +160,13 @@ async fn test_distinct_on() {
         Ok(result) => {
             println!("   ✅ DISTINCT ON with multiple columns works!");
             println!("   Number of rows returned: {}", result.rows.len());
-            
+
             println!("   Results:");
             for row in &result.rows {
-                println!("     Department: {}, Employee: {}, Hire Date: {:?}", 
-                    row[0], row[1], row[2]);
+                println!(
+                    "     Department: {}, Employee: {}, Hire Date: {:?}",
+                    row[0], row[1], row[2]
+                );
             }
         }
         Err(e) => {
@@ -175,11 +189,13 @@ async fn test_distinct_on() {
         Ok(result) => {
             println!("   ✅ DISTINCT ON with WHERE clause works!");
             println!("   Number of rows returned: {}", result.rows.len());
-            
+
             println!("   Results:");
             for row in &result.rows {
-                println!("     Department: {}, Employee: {}, Salary: {:?}", 
-                    row[0], row[1], row[2]);
+                println!(
+                    "     Department: {}, Employee: {}, Salary: {:?}",
+                    row[0], row[1], row[2]
+                );
             }
         }
         Err(e) => {
@@ -201,11 +217,13 @@ async fn test_distinct_on() {
         Ok(result) => {
             println!("   ✅ DISTINCT ON with expressions works!");
             println!("   Number of rows returned: {}", result.rows.len());
-            
+
             println!("   Results:");
             for row in &result.rows {
-                println!("     Department: {}, Employee: {}, Salary: {:?}, High Earner: {:?}", 
-                    row[0], row[1], row[2], row[3]);
+                println!(
+                    "     Department: {}, Employee: {}, Salary: {:?}, High Earner: {:?}",
+                    row[0], row[1], row[2], row[3]
+                );
             }
         }
         Err(e) => {

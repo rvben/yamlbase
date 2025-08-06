@@ -54,30 +54,38 @@ async fn test_not_in_cte_simple() {
     );
 
     // Add data
-    allocations_table.insert_row(vec![
-        Value::Text("123001".to_string()),
-        Value::Text("Active".to_string()),
-        Value::Text("emp001".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(400, 1)), // 40.0
-    ]).unwrap();
-    allocations_table.insert_row(vec![
-        Value::Text("123002".to_string()),
-        Value::Text("Cancelled".to_string()),
-        Value::Text("emp002".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(200, 1)), // 20.0
-    ]).unwrap();
-    allocations_table.insert_row(vec![
-        Value::Text("123003".to_string()),
-        Value::Text("Closed".to_string()),
-        Value::Text("emp003".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(300, 1)), // 30.0
-    ]).unwrap();
-    allocations_table.insert_row(vec![
-        Value::Text("123004".to_string()),
-        Value::Text("In Progress".to_string()),
-        Value::Text("emp004".to_string()),
-        Value::Decimal(rust_decimal::Decimal::new(500, 1)), // 50.0
-    ]).unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123001".to_string()),
+            Value::Text("Active".to_string()),
+            Value::Text("emp001".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(400, 1)), // 40.0
+        ])
+        .unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123002".to_string()),
+            Value::Text("Cancelled".to_string()),
+            Value::Text("emp002".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(200, 1)), // 20.0
+        ])
+        .unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123003".to_string()),
+            Value::Text("Closed".to_string()),
+            Value::Text("emp003".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(300, 1)), // 30.0
+        ])
+        .unwrap();
+    allocations_table
+        .insert_row(vec![
+            Value::Text("123004".to_string()),
+            Value::Text("In Progress".to_string()),
+            Value::Text("emp004".to_string()),
+            Value::Decimal(rust_decimal::Decimal::new(500, 1)), // 50.0
+        ])
+        .unwrap();
 
     db.add_table(allocations_table).unwrap();
     let storage = Storage::new(db);
@@ -100,7 +108,10 @@ async fn test_not_in_cte_simple() {
             println!("   ✅ NOT IN in CTE works!");
             assert_eq!(result.rows.len(), 1);
             assert_eq!(result.rows[0][0], Value::Integer(2)); // Active and In Progress
-            println!("   Count of non-cancelled/closed allocations: {:?}", result.rows[0][0]);
+            println!(
+                "   Count of non-cancelled/closed allocations: {:?}",
+                result.rows[0][0]
+            );
         }
         Err(e) => {
             panic!("   ❌ Failed with: {e}");
@@ -125,7 +136,10 @@ async fn test_not_in_cte_simple() {
             println!("   ✅ NOT IN with AND conditions works!");
             assert_eq!(result.rows.len(), 1);
             assert_eq!(result.rows[0][0], Value::Integer(2)); // 123001 (40.0) and 123004 (50.0)
-            println!("   Count of active allocations > 30 hours: {:?}", result.rows[0][0]);
+            println!(
+                "   Count of active allocations > 30 hours: {:?}",
+                result.rows[0][0]
+            );
         }
         Err(e) => {
             panic!("   ❌ Failed with: {e}");
@@ -149,7 +163,10 @@ async fn test_not_in_cte_simple() {
             println!("   ✅ NOT IN with multiple values works!");
             assert_eq!(result.rows.len(), 1);
             assert_eq!(result.rows[0][0], Value::Integer(1)); // Only "In Progress"
-            println!("   Count of 'In Progress' allocations: {:?}", result.rows[0][0]);
+            println!(
+                "   Count of 'In Progress' allocations: {:?}",
+                result.rows[0][0]
+            );
         }
         Err(e) => {
             panic!("   ❌ Failed with: {e}");
@@ -173,13 +190,13 @@ async fn test_not_in_cte_simple() {
         Ok(result) => {
             println!("   ✅ NOT IN as boolean expression works!");
             assert_eq!(result.rows.len(), 4);
-            
+
             // Check results
-            assert_eq!(result.rows[0][1], Value::Boolean(true));  // 123001 - Active
+            assert_eq!(result.rows[0][1], Value::Boolean(true)); // 123001 - Active
             assert_eq!(result.rows[1][1], Value::Boolean(false)); // 123002 - Cancelled
             assert_eq!(result.rows[2][1], Value::Boolean(false)); // 123003 - Closed
-            assert_eq!(result.rows[3][1], Value::Boolean(true));  // 123004 - In Progress
-            
+            assert_eq!(result.rows[3][1], Value::Boolean(true)); // 123004 - In Progress
+
             println!("   Boolean results for each project:");
             for row in &result.rows {
                 println!("     {} is_active: {:?}", row[0], row[1]);

@@ -1,13 +1,13 @@
 // Implementation of RECURSIVE CTE support for yamlbase
+use crate::YamlBaseError;
 use crate::database::Database;
 use crate::sql::executor::{QueryExecutor, QueryResult};
-use crate::YamlBaseError;
 use sqlparser::ast::{Cte, SetExpr, SetOperator};
 use std::collections::{HashMap, HashSet};
 
 impl QueryExecutor {
     /// Execute a RECURSIVE CTE
-    /// 
+    ///
     /// RECURSIVE CTEs work by:
     /// 1. Executing the base case (non-recursive part)
     /// 2. Iteratively executing the recursive part using previous results
@@ -21,7 +21,7 @@ impl QueryExecutor {
     ) -> crate::Result<QueryResult> {
         let cte_name = cte.alias.name.value.clone();
         eprintln!("DEBUG: Executing RECURSIVE CTE '{}'", cte_name);
-        
+
         // Parse the CTE query - should be a UNION or UNION ALL
         let (base_query, recursive_query, is_union_all) = match &cte.query.body.as_ref() {
             SetExpr::SetOperation {
@@ -39,17 +39,14 @@ impl QueryExecutor {
                 ));
             }
         };
-        
+
         // Execute base case
         let mut all_rows = Vec::new();
         let mut working_table = match base_query {
             SetExpr::Select(select) => {
-                let result = self.execute_select_with_cte_context(
-                    db,
-                    select,
-                    &cte.query,
-                    cte_results,
-                ).await?;
+                let result = self
+                    .execute_select_with_cte_context(db, select, &cte.query, cte_results)
+                    .await?;
                 all_rows.extend(result.rows.clone());
                 result
             }
@@ -59,7 +56,7 @@ impl QueryExecutor {
                 ));
             }
         };
-        
+
         // Set up for recursive execution
         let mut iteration = 0;
         let max_iterations = 1000; // Prevent infinite loops
@@ -72,7 +69,7 @@ impl QueryExecutor {
         } else {
             None
         };
-        
+
         // Recursive execution
         loop {
             iteration += 1;
@@ -81,20 +78,16 @@ impl QueryExecutor {
                     message: format!("RECURSIVE CTE '{}' exceeded maximum iterations", cte_name),
                 });
             }
-            
+
             // Create temporary CTE results including the working table
             let mut temp_cte_results = cte_results.clone();
             temp_cte_results.insert(cte_name.clone(), working_table.clone());
-            
+
             // Execute recursive part
             let recursive_result = match recursive_query {
                 SetExpr::Select(select) => {
-                    self.execute_select_with_cte_context(
-                        db,
-                        select,
-                        &cte.query,
-                        &temp_cte_results,
-                    ).await?
+                    self.execute_select_with_cte_context(db, select, &cte.query, &temp_cte_results)
+                        .await?
                 }
                 _ => {
                     return Err(YamlBaseError::NotImplemented(
@@ -102,12 +95,12 @@ impl QueryExecutor {
                     ));
                 }
             };
-            
+
             // Check if we got any new rows
             if recursive_result.rows.is_empty() {
                 break; // No new rows, recursion complete
             }
-            
+
             // Add new rows to results
             let mut new_rows = Vec::new();
             for row in recursive_result.rows {
@@ -125,14 +118,14 @@ impl QueryExecutor {
                     all_rows.push(row);
                 }
             }
-            
+
             // Update working table for next iteration
             if new_rows.is_empty() {
                 break; // No new unique rows
             }
             working_table.rows = new_rows;
         }
-        
+
         // Return combined results
         Ok(QueryResult {
             columns: working_table.columns,
