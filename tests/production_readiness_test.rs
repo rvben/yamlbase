@@ -1,5 +1,5 @@
-// Comprehensive production readiness tests for yamlbase 0.4.14
-// These tests verify 100% compatibility with enterprise SQL patterns
+// Production readiness tests for yamlbase 0.4.14
+// These tests verify compatibility with enterprise SQL patterns
 
 mod production_readiness_tests {
     use chrono::NaiveDate;
