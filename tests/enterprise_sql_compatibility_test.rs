@@ -1,376 +1,603 @@
-#![allow(clippy::uninlined_format_args)]
+//! Enterprise SQL compatibility test suite
+//! 
+//! Tests complex SQL patterns commonly found in enterprise applications
+//! including project management systems, resource allocation systems,
+//! and enterprise resource planning (ERP) systems.
 
-use rust_decimal::Decimal;
-use std::str::FromStr;
-use std::sync::Arc;
-use yamlbase::database::{Column, Database, Storage, Table, Value};
-use yamlbase::sql::{QueryExecutor, parse_sql};
+use chrono::NaiveDate;
+use yamlbase::database::schema::{Database, Table, Column, Value};
+use yamlbase::sql::executor::QueryExecutor;
 use yamlbase::yaml::schema::SqlType;
 
-/// Comprehensive test for 100% enterprise SQL compatibility
-/// Tests all major features implemented for enterprise-grade compatibility
-#[tokio::test]
-async fn test_100_percent_enterprise_sql_compatibility() {
-    // Create enterprise-scale database
+fn create_test_database() -> Database {
     let mut db = Database::new("enterprise_db".to_string());
+    
+    // Create PROJECT_MASTER table (similar to enterprise project management systems)
+    let mut project_table = Table::new(
+        "PROJECT_MASTER".to_string(),
+        vec![
+            Column {
+                name: "PROJECT_ID".to_string(),
+                sql_type: SqlType::Varchar(255),
+                primary_key: true,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "PROJECT_NAME".to_string(),
+                sql_type: SqlType::Varchar(255),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "DESCRIPTION".to_string(),
+                sql_type: SqlType::Text,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "STATUS_CODE".to_string(),
+                sql_type: SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "ACTIVE_FLAG".to_string(),
+                sql_type: SqlType::Varchar(1),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "PROJECT_STRUCTURE".to_string(),
+                sql_type: SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "START_DATE".to_string(),
+                sql_type: SqlType::Date,
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "MANAGER_ID".to_string(),
+                sql_type: SqlType::Varchar(50),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "HIERARCHY_PARENT_ID".to_string(),
+                sql_type: SqlType::Varchar(255),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ]
+    );
+    
+    // Insert test data
+    project_table.insert_row(vec![
+        Value::Text("PRJ001".to_string()),
+        Value::Text("Enterprise Platform Alpha".to_string()),
+        Value::Text("Core platform development project".to_string()),
+        Value::Text("Active".to_string()),
+        Value::Text("Y".to_string()),
+        Value::Text("Project".to_string()),
+        Value::Date(NaiveDate::from_ymd_opt(2025, 2, 1).unwrap()),
+        Value::Text("MGR001".to_string()),
+        Value::Null,
+    ]).unwrap();
+    
+    project_table.insert_row(vec![
+        Value::Text("PRJ002".to_string()),
+        Value::Text("Research Initiative Beta".to_string()),
+        Value::Text("Technology research and development".to_string()),
+        Value::Text("Active".to_string()),
+        Value::Text("Y".to_string()),
+        Value::Text("Project".to_string()),
+        Value::Date(NaiveDate::from_ymd_opt(2025, 3, 1).unwrap()),
+        Value::Text("MGR002".to_string()),
+        Value::Null,
+    ]).unwrap();
+    
+    project_table.insert_row(vec![
+        Value::Text("WP001".to_string()),
+        Value::Text("Alpha Work Package 1".to_string()),
+        Value::Text("Development work package under Alpha".to_string()),
+        Value::Text("Active".to_string()),
+        Value::Text("Y".to_string()),
+        Value::Text("Work Package".to_string()),
+        Value::Date(NaiveDate::from_ymd_opt(2025, 2, 15).unwrap()),
+        Value::Text("MGR001".to_string()),
+        Value::Text("PRJ001".to_string()),
+    ]).unwrap();
+    
+    // Create RESOURCE_ALLOCATION table
+    let mut allocation_table = Table::new(
+        "RESOURCE_ALLOCATION".to_string(),
+        vec![
+            Column {
+                name: "PROJECT_ID".to_string(),
+                sql_type: SqlType::Varchar(255),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: Some(("PROJECT_MASTER".to_string(), "PROJECT_ID".to_string())),
+            },
+            Column {
+                name: "RESOURCE_ID".to_string(),
+                sql_type: SqlType::Varchar(50),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "ALLOCATION_PERCENT".to_string(),
+                sql_type: SqlType::Decimal(5, 2),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "ALLOCATION_HOURS".to_string(),
+                sql_type: SqlType::Decimal(10, 2),
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "MONTH_PERIOD".to_string(),
+                sql_type: SqlType::Date,
+                primary_key: false,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ]
+    );
+    
+    // Insert allocation test data
+    allocation_table.insert_row(vec![
+        Value::Text("PRJ001".to_string()),
+        Value::Text("RES001".to_string()),
+        Value::Decimal(rust_decimal::Decimal::new(10000, 2)), // 100.00%
+        Value::Decimal(rust_decimal::Decimal::new(4000, 2)),  // 40.00 hours
+        Value::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap()),
+    ]).unwrap();
+    
+    allocation_table.insert_row(vec![
+        Value::Text("WP001".to_string()),
+        Value::Text("RES002".to_string()),
+        Value::Decimal(rust_decimal::Decimal::new(7500, 2)),  // 75.00%
+        Value::Decimal(rust_decimal::Decimal::new(3000, 2)),  // 30.00 hours
+        Value::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap()),
+    ]).unwrap();
+    
+    allocation_table.insert_row(vec![
+        Value::Text("PRJ002".to_string()),
+        Value::Text("RES003".to_string()),
+        Value::Decimal(rust_decimal::Decimal::new(5000, 2)),  // 50.00%
+        Value::Decimal(rust_decimal::Decimal::new(2000, 2)),  // 20.00 hours
+        Value::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap()),
+    ]).unwrap();
+    
+    // Create RESOURCE_MASTER table
+    let mut resource_table = Table::new(
+        "RESOURCE_MASTER".to_string(),
+        vec![
+            Column {
+                name: "RESOURCE_ID".to_string(),
+                sql_type: SqlType::Varchar(50),
+                primary_key: true,
+                nullable: false,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "FIRST_NAME".to_string(),
+                sql_type: SqlType::Varchar(100),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "LAST_NAME".to_string(),
+                sql_type: SqlType::Varchar(100),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "EMAIL".to_string(),
+                sql_type: SqlType::Varchar(255),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+            Column {
+                name: "ROLE".to_string(),
+                sql_type: SqlType::Varchar(100),
+                primary_key: false,
+                nullable: true,
+                unique: false,
+                default: None,
+                references: None,
+            },
+        ]
+    );
+    
+    // Insert resource test data
+    resource_table.insert_row(vec![
+        Value::Text("RES001".to_string()),
+        Value::Text("Alice".to_string()),
+        Value::Text("Johnson".to_string()),
+        Value::Text("alice.johnson@company.com".to_string()),
+        Value::Text("Senior Engineer".to_string()),
+    ]).unwrap();
+    
+    resource_table.insert_row(vec![
+        Value::Text("RES002".to_string()),
+        Value::Text("Bob".to_string()),
+        Value::Text("Smith".to_string()),
+        Value::Text("bob.smith@company.com".to_string()),
+        Value::Text("Project Manager".to_string()),
+    ]).unwrap();
+    
+    resource_table.insert_row(vec![
+        Value::Text("RES003".to_string()),
+        Value::Text("Carol".to_string()),
+        Value::Text("Davis".to_string()),
+        Value::Text("carol.davis@company.com".to_string()),
+        Value::Text("Research Scientist".to_string()),
+    ]).unwrap();
+    
+    db.add_table(project_table).unwrap();
+    db.add_table(allocation_table).unwrap();
+    db.add_table(resource_table).unwrap();
+    
+    db
+}
 
-    // Projects table with financial data
-    let project_columns = vec![
-        Column {
-            name: "project_id".to_string(),
-            sql_type: SqlType::Integer,
-            primary_key: true,
-            nullable: false,
-            unique: true,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "project_name".to_string(),
-            sql_type: SqlType::Varchar(100),
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "budget".to_string(),
-            sql_type: SqlType::Decimal(10, 2),
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "start_date".to_string(),
-            sql_type: SqlType::Date,
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "active".to_string(),
-            sql_type: SqlType::Boolean,
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-    ];
+#[tokio::test]
+async fn test_recursive_cte_project_hierarchy() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test RECURSIVE CTE for project hierarchy - common in enterprise systems
+    let query = r#"
+        WITH RECURSIVE ProjectHierarchy AS (
+            -- Base case: top-level projects
+            SELECT 
+                PROJECT_ID,
+                PROJECT_NAME,
+                HIERARCHY_PARENT_ID,
+                1 as LEVEL
+            FROM PROJECT_MASTER 
+            WHERE HIERARCHY_PARENT_ID IS NULL
+            
+            UNION ALL
+            
+            -- Recursive case: child projects
+            SELECT 
+                p.PROJECT_ID,
+                p.PROJECT_NAME,
+                p.HIERARCHY_PARENT_ID,
+                ph.LEVEL + 1 as LEVEL
+            FROM PROJECT_MASTER p
+            INNER JOIN ProjectHierarchy ph ON p.HIERARCHY_PARENT_ID = ph.PROJECT_ID
+        )
+        SELECT PROJECT_ID, PROJECT_NAME, LEVEL
+        FROM ProjectHierarchy
+        ORDER BY LEVEL, PROJECT_ID
+    "#;
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert_eq!(result.rows.len(), 3); // Should include all projects in hierarchy
+    
+    // Verify hierarchy levels
+    let first_row = &result.rows[0];
+    assert_eq!(first_row[2], Value::Integer(1)); // Top-level project should have LEVEL 1
+    
+    let last_row = &result.rows[2];
+    assert_eq!(last_row[2], Value::Integer(2)); // Work package should have LEVEL 2
+}
 
-    let mut projects_table = Table::new("projects".to_string(), project_columns);
-    projects_table
-        .insert_row(vec![
-            Value::Integer(1),
-            Value::Text("Website Redesign".to_string()),
-            Value::Decimal(Decimal::from_str("150000.00").unwrap()),
-            Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()),
-            Value::Boolean(true),
-        ])
-        .unwrap();
-    projects_table
-        .insert_row(vec![
-            Value::Integer(2),
-            Value::Text("Mobile App".to_string()),
-            Value::Decimal(Decimal::from_str("200000.00").unwrap()),
-            Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
-            Value::Boolean(true),
-        ])
-        .unwrap();
-    projects_table
-        .insert_row(vec![
-            Value::Integer(3),
-            Value::Text("Legacy System".to_string()),
-            Value::Decimal(Decimal::from_str("50000.00").unwrap()),
-            Value::Date(chrono::NaiveDate::from_ymd_opt(2023, 6, 10).unwrap()),
-            Value::Boolean(false),
-        ])
-        .unwrap();
-
-    // Employees table
-    let employee_columns = vec![
-        Column {
-            name: "employee_id".to_string(),
-            sql_type: SqlType::Integer,
-            primary_key: true,
-            nullable: false,
-            unique: true,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "name".to_string(),
-            sql_type: SqlType::Varchar(100),
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "salary".to_string(),
-            sql_type: SqlType::Decimal(10, 2),
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-    ];
-
-    let mut employees_table = Table::new("employees".to_string(), employee_columns);
-    employees_table
-        .insert_row(vec![
-            Value::Integer(101),
-            Value::Text("Alice".to_string()),
-            Value::Decimal(Decimal::from_str("95000.00").unwrap()),
-        ])
-        .unwrap();
-    employees_table
-        .insert_row(vec![
-            Value::Integer(102),
-            Value::Text("Bob".to_string()),
-            Value::Decimal(Decimal::from_str("85000.00").unwrap()),
-        ])
-        .unwrap();
-    employees_table
-        .insert_row(vec![
-            Value::Integer(103),
-            Value::Text("Carol".to_string()),
-            Value::Decimal(Decimal::from_str("105000.00").unwrap()),
-        ])
-        .unwrap();
-
-    // Project assignments
-    let assignment_columns = vec![
-        Column {
-            name: "project_id".to_string(),
-            sql_type: SqlType::Integer,
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "employee_id".to_string(),
-            sql_type: SqlType::Integer,
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-        Column {
-            name: "hours".to_string(),
-            sql_type: SqlType::Integer,
-            primary_key: false,
-            nullable: false,
-            unique: false,
-            default: None,
-            references: None,
-        },
-    ];
-
-    let mut assignments_table = Table::new("assignments".to_string(), assignment_columns);
-    assignments_table
-        .insert_row(vec![
-            Value::Integer(1),
-            Value::Integer(101),
-            Value::Integer(40),
-        ])
-        .unwrap();
-    assignments_table
-        .insert_row(vec![
-            Value::Integer(1),
-            Value::Integer(102),
-            Value::Integer(30),
-        ])
-        .unwrap();
-    assignments_table
-        .insert_row(vec![
-            Value::Integer(2),
-            Value::Integer(101),
-            Value::Integer(20),
-        ])
-        .unwrap();
-    assignments_table
-        .insert_row(vec![
-            Value::Integer(2),
-            Value::Integer(103),
-            Value::Integer(35),
-        ])
-        .unwrap();
-
-    db.add_table(projects_table).unwrap();
-    db.add_table(employees_table).unwrap();
-    db.add_table(assignments_table).unwrap();
-
-    let storage = Arc::new(Storage::new(db));
-    let executor = QueryExecutor::new(storage.clone()).await.unwrap();
-
-    println!("🚀 Testing 100% Enterprise SQL Compatibility");
-
-    // Test 1: CTE with JOINs and Aggregates ✅ (Previously implemented)
-    println!("\n✅ Test 1: CTE with JOINs and Aggregates");
-    let cte_query = r#"
-        WITH active_projects AS (
-            SELECT * FROM projects WHERE active = true
+#[tokio::test]
+async fn test_complex_cte_with_aggregation_and_date_functions() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test complex CTE with date arithmetic and aggregation - typical in enterprise reporting
+    let query = r#"
+        WITH DateRange AS (
+            SELECT 
+                ADD_MONTHS(CURRENT_DATE, 0) - EXTRACT(DAY FROM CURRENT_DATE) + 1 AS START_DATE,
+                LAST_DAY(ADD_MONTHS(CURRENT_DATE, 1)) AS END_DATE
+        ),
+        ProjectSummary AS (
+            SELECT
+                p.PROJECT_ID,
+                p.PROJECT_NAME,
+                COUNT(DISTINCT a.RESOURCE_ID) AS RESOURCE_COUNT,
+                SUM(a.ALLOCATION_HOURS) AS TOTAL_HOURS
+            FROM PROJECT_MASTER p
+            INNER JOIN RESOURCE_ALLOCATION a ON p.PROJECT_ID = a.PROJECT_ID
+            CROSS JOIN DateRange dr
+            WHERE a.MONTH_PERIOD BETWEEN dr.START_DATE AND dr.END_DATE
+            GROUP BY p.PROJECT_ID, p.PROJECT_NAME
         )
         SELECT 
-            ap.project_name,
-            COUNT(a.employee_id) as team_size,
-            SUM(a.hours) as total_hours
-        FROM active_projects ap
-        JOIN assignments a ON ap.project_id = a.project_id
-        GROUP BY ap.project_id, ap.project_name
+            PROJECT_ID,
+            PROJECT_NAME,
+            RESOURCE_COUNT,
+            TOTAL_HOURS,
+            COALESCE(TOTAL_HOURS / NULLIF(RESOURCE_COUNT, 0), 0) AS AVG_HOURS_PER_RESOURCE
+        FROM ProjectSummary
+        ORDER BY TOTAL_HOURS DESC
     "#;
-    let cte_result = executor
-        .execute(&parse_sql(cte_query).unwrap()[0])
-        .await
-        .unwrap();
-    assert!(!cte_result.rows.is_empty());
-    println!(
-        "   CTE result: {} active projects with assignments",
-        cte_result.rows.len()
-    );
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert!(result.rows.len() > 0);
+    
+    // Verify COALESCE works in complex expressions
+    for row in &result.rows {
+        let avg_hours = &row[4];
+        assert!(!matches!(avg_hours, Value::Null)); // COALESCE should prevent NULL
+    }
+}
 
-    // Test 2: MySQL Date Functions ✅ (Previously implemented)
-    println!("\n✅ Test 2: MySQL Date Functions");
-    let date_query = r#"
+#[tokio::test] 
+async fn test_union_all_with_complex_filtering() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test UNION ALL with complex filtering - common in enterprise data consolidation
+    let query = r#"
+        WITH ActiveProjects AS (
+            SELECT PROJECT_ID, 'Direct Project' as PROJECT_TYPE
+            FROM PROJECT_MASTER
+            WHERE PROJECT_STRUCTURE = 'Project' 
+            AND ACTIVE_FLAG = 'Y'
+            AND STATUS_CODE = 'Active'
+            
+            UNION ALL
+            
+            SELECT 
+                parent.PROJECT_ID as PROJECT_ID,
+                'Project with Work Packages' as PROJECT_TYPE
+            FROM PROJECT_MASTER parent
+            INNER JOIN PROJECT_MASTER child ON parent.PROJECT_ID = child.HIERARCHY_PARENT_ID
+            WHERE parent.PROJECT_STRUCTURE = 'Project'
+            AND parent.ACTIVE_FLAG = 'Y' 
+            AND parent.STATUS_CODE = 'Active'
+            AND child.PROJECT_STRUCTURE = 'Work Package'
+        )
+        SELECT DISTINCT PROJECT_ID, PROJECT_TYPE
+        FROM ActiveProjects
+        ORDER BY PROJECT_ID
+    "#;
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert!(result.rows.len() >= 2); // Should find both direct and hierarchical projects
+}
+
+#[tokio::test]
+async fn test_case_expressions_in_joins() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test CASE expressions in JOIN conditions - used in conditional business logic
+    let query = r#"
         SELECT 
-            project_name,
-            start_date,
-            YEAR(start_date) as project_year,
-            MONTH(start_date) as project_month,
-            DAY(start_date) as project_day
-        FROM projects
+            p.PROJECT_ID,
+            p.PROJECT_NAME,
+            r.FIRST_NAME,
+            r.LAST_NAME,
+            CASE 
+                WHEN a.ALLOCATION_PERCENT >= 100 THEN 'Full Time'
+                WHEN a.ALLOCATION_PERCENT >= 50 THEN 'Part Time'
+                ELSE 'Minimal'
+            END as ALLOCATION_TYPE
+        FROM PROJECT_MASTER p
+        INNER JOIN RESOURCE_ALLOCATION a ON p.PROJECT_ID = a.PROJECT_ID
+        INNER JOIN RESOURCE_MASTER r ON a.RESOURCE_ID = r.RESOURCE_ID
+        WHERE CASE 
+            WHEN p.PROJECT_STRUCTURE = 'Project' THEN a.ALLOCATION_PERCENT >= 25
+            WHEN p.PROJECT_STRUCTURE = 'Work Package' THEN a.ALLOCATION_PERCENT >= 50
+            ELSE FALSE
+        END
+        ORDER BY p.PROJECT_ID, a.ALLOCATION_PERCENT DESC
     "#;
-    let date_result = executor
-        .execute(&parse_sql(date_query).unwrap()[0])
-        .await
-        .unwrap();
-    assert_eq!(date_result.rows.len(), 3);
-    println!(
-        "   Date functions extracted year/month/day from {} projects",
-        date_result.rows.len()
-    );
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert!(result.rows.len() > 0);
+    
+    // Verify CASE expression results
+    for row in &result.rows {
+        let allocation_type = &row[4];
+        assert!(matches!(allocation_type, Value::Text(_)));
+    }
+}
 
-    // Test 3: Multi-table JOINs with Aggregates ✅ (Just implemented)
-    println!("\n✅ Test 3: Multi-table JOINs with Aggregates");
-    let join_agg_query = r#"
+#[tokio::test]
+async fn test_complex_nested_conditions() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+
+    
+    // Test complex nested AND/OR/NOT conditions - typical in enterprise filtering
+    let query = r#"
         SELECT 
-            p.project_name,
-            COUNT(a.employee_id) as team_size,
-            SUM(e.salary) as total_salary_cost,
-            AVG(e.salary) as avg_salary,
-            SUM(a.hours) as total_hours
-        FROM projects p
-        JOIN assignments a ON p.project_id = a.project_id
-        JOIN employees e ON a.employee_id = e.employee_id
-        WHERE p.active = true
-        GROUP BY p.project_id, p.project_name
+            p.PROJECT_ID,
+            p.PROJECT_NAME,
+            a.RESOURCE_ID,
+            a.ALLOCATION_PERCENT
+        FROM PROJECT_MASTER p
+        INNER JOIN RESOURCE_ALLOCATION a ON p.PROJECT_ID = a.PROJECT_ID
+        WHERE (
+            (p.PROJECT_STRUCTURE = 'Project' AND a.ALLOCATION_PERCENT >= 75)
+            OR 
+            (p.PROJECT_STRUCTURE = 'Work Package' AND a.ALLOCATION_PERCENT >= 50)
+        )
+        AND NOT (
+            p.STATUS_CODE = 'Cancelled' 
+            OR p.ACTIVE_FLAG = 'N'
+            OR a.ALLOCATION_HOURS = 0
+        )
+        AND COALESCE(p.START_DATE, CURRENT_DATE) >= DATE '2025-01-01'
+        ORDER BY p.PROJECT_ID, a.ALLOCATION_PERCENT DESC
     "#;
-    let join_result = executor
-        .execute(&parse_sql(join_agg_query).unwrap()[0])
-        .await
-        .unwrap();
-    assert!(!join_result.rows.is_empty());
-    println!(
-        "   3-table JOIN with aggregates: {} active projects analyzed",
-        join_result.rows.len()
-    );
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert!(result.rows.len() > 0);
+    
+    // Verify all returned rows meet the complex conditions
+    for row in &result.rows {
+        let allocation_percent = match &row[3] {
+            Value::Decimal(d) => d.to_f64().unwrap_or(0.0),
+            _ => 0.0,
+        };
+        assert!(allocation_percent >= 50.0); // Should meet minimum threshold
+    }
+}
 
-    // Test 4: CROSS JOIN ✅ (Previously implemented)
-    println!("\n✅ Test 4: CROSS JOIN Operations");
-    let cross_query = r#"
-        SELECT COUNT(*) as total_combinations
-        FROM employees e
-        CROSS JOIN projects p
-    "#;
-    let cross_result = executor
-        .execute(&parse_sql(cross_query).unwrap()[0])
-        .await
-        .unwrap();
-    assert_eq!(cross_result.rows.len(), 1);
-    println!(
-        "   CROSS JOIN: {} total employee-project combinations",
-        match &cross_result.rows[0][0] {
-            Value::Integer(n) => n,
-            _ => &0,
-        }
-    );
-
-    // Test 5: Complex WHERE with Multiple Conditions
-    println!("\n✅ Test 5: Complex WHERE Conditions");
-    let where_query = r#"
+#[tokio::test]
+async fn test_aggregate_functions_with_distinct() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test aggregate functions with DISTINCT - common in enterprise reporting
+    let query = r#"
         SELECT 
-            project_name,
-            budget
-        FROM projects
-        WHERE budget > 100000 AND active = true
+            COUNT(*) as TOTAL_ALLOCATIONS,
+            COUNT(DISTINCT PROJECT_ID) as UNIQUE_PROJECTS,
+            COUNT(DISTINCT RESOURCE_ID) as UNIQUE_RESOURCES,
+            SUM(ALLOCATION_HOURS) as TOTAL_HOURS,
+            AVG(ALLOCATION_PERCENT) as AVG_PERCENT,
+            MIN(ALLOCATION_PERCENT) as MIN_PERCENT,
+            MAX(ALLOCATION_PERCENT) as MAX_PERCENT
+        FROM RESOURCE_ALLOCATION
+        WHERE ALLOCATION_HOURS > 0
     "#;
-    let where_result = executor
-        .execute(&parse_sql(where_query).unwrap()[0])
-        .await
-        .unwrap();
-    println!(
-        "   Complex filtering: {} high-budget active projects found",
-        where_result.rows.len()
-    );
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert_eq!(result.rows.len(), 1);
+    
+    let row = &result.rows[0];
+    // Verify all aggregate functions return valid results
+    assert!(matches!(row[0], Value::Integer(_))); // COUNT(*)
+    assert!(matches!(row[1], Value::Integer(_))); // COUNT(DISTINCT PROJECT_ID) 
+    assert!(matches!(row[2], Value::Integer(_))); // COUNT(DISTINCT RESOURCE_ID)
+    assert!(!matches!(row[3], Value::Null));      // SUM should not be NULL
+    assert!(!matches!(row[4], Value::Null));      // AVG should not be NULL
+    assert!(!matches!(row[5], Value::Null));      // MIN should not be NULL
+    assert!(!matches!(row[6], Value::Null));      // MAX should not be NULL
+}
 
-    // Test 6: HAVING with Aggregates
-    println!("\n✅ Test 6: HAVING with Aggregates");
-    let having_query = r#"
+#[tokio::test]
+async fn test_date_arithmetic_functions() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test date arithmetic functions commonly used in enterprise systems
+    let query = r#"
         SELECT 
-            p.project_name,
-            COUNT(a.employee_id) as team_size
-        FROM projects p
-        JOIN assignments a ON p.project_id = a.project_id
-        GROUP BY p.project_id, p.project_name
-        HAVING COUNT(a.employee_id) > 1
+            PROJECT_ID,
+            PROJECT_NAME,
+            START_DATE,
+            ADD_MONTHS(START_DATE, 3) as QUARTER_END,
+            EXTRACT(YEAR FROM START_DATE) as START_YEAR,
+            EXTRACT(MONTH FROM START_DATE) as START_MONTH,
+            LAST_DAY(START_DATE) as MONTH_END,
+            CURRENT_DATE as TODAY
+        FROM PROJECT_MASTER
+        WHERE START_DATE IS NOT NULL
+        ORDER BY START_DATE
     "#;
-    let having_result = executor
-        .execute(&parse_sql(having_query).unwrap()[0])
-        .await
-        .unwrap();
-    println!(
-        "   Projects with team size > 1: {}",
-        having_result.rows.len()
-    );
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert!(result.rows.len() > 0);
+    
+    // Verify date functions work correctly
+    for row in &result.rows {
+        assert!(!matches!(row[3], Value::Null)); // ADD_MONTHS result
+        assert!(!matches!(row[4], Value::Null)); // EXTRACT YEAR result
+        assert!(!matches!(row[5], Value::Null)); // EXTRACT MONTH result
+        assert!(!matches!(row[6], Value::Null)); // LAST_DAY result
+        assert!(!matches!(row[7], Value::Null)); // CURRENT_DATE result
+    }
+}
 
-    // Test 7: Subqueries in WHERE
-    println!("\n✅ Test 7: Subqueries");
-    let subquery_query = r#"
-        SELECT project_name, budget
-        FROM projects
-        WHERE budget > (SELECT AVG(budget) FROM projects)
+#[tokio::test]
+async fn test_compound_identifier_support() {
+    let db = create_test_database();
+    let executor = QueryExecutor::new();
+    
+    // Test compound identifiers (table.column) - essential for enterprise SQL
+    let query = r#"
+        SELECT 
+            p.PROJECT_ID,
+            p.PROJECT_NAME,
+            r.FIRST_NAME,
+            r.LAST_NAME,
+            a.ALLOCATION_PERCENT
+        FROM PROJECT_MASTER p
+        INNER JOIN RESOURCE_ALLOCATION a ON p.PROJECT_ID = a.PROJECT_ID  
+        INNER JOIN RESOURCE_MASTER r ON a.RESOURCE_ID = r.RESOURCE_ID
+        WHERE p.ACTIVE_FLAG = 'Y'
+        AND p.STATUS_CODE = 'Active'
+        AND a.ALLOCATION_HOURS > 0
+        ORDER BY p.PROJECT_ID, r.LAST_NAME, r.FIRST_NAME
     "#;
-    let subquery_result = executor
-        .execute(&parse_sql(subquery_query).unwrap()[0])
-        .await
-        .unwrap();
-    println!(
-        "   Above-average budget projects: {}",
-        subquery_result.rows.len()
-    );
-
-    println!("\n🎉 100% Enterprise SQL Compatibility Test Results:");
-    println!("   ✅ CTE with JOINs and Aggregates");
-    println!("   ✅ MySQL Date Functions (DATE, YEAR, MONTH, DAY)");
-    println!("   ✅ Multi-table JOINs with Aggregates (COUNT, SUM, AVG)");
-    println!("   ✅ CROSS JOIN Operations");
-    println!("   ✅ Complex WHERE Conditions");
-    println!("   ✅ HAVING Clauses with Aggregates");
-    println!("   ✅ Subqueries in WHERE Clauses");
-    println!("   ✅ MySQL Connection Stability (Large Result Sets)");
-    println!("   ✅ Decimal Type Support in Aggregates");
-
-    println!("\n🏆 YamlBase has achieved 100% Enterprise SQL Compatibility!");
-    println!("   Ready for production enterprise applications");
+    
+    let result = executor.execute(&db, query).await.unwrap();
+    assert!(result.rows.len() > 0);
+    
+    // Verify compound identifiers resolve correctly
+    for row in &result.rows {
+        assert!(matches!(row[0], Value::Text(_))); // p.PROJECT_ID
+        assert!(matches!(row[1], Value::Text(_))); // p.PROJECT_NAME
+        // Names might be NULL in test data, so check they exist as columns
+        assert!(row.len() == 5); // All 5 selected columns present
+    }
 }

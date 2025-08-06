@@ -42,10 +42,8 @@ enum ProjectionItem {
 enum JoinedColumn {
     // A column from a specific table (display_name, table_idx, column_idx)
     TableColumn(String, usize, usize),
-    // A constant expression with its computed value and column alias
-    Constant(String, Value),
     // A complex expression that needs row context to evaluate (display_name, expression)
-    Expression(String, Expr),
+    Expression(String, Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +58,7 @@ impl JoinedColumn {
     fn get_name(&self) -> String {
         match self {
             JoinedColumn::TableColumn(name, _, _) => name.clone(),
-            JoinedColumn::Constant(name, _) => name.clone(),
+            JoinedColumn::Expression(name, _) => name.clone(),
         }
     }
 
@@ -69,27 +67,9 @@ impl JoinedColumn {
             JoinedColumn::TableColumn(_, table_idx, col_idx) => {
                 tables[*table_idx].1.columns[*col_idx].sql_type.clone()
             }
-            JoinedColumn::Constant(_, value) => {
-                match value {
-                    Value::Integer(i) => {
-                        if *i > i32::MAX as i64 || *i < i32::MIN as i64 {
-                            crate::yaml::schema::SqlType::BigInt
-                        } else {
-                            crate::yaml::schema::SqlType::Integer
-                        }
-                    }
-                    Value::Float(_) => crate::yaml::schema::SqlType::Float,
-                    Value::Double(_) => crate::yaml::schema::SqlType::Double,
-                    Value::Decimal(_) => crate::yaml::schema::SqlType::Decimal(10, 2), // Default precision
-                    Value::Text(_) => crate::yaml::schema::SqlType::Text,
-                    Value::Date(_) => crate::yaml::schema::SqlType::Date,
-                    Value::Time(_) => crate::yaml::schema::SqlType::Time,
-                    Value::Timestamp(_) => crate::yaml::schema::SqlType::Timestamp,
-                    Value::Boolean(_) => crate::yaml::schema::SqlType::Boolean,
-                    Value::Uuid(_) => crate::yaml::schema::SqlType::Uuid,
-                    Value::Json(_) => crate::yaml::schema::SqlType::Text, // JSON as text
-                    Value::Null => crate::yaml::schema::SqlType::Text,
-                }
+            JoinedColumn::Expression(_, _) => {
+                // For expressions, default to Text type (could be enhanced to infer actual type)
+                crate::yaml::schema::SqlType::Text
             }
         }
     }
@@ -1032,8 +1012,8 @@ impl QueryExecutor {
                     JoinedColumn::TableColumn(name, _, _) => {
                         ProjectionItem::TableColumn(name.clone(), idx)
                     }
-                    JoinedColumn::Constant(name, value) => {
-                        ProjectionItem::Constant(name.clone(), value.clone())
+                    JoinedColumn::Expression(name, _) => {
+                        ProjectionItem::TableColumn(name.clone(), idx)
                     }
                 })
                 .collect();
@@ -8572,7 +8552,7 @@ impl QueryExecutor {
                 // Handle parenthesized expressions
                 self.evaluate_join_condition(inner, row, tables, table_aliases)
             }
-            Expr::Not(inner) => {
+            Expr::UnaryOp { op: UnaryOperator::Not, expr: inner } => {
                 // Handle NOT expressions
                 let inner_result = self.evaluate_join_condition(inner, row, tables, table_aliases)?;
                 Ok(!inner_result)
@@ -9630,7 +9610,7 @@ impl QueryExecutor {
                             // Complex expression - needs row context
                             let col_name = format!("column_{}", column_counter);
                             column_counter += 1;
-                            columns.push(JoinedColumn::Expression(col_name, expr.clone()));
+                            columns.push(JoinedColumn::Expression(col_name, Box::new(expr.clone())));
                         }
                     }
                 }
@@ -9680,7 +9660,7 @@ impl QueryExecutor {
                         }
                         _ => {
                             // Complex expression - needs row context
-                            columns.push(JoinedColumn::Expression(alias.value.clone(), expr.clone()));
+                            columns.push(JoinedColumn::Expression(alias.value.clone(), Box::new(expr.clone())));
                         }
                     }
                 }
@@ -9718,7 +9698,7 @@ impl QueryExecutor {
                         if table_name == actual_table_name || table_ref == table_name {
                             found = true;
                             for (col_idx, col) in table.columns.iter().enumerate() {
-                                let display_name = col.name.clone();
+                                let display_name = format!("{}.{}", table_ref, col.name);
                                 columns.push(JoinedColumn::TableColumn(
                                     display_name,
                                     table_idx,
@@ -9798,12 +9778,9 @@ impl QueryExecutor {
                             });
                         }
                     }
-                    JoinedColumn::Constant(_, value) => {
-                        projected_row.push(value.clone());
-                    }
                     JoinedColumn::Expression(_, expr) => {
                         let value = self.evaluate_expression_with_join_row(
-                            expr, 
+                            expr.as_ref(), 
                             row, 
                             tables, 
                             &table_offsets
@@ -12545,8 +12522,8 @@ impl QueryExecutor {
                                 // but the CTE result only has unqualified column names
                                 if let Some(idx) = available_columns.iter().position(|c| {
                                     // Extract the column name from qualified names
-                                    let col_name = c.split('.').last().unwrap_or(c);
-                                    col_name == &column_name || col_name.to_lowercase() == column_name.to_lowercase()
+                                    let col_name = c.split('.').next_back().unwrap_or(c);
+                                    col_name == column_name || col_name.to_lowercase() == column_name.to_lowercase()
                                 }) {
                                     selected_columns.push(column_name); // Use unqualified name in result
                                     projection_items.push(CteProjectionItem::Column(idx));
@@ -12637,9 +12614,8 @@ impl QueryExecutor {
                     for (idx, col) in available_columns.iter().enumerate() {
                         if let Some(table_part) = col.split('.').next() {
                             if table_part == table_alias || table_alias.is_empty() {
-                                let column_name =
-                                    col.split('.').next_back().unwrap_or(col).to_string();
-                                selected_columns.push(column_name);
+                                // Keep the qualified name for CTE columns
+                                selected_columns.push(col.clone());
                                 projection_items.push(CteProjectionItem::Column(idx));
                             }
                         } else if table_alias.is_empty() {
