@@ -395,7 +395,7 @@ mod production_readiness_tests {
 
         let result = executor.execute(&query[0]).await;
         if let Err(ref e) = result {
-            println!("ERROR in enterprise production query: {:?}", e);
+            println!("ERROR in enterprise production query: {e:?}");
         }
         assert!(
             result.is_ok(),
@@ -404,7 +404,7 @@ mod production_readiness_tests {
 
         let res = result.unwrap();
         println!("Enterprise query returned {} rows", res.rows.len());
-        assert!(res.rows.len() > 0, "Should return aggregated results");
+        assert!(!res.rows.is_empty(), "Should return aggregated results");
         println!("✅ Complete enterprise production query PASSED");
     }
 
@@ -457,12 +457,12 @@ mod production_readiness_tests {
 
         let result = executor.execute(&query[0]).await;
         if let Err(ref e) = result {
-            println!("ERROR in RECURSIVE CTE: {:?}", e);
+            println!("ERROR in RECURSIVE CTE: {e:?}");
         }
         assert!(result.is_ok(), "RECURSIVE CTE should be supported");
 
         let res = result.unwrap();
-        assert!(res.rows.len() > 0, "Should return hierarchical results");
+        assert!(!res.rows.is_empty(), "Should return hierarchical results");
         println!("✅ RECURSIVE CTE support PASSED");
     }
 
@@ -500,7 +500,7 @@ mod production_readiness_tests {
 
         let result = executor.execute(&query[0]).await;
         if let Err(ref e) = result {
-            println!("ERROR: {:?}", e);
+            println!("ERROR: {e:?}");
         }
         assert!(
             result.is_ok(),
@@ -527,19 +527,17 @@ mod production_readiness_tests {
                 r#"
                 WITH TestCTE AS (
                     SELECT * FROM projects
-                    WHERE start_date >= {}
+                    WHERE start_date >= {date_format}
                 )
                 SELECT COUNT(*) FROM TestCTE
-            "#,
-                date_format
+            "#
             ))
             .unwrap();
 
             let result = executor.execute(&query[0]).await;
             assert!(
                 result.is_ok(),
-                "Valid date format {} should work",
-                date_format
+                "Valid date format {date_format} should work"
             );
         }
 
@@ -557,19 +555,17 @@ mod production_readiness_tests {
                 r#"
                 WITH TestCTE AS (
                     SELECT * FROM projects
-                    WHERE start_date >= {}
+                    WHERE start_date >= {date_format}
                 )
                 SELECT COUNT(*) FROM TestCTE
-            "#,
-                date_format
+            "#
             ));
 
             if let Ok(query) = query_result {
                 let result = executor.execute(&query[0]).await;
                 assert!(
                     result.is_err(),
-                    "Invalid date format {} should return error",
-                    date_format
+                    "Invalid date format {date_format} should return error"
                 );
 
                 // Verify it's a proper error, not a panic
@@ -640,7 +636,7 @@ mod production_readiness_tests {
         );
 
         let res = result.unwrap();
-        assert!(res.rows.len() > 0, "Should return grouped results");
+        assert!(!res.rows.is_empty(), "Should return grouped results");
         println!("✅ Complex nested conditions PASSED");
     }
 
@@ -690,7 +686,7 @@ mod production_readiness_tests {
         );
 
         let res = result.unwrap();
-        assert!(res.rows.len() > 0, "Should return categorized results");
+        assert!(!res.rows.is_empty(), "Should return categorized results");
         println!("✅ Date functions in CTE PASSED");
     }
 
@@ -732,7 +728,7 @@ mod production_readiness_tests {
 
         let res = result.unwrap();
         assert!(
-            res.rows.len() > 0,
+            !res.rows.is_empty(),
             "Should return projects with allocations"
         );
         println!("✅ EXISTS subquery in CTE PASSED");
@@ -750,18 +746,15 @@ mod production_readiness_tests {
             parse_sql("SELECT project_id, COALESCE(status_code, 'Default') FROM projects").unwrap();
 
         let result = executor.execute(&query[0]).await;
-        match &result {
-            Err(e) => {
-                println!("ERROR: {:?}", e);
-                eprintln!("Full error: {:#?}", e);
-                eprintln!("Error message: {}", e);
-                panic!("COALESCE and NULL handling failed with error: {}", e);
-            }
-            Ok(_) => {}
+        if let Err(e) = &result {
+            println!("ERROR: {e:?}");
+            eprintln!("Full error: {e:#?}");
+            eprintln!("Error message: {e}");
+            panic!("COALESCE and NULL handling failed with error: {e}");
         }
 
         let res = result.unwrap();
-        assert!(res.rows.len() > 0, "Should handle NULL values correctly");
+        assert!(!res.rows.is_empty(), "Should handle NULL values correctly");
         println!("✅ COALESCE and NULL handling PASSED");
     }
 
@@ -866,7 +859,7 @@ mod production_readiness_tests {
         let executor = QueryExecutor::new(storage).await.unwrap();
 
         // Generate a large IN list
-        let statuses: Vec<String> = (1..100).map(|i| format!("'Status{}'", i)).collect();
+        let statuses: Vec<String> = (1..100).map(|i| format!("'Status{i}'")).collect();
         let in_list = statuses.join(", ");
 
         let query = parse_sql(&format!(
@@ -876,12 +869,11 @@ mod production_readiness_tests {
                 FROM projects p
                 INNER JOIN project_allocations a
                     ON p.project_id = a.project_id
-                    AND a.project_status_code NOT IN ({}, 'Cancelled', 'Closed')
+                    AND a.project_status_code NOT IN ({in_list}, 'Cancelled', 'Closed')
                 WHERE p.status_code = 'Active'
             )
             SELECT COUNT(*) FROM LargeInListCTE
-        "#,
-            in_list
+        "#
         ))
         .unwrap();
 

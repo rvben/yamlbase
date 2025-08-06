@@ -401,7 +401,7 @@ async fn test_complex_cte_with_aggregation_and_date_functions() {
 
     let query = parse_sql(query).unwrap();
     let result = executor.execute(&query[0]).await.unwrap();
-    assert!(result.rows.len() > 0);
+    assert!(!result.rows.is_empty());
 
     // Verify COALESCE works in complex expressions
     for row in &result.rows {
@@ -478,7 +478,7 @@ async fn test_case_expressions_in_joins() {
 
     let query = parse_sql(query).unwrap();
     let result = executor.execute(&query[0]).await.unwrap();
-    assert!(result.rows.len() > 0);
+    assert!(!result.rows.is_empty());
 
     // Verify CASE expression results
     for row in &result.rows {
@@ -518,7 +518,7 @@ async fn test_complex_nested_conditions() {
 
     let query = parse_sql(query).unwrap();
     let result = executor.execute(&query[0]).await.unwrap();
-    assert!(result.rows.len() > 0);
+    assert!(!result.rows.is_empty());
 
     // Verify all returned rows meet the complex conditions
     for row in &result.rows {
@@ -589,7 +589,7 @@ async fn test_date_arithmetic_functions() {
 
     let query = parse_sql(query).unwrap();
     let result = executor.execute(&query[0]).await.unwrap();
-    assert!(result.rows.len() > 0);
+    assert!(!result.rows.is_empty());
 
     // Verify date functions work correctly
     for row in &result.rows {
@@ -626,7 +626,7 @@ async fn test_compound_identifier_support() {
 
     let query = parse_sql(query).unwrap();
     let result = executor.execute(&query[0]).await.unwrap();
-    assert!(result.rows.len() > 0);
+    assert!(!result.rows.is_empty());
 
     // Verify compound identifiers resolve correctly
     for row in &result.rows {

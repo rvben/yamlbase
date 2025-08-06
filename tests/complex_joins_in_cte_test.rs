@@ -187,7 +187,7 @@ mod complex_joins_in_cte_test {
                 assert_eq!(res.rows[1][1], Value::Text("123005".to_string())); // Sub project
             }
             Err(e) => {
-                panic!("Complex JOIN with NOT IN in CTE should work: {}", e);
+                panic!("Complex JOIN with NOT IN in CTE should work: {e}");
             }
         }
     }
@@ -427,8 +427,7 @@ mod complex_joins_in_cte_test {
             }
             Err(e) => {
                 panic!(
-                    "Multi-table JOIN with complex conditions in CTE should work: {}",
-                    e
+                    "Multi-table JOIN with complex conditions in CTE should work: {e}"
                 );
             }
         }
@@ -604,7 +603,7 @@ mod complex_joins_in_cte_test {
                 assert_eq!(res.rows[0][2], Value::Text("Work Package 1".to_string()));
             }
             Err(e) => {
-                panic!("AAC production query pattern should work: {}", e);
+                panic!("Enterprise production query pattern should work: {e}");
             }
         }
     }
