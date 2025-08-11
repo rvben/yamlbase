@@ -173,13 +173,14 @@ impl TeradataProtocol {
     }
     
     async fn execute_translated_query(&self, sql: &str) -> anyhow::Result<Vec<Parcel>> {
-        use crate::sql::parser::parse_sql;
+        use crate::sql::parser::parse_sql_with_dialect;
+        use crate::sql::SqlDialect;
         use bytes::BufMut;
         
         let mut parcels = Vec::new();
         
-        // Parse the SQL statement
-        let statements = parse_sql(sql).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+        // Parse the SQL statement using Teradata dialect for better compatibility
+        let statements = parse_sql_with_dialect(sql, SqlDialect::Teradata).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
         
         if statements.is_empty() {
             return Ok(vec![Parcel::error_parcel(8000, "No SQL statement found")]);

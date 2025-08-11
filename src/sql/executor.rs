@@ -2888,13 +2888,7 @@ impl QueryExecutor {
                             message: "Modulo operation requires integer values".to_string(),
                         }),
                     },
-                    BinaryOperator::StringConcat => match (&left_val, &right_val) {
-                        (Value::Text(l), Value::Text(r)) => Ok(Value::Text(format!("{}{}", l, r))),
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "String concatenation requires text values".to_string(),
-                        }),
-                    },
+                    BinaryOperator::StringConcat => self.safe_string_concat(&left_val, &right_val),
                     // Comparison operators that return boolean values
                     BinaryOperator::Eq => Ok(Value::Boolean(
                         self.compare_values(&left_val, &right_val)? == 0,
@@ -7010,14 +7004,115 @@ impl QueryExecutor {
 
     fn apply_limit(&self, rows: Vec<Vec<Value>>, limit: &Expr) -> crate::Result<Vec<Vec<Value>>> {
         if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = limit {
-            let limit_val: usize = n.parse().map_err(|_| YamlBaseError::Database {
-                message: format!("Invalid LIMIT value: {}", n),
-            })?;
+            // Enhanced validation for LIMIT clause edge cases
+            
+            // Check for negative values first
+            if n.starts_with('-') {
+                return Err(YamlBaseError::Database {
+                    message: "LIMIT value must be non-negative".to_string(),
+                });
+            }
+            
+            // Validate numeric format and range
+            let limit_val: usize = match n.parse::<i64>() {
+                Ok(val) if val < 0 => {
+                    return Err(YamlBaseError::Database {
+                        message: "LIMIT value must be non-negative".to_string(),
+                    });
+                }
+                Ok(val) if val > 1_000_000_000 => {
+                    return Err(YamlBaseError::Database {
+                        message: "LIMIT value too large (maximum: 1,000,000,000)".to_string(),
+                    });
+                }
+                Ok(val) => val as usize,
+                Err(_) => {
+                    // Try parsing as u64 to catch overflow cases
+                    match n.parse::<u64>() {
+                        Ok(val) if val > 1_000_000_000 => {
+                            return Err(YamlBaseError::Database {
+                                message: "LIMIT value too large (maximum: 1,000,000,000)".to_string(),
+                            });
+                        }
+                        Ok(_) | Err(_) => {
+                            return Err(YamlBaseError::Database {
+                                message: format!("Invalid LIMIT value: '{}' - must be a non-negative integer", n),
+                            });
+                        }
+                    }
+                }
+            };
+            
+            // Apply the validated limit
             Ok(rows.into_iter().take(limit_val).collect())
         } else {
             Err(YamlBaseError::NotImplemented(
-                "Only numeric LIMIT values are supported".to_string(),
+                "LIMIT clause supports only numeric literals (expressions not yet supported)".to_string(),
             ))
+        }
+    }
+
+    /// Safe string concatenation with memory limits and proper NULL handling
+    fn safe_string_concat(&self, left: &Value, right: &Value) -> crate::Result<Value> {
+        const MAX_CONCAT_LENGTH: usize = 10_000_000; // 10MB limit for string concatenation
+        
+        match (left, right) {
+            // Handle NULL values (NULL + anything = NULL in SQL)
+            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+            
+            // Text concatenation with memory safety
+            (Value::Text(l), Value::Text(r)) => {
+                // Check individual string lengths first
+                if l.len() > MAX_CONCAT_LENGTH || r.len() > MAX_CONCAT_LENGTH {
+                    return Err(YamlBaseError::Database {
+                        message: format!("String too large for concatenation (maximum length: {} characters)", MAX_CONCAT_LENGTH),
+                    });
+                }
+                
+                // Check combined length to prevent overflow
+                let total_len = l.len().saturating_add(r.len());
+                if total_len > MAX_CONCAT_LENGTH {
+                    return Err(YamlBaseError::Database {
+                        message: format!(
+                            "Concatenated string would be too large: {} characters (maximum: {})",
+                            total_len, MAX_CONCAT_LENGTH
+                        ),
+                    });
+                }
+                
+                Ok(Value::Text(format!("{}{}", l, r)))
+            }
+            
+            // Type coercion for common cases (numbers to strings)
+            (Value::Integer(l), Value::Text(r)) => {
+                let l_str = l.to_string();
+                let total_len = l_str.len().saturating_add(r.len());
+                if total_len > MAX_CONCAT_LENGTH {
+                    return Err(YamlBaseError::Database {
+                        message: format!("Concatenated string would be too large: {} characters", total_len),
+                    });
+                }
+                Ok(Value::Text(format!("{}{}", l_str, r)))
+            }
+            
+            (Value::Text(l), Value::Integer(r)) => {
+                let r_str = r.to_string();
+                let total_len = l.len().saturating_add(r_str.len());
+                if total_len > MAX_CONCAT_LENGTH {
+                    return Err(YamlBaseError::Database {
+                        message: format!("Concatenated string would be too large: {} characters", total_len),
+                    });
+                }
+                Ok(Value::Text(format!("{}{}", l, r_str)))
+            }
+            
+            // Reject incompatible types
+            _ => Err(YamlBaseError::Database {
+                message: format!(
+                    "Cannot concatenate values of types {:?} and {:?} - use explicit CAST() for type conversion",
+                    left, right
+                ),
+            }),
         }
     }
 
@@ -7485,13 +7580,7 @@ impl QueryExecutor {
                             message: "Cannot divide non-numeric values".to_string(),
                         }),
                     },
-                    BinaryOperator::StringConcat => match (&left_val, &right_val) {
-                        (Value::Text(l), Value::Text(r)) => Ok(Value::Text(format!("{}{}", l, r))),
-                        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                        _ => Err(YamlBaseError::Database {
-                            message: "Cannot concatenate non-text values".to_string(),
-                        }),
-                    },
+                    BinaryOperator::StringConcat => self.safe_string_concat(&left_val, &right_val),
                     _ => Err(YamlBaseError::NotImplemented(format!(
                         "Binary operator {:?} not implemented in GROUP BY context",
                         op
@@ -8232,6 +8321,21 @@ impl QueryExecutor {
         _right_table_idx: usize,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut result = Vec::new();
+        
+        // JOIN result size protection - prevent memory exhaustion from large Cartesian products
+        const MAX_JOIN_RESULT_ROWS: usize = 1_000_000; // 1 million rows maximum
+        let estimated_result_size = left_rows.len().saturating_mul(right_table.rows.len());
+        
+        // For cross joins and joins without proper filtering, check estimated result size
+        if estimated_result_size > MAX_JOIN_RESULT_ROWS {
+            return Err(YamlBaseError::Database {
+                message: format!(
+                    "JOIN would produce {} rows, exceeding maximum of {} rows. This may indicate a Cartesian product - consider adding proper join conditions.",
+                    estimated_result_size,
+                    MAX_JOIN_RESULT_ROWS
+                ),
+            });
+        }
 
         match join_type {
             JoinOperator::Inner(constraint)

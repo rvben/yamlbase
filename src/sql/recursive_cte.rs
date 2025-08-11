@@ -57,9 +57,11 @@ impl QueryExecutor {
             }
         };
 
-        // Set up for recursive execution
+        // Set up for recursive execution with enhanced protection
         let mut iteration = 0;
         let max_iterations = 1000; // Prevent infinite loops
+        let max_memory_bytes = 100_000_000; // 100MB memory limit for CTE results
+        let mut estimated_memory_usage = 0usize;
         let mut seen_rows = if !is_union_all {
             let mut set = HashSet::new();
             for row in &all_rows {
@@ -101,9 +103,39 @@ impl QueryExecutor {
                 break; // No new rows, recursion complete
             }
 
-            // Add new rows to results
+            // Add new rows to results with memory tracking
             let mut new_rows = Vec::new();
             for row in recursive_result.rows {
+                // Estimate memory usage for this row (rough calculation)
+                let row_memory = row.iter().map(|value| match value {
+                    crate::database::Value::Text(s) => s.len(),
+                    crate::database::Value::Integer(_) => 8,
+                    crate::database::Value::Float(_) => 4,
+                    crate::database::Value::Double(_) => 8,
+                    crate::database::Value::Boolean(_) => 1,
+                    crate::database::Value::Date(_) => 12, // NaiveDate size
+                    crate::database::Value::Timestamp(_) => 16, // NaiveDateTime size
+                    crate::database::Value::Time(_) => 8, // NaiveTime size
+                    crate::database::Value::Uuid(_) => 16, // UUID size
+                    crate::database::Value::Decimal(_) => 16, // Decimal size
+                    crate::database::Value::Json(json) => json.to_string().len(),
+                    crate::database::Value::Null => 1,
+                }).sum::<usize>();
+                
+                estimated_memory_usage = estimated_memory_usage.saturating_add(row_memory);
+                
+                // Check memory limit
+                if estimated_memory_usage > max_memory_bytes {
+                    return Err(YamlBaseError::Database {
+                        message: format!(
+                            "RECURSIVE CTE '{}' exceeded memory limit of {}MB (estimated usage: {}MB)",
+                            cte_name,
+                            max_memory_bytes / 1_000_000,
+                            estimated_memory_usage / 1_000_000
+                        ),
+                    });
+                }
+                
                 if let Some(ref mut seen) = seen_rows {
                     // UNION (distinct) - check if we've seen this row
                     let row_key = format!("{:?}", row);
