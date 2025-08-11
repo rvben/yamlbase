@@ -4,7 +4,7 @@ use tracing::error;
 
 use crate::config::{Config, Protocol};
 use crate::database::Storage;
-use crate::protocol::{MySqlProtocol, PostgresProtocol, TeradataProtocol};
+use crate::protocol::{MySqlProtocol, PostgresProtocol};
 
 pub struct Connection {
     config: Arc<Config>,
@@ -33,11 +33,6 @@ impl Connection {
                 Err(crate::YamlBaseError::NotImplemented(
                     "SQL Server protocol not yet implemented".to_string(),
                 ))
-            }
-            Protocol::Teradata => {
-                let mut protocol =
-                    TeradataProtocol::new(self.config.clone(), self.storage.clone()).await?;
-                protocol.handle_connection(stream).await
             }
         }
     }

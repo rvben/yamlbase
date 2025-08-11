@@ -7,7 +7,6 @@ use tracing::debug;
 pub enum SqlDialect {
     #[default]
     PostgreSQL,
-    Teradata,
     MySQL,
     Generic,
 }
@@ -24,9 +23,8 @@ pub fn parse_sql_with_dialect(sql: &str, dialect: SqlDialect) -> crate::Result<V
             let dialect = PostgreSqlDialect {};
             Parser::parse_sql(&dialect, sql)?
         }
-        SqlDialect::Teradata | SqlDialect::MySQL | SqlDialect::Generic => {
-            // Use GenericDialect for Teradata as it's more permissive
-            // and allows Teradata-specific syntax that PostgreSQL dialect rejects
+        SqlDialect::MySQL | SqlDialect::Generic => {
+            // Use GenericDialect for MySQL and generic SQL
             let dialect = GenericDialect {};
             Parser::parse_sql(&dialect, sql)?
         }
@@ -56,9 +54,9 @@ mod tests {
     }
 
     #[test]
-    fn test_teradata_dialect_parsing() {
+    fn test_generic_dialect_parsing() {
         let sql = "SELECT * FROM users LIMIT 5";
-        let result = parse_sql_with_dialect(sql, SqlDialect::Teradata);
+        let result = parse_sql_with_dialect(sql, SqlDialect::Generic);
         assert!(result.is_ok());
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
@@ -67,7 +65,7 @@ mod tests {
     #[test]
     fn test_string_concatenation_parsing() {
         let sql = "SELECT first_name || ' ' || last_name AS full_name FROM users";
-        let result = parse_sql_with_dialect(sql, SqlDialect::Teradata);
+        let result = parse_sql_with_dialect(sql, SqlDialect::Generic);
         assert!(result.is_ok());
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
@@ -76,7 +74,7 @@ mod tests {
     #[test]
     fn test_date_literal_parsing() {
         let sql = "SELECT * FROM projects WHERE start_date >= DATE '2024-01-01'";
-        let result = parse_sql_with_dialect(sql, SqlDialect::Teradata);
+        let result = parse_sql_with_dialect(sql, SqlDialect::Generic);
         assert!(result.is_ok());
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
@@ -85,7 +83,7 @@ mod tests {
     #[test]
     fn test_cte_parsing() {
         let sql = "WITH project_cte AS (SELECT id FROM projects) SELECT * FROM project_cte";
-        let result = parse_sql_with_dialect(sql, SqlDialect::Teradata);
+        let result = parse_sql_with_dialect(sql, SqlDialect::Generic);
         assert!(result.is_ok());
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
