@@ -272,7 +272,7 @@ impl ConnectionManager {
         let connection_timeout = self
             .config
             .connection_timeout
-            .unwrap_or(Duration::from_secs(300)); // 5 minutes default
+            .unwrap_or(Duration::from_secs(30)); // 30 seconds default - more reasonable for SQL queries
 
         let connection = Connection::new(self.config.clone(), self.storage.clone());
 
