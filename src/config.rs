@@ -100,7 +100,7 @@ impl Config {
             Protocol::Postgres => 5432,
             Protocol::Mysql => 3306,
             Protocol::Sqlserver => 1433,
-            Protocol::Teradata => 1025,  // Default Teradata port
+            Protocol::Teradata => 1025, // Default Teradata port
         })
     }
 

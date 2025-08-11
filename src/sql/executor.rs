@@ -7005,14 +7005,14 @@ impl QueryExecutor {
     fn apply_limit(&self, rows: Vec<Vec<Value>>, limit: &Expr) -> crate::Result<Vec<Vec<Value>>> {
         if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = limit {
             // Enhanced validation for LIMIT clause edge cases
-            
+
             // Check for negative values first
             if n.starts_with('-') {
                 return Err(YamlBaseError::Database {
                     message: "LIMIT value must be non-negative".to_string(),
                 });
             }
-            
+
             // Validate numeric format and range
             let limit_val: usize = match n.parse::<i64>() {
                 Ok(val) if val < 0 => {
@@ -7031,23 +7031,28 @@ impl QueryExecutor {
                     match n.parse::<u64>() {
                         Ok(val) if val > 1_000_000_000 => {
                             return Err(YamlBaseError::Database {
-                                message: "LIMIT value too large (maximum: 1,000,000,000)".to_string(),
+                                message: "LIMIT value too large (maximum: 1,000,000,000)"
+                                    .to_string(),
                             });
                         }
                         Ok(_) | Err(_) => {
                             return Err(YamlBaseError::Database {
-                                message: format!("Invalid LIMIT value: '{}' - must be a non-negative integer", n),
+                                message: format!(
+                                    "Invalid LIMIT value: '{}' - must be a non-negative integer",
+                                    n
+                                ),
                             });
                         }
                     }
                 }
             };
-            
+
             // Apply the validated limit
             Ok(rows.into_iter().take(limit_val).collect())
         } else {
             Err(YamlBaseError::NotImplemented(
-                "LIMIT clause supports only numeric literals (expressions not yet supported)".to_string(),
+                "LIMIT clause supports only numeric literals (expressions not yet supported)"
+                    .to_string(),
             ))
         }
     }
@@ -7055,20 +7060,23 @@ impl QueryExecutor {
     /// Safe string concatenation with memory limits and proper NULL handling
     fn safe_string_concat(&self, left: &Value, right: &Value) -> crate::Result<Value> {
         const MAX_CONCAT_LENGTH: usize = 10_000_000; // 10MB limit for string concatenation
-        
+
         match (left, right) {
             // Handle NULL values (NULL + anything = NULL in SQL)
             (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-            
+
             // Text concatenation with memory safety
             (Value::Text(l), Value::Text(r)) => {
                 // Check individual string lengths first
                 if l.len() > MAX_CONCAT_LENGTH || r.len() > MAX_CONCAT_LENGTH {
                     return Err(YamlBaseError::Database {
-                        message: format!("String too large for concatenation (maximum length: {} characters)", MAX_CONCAT_LENGTH),
+                        message: format!(
+                            "String too large for concatenation (maximum length: {} characters)",
+                            MAX_CONCAT_LENGTH
+                        ),
                     });
                 }
-                
+
                 // Check combined length to prevent overflow
                 let total_len = l.len().saturating_add(r.len());
                 if total_len > MAX_CONCAT_LENGTH {
@@ -7079,33 +7087,39 @@ impl QueryExecutor {
                         ),
                     });
                 }
-                
+
                 Ok(Value::Text(format!("{}{}", l, r)))
             }
-            
+
             // Type coercion for common cases (numbers to strings)
             (Value::Integer(l), Value::Text(r)) => {
                 let l_str = l.to_string();
                 let total_len = l_str.len().saturating_add(r.len());
                 if total_len > MAX_CONCAT_LENGTH {
                     return Err(YamlBaseError::Database {
-                        message: format!("Concatenated string would be too large: {} characters", total_len),
+                        message: format!(
+                            "Concatenated string would be too large: {} characters",
+                            total_len
+                        ),
                     });
                 }
                 Ok(Value::Text(format!("{}{}", l_str, r)))
             }
-            
+
             (Value::Text(l), Value::Integer(r)) => {
                 let r_str = r.to_string();
                 let total_len = l.len().saturating_add(r_str.len());
                 if total_len > MAX_CONCAT_LENGTH {
                     return Err(YamlBaseError::Database {
-                        message: format!("Concatenated string would be too large: {} characters", total_len),
+                        message: format!(
+                            "Concatenated string would be too large: {} characters",
+                            total_len
+                        ),
                     });
                 }
                 Ok(Value::Text(format!("{}{}", l, r_str)))
             }
-            
+
             // Reject incompatible types
             _ => Err(YamlBaseError::Database {
                 message: format!(
@@ -8321,18 +8335,17 @@ impl QueryExecutor {
         _right_table_idx: usize,
     ) -> crate::Result<Vec<Vec<Value>>> {
         let mut result = Vec::new();
-        
+
         // JOIN result size protection - prevent memory exhaustion from large Cartesian products
         const MAX_JOIN_RESULT_ROWS: usize = 1_000_000; // 1 million rows maximum
         let estimated_result_size = left_rows.len().saturating_mul(right_table.rows.len());
-        
+
         // For cross joins and joins without proper filtering, check estimated result size
         if estimated_result_size > MAX_JOIN_RESULT_ROWS {
             return Err(YamlBaseError::Database {
                 message: format!(
                     "JOIN would produce {} rows, exceeding maximum of {} rows. This may indicate a Cartesian product - consider adding proper join conditions.",
-                    estimated_result_size,
-                    MAX_JOIN_RESULT_ROWS
+                    estimated_result_size, MAX_JOIN_RESULT_ROWS
                 ),
             });
         }

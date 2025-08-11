@@ -5,4 +5,4 @@ mod recursive_cte;
 mod tests_string_functions;
 
 pub use executor::QueryExecutor;
-pub use parser::{parse_sql, parse_sql_with_dialect, SqlDialect};
+pub use parser::{SqlDialect, parse_sql, parse_sql_with_dialect};

@@ -1,10 +1,9 @@
 use sqlparser::ast::{Query, Statement};
-use sqlparser::dialect::{PostgreSqlDialect, GenericDialect};
+use sqlparser::dialect::{GenericDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 use tracing::debug;
 
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum SqlDialect {
     #[default]
     PostgreSQL,
@@ -12,7 +11,6 @@ pub enum SqlDialect {
     MySQL,
     Generic,
 }
-
 
 pub fn parse_sql(sql: &str) -> crate::Result<Vec<Statement>> {
     parse_sql_with_dialect(sql, SqlDialect::default())
@@ -27,7 +25,7 @@ pub fn parse_sql_with_dialect(sql: &str, dialect: SqlDialect) -> crate::Result<V
             Parser::parse_sql(&dialect, sql)?
         }
         SqlDialect::Teradata | SqlDialect::MySQL | SqlDialect::Generic => {
-            // Use GenericDialect for Teradata as it's more permissive 
+            // Use GenericDialect for Teradata as it's more permissive
             // and allows Teradata-specific syntax that PostgreSQL dialect rejects
             let dialect = GenericDialect {};
             Parser::parse_sql(&dialect, sql)?

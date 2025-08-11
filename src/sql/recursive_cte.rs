@@ -107,23 +107,26 @@ impl QueryExecutor {
             let mut new_rows = Vec::new();
             for row in recursive_result.rows {
                 // Estimate memory usage for this row (rough calculation)
-                let row_memory = row.iter().map(|value| match value {
-                    crate::database::Value::Text(s) => s.len(),
-                    crate::database::Value::Integer(_) => 8,
-                    crate::database::Value::Float(_) => 4,
-                    crate::database::Value::Double(_) => 8,
-                    crate::database::Value::Boolean(_) => 1,
-                    crate::database::Value::Date(_) => 12, // NaiveDate size
-                    crate::database::Value::Timestamp(_) => 16, // NaiveDateTime size
-                    crate::database::Value::Time(_) => 8, // NaiveTime size
-                    crate::database::Value::Uuid(_) => 16, // UUID size
-                    crate::database::Value::Decimal(_) => 16, // Decimal size
-                    crate::database::Value::Json(json) => json.to_string().len(),
-                    crate::database::Value::Null => 1,
-                }).sum::<usize>();
-                
+                let row_memory = row
+                    .iter()
+                    .map(|value| match value {
+                        crate::database::Value::Text(s) => s.len(),
+                        crate::database::Value::Integer(_) => 8,
+                        crate::database::Value::Float(_) => 4,
+                        crate::database::Value::Double(_) => 8,
+                        crate::database::Value::Boolean(_) => 1,
+                        crate::database::Value::Date(_) => 12, // NaiveDate size
+                        crate::database::Value::Timestamp(_) => 16, // NaiveDateTime size
+                        crate::database::Value::Time(_) => 8,  // NaiveTime size
+                        crate::database::Value::Uuid(_) => 16, // UUID size
+                        crate::database::Value::Decimal(_) => 16, // Decimal size
+                        crate::database::Value::Json(json) => json.to_string().len(),
+                        crate::database::Value::Null => 1,
+                    })
+                    .sum::<usize>();
+
                 estimated_memory_usage = estimated_memory_usage.saturating_add(row_memory);
-                
+
                 // Check memory limit
                 if estimated_memory_usage > max_memory_bytes {
                     return Err(YamlBaseError::Database {
@@ -135,7 +138,7 @@ impl QueryExecutor {
                         ),
                     });
                 }
-                
+
                 if let Some(ref mut seen) = seen_rows {
                     // UNION (distinct) - check if we've seen this row
                     let row_key = format!("{:?}", row);
